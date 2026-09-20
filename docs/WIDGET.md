@@ -16,6 +16,18 @@ embeds, and a chat application that runs inside an iframe.
 The channel id comes from **Settings → Channels**, on the web channel. The loader adds a
 launcher in the corner and nothing else until somebody clicks it.
 
+## Trying it
+
+`https://chat.mosidee.com/widget-demo` is a host page on our own domain that embeds the
+widget exactly as salon-saas will, and shows the snippet to copy with the real channel id
+already in it. Open it, click the launcher, and the conversation appears in the console's
+inbox like any other.
+
+The page is public, and while the channel's allowed origins are empty anyone who finds the
+URL can start a conversation, which runs an AI turn and spends gateway tokens. List your
+origins on the channel before the pilot, and note that doing so will stop the demo page
+working unless `https://chat.mosidee.com` is one of them.
+
 ## Why an iframe
 
 Everything a customer types lives on our origin, not the host page's. The host application
