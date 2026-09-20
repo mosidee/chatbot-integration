@@ -2,6 +2,7 @@ import { loadEnv } from '@ci/config'
 import type { EffectPorts, Logger } from '@ci/core'
 import {
   type AiTurnJob,
+  type CustomerErasureJob,
   createEffectPorts,
   createRedis,
   createRuntime,
@@ -9,6 +10,7 @@ import {
   type KnowledgeIngestJob,
   type OutboundJob,
   QUEUE_NAMES,
+  type RetentionJob,
   type Runtime,
   type SuggestionJob,
   type WaitingHumanTimeoutJob,
@@ -19,6 +21,7 @@ import { processAiTurn } from './processors/ai-turn'
 import { processInbound } from './processors/inbound'
 import { processKnowledgeIngest } from './processors/knowledge-ingest'
 import { processOutbound } from './processors/outbound'
+import { processCustomerErasure, processRetention } from './processors/retention'
 import { processSuggestion } from './processors/suggestion'
 import { processSummarize, type SummarizeJob } from './processors/summarize'
 import { processWaitingHumanTimeout } from './processors/waiting-human'
@@ -40,6 +43,10 @@ const CONCURRENCY = {
   // Summaries are background work; they must never crowd out a customer waiting on a reply.
   summarize: 2,
   knowledge_ingest: 2,
+  // Deletion is not urgent and touches object storage; one at a time keeps it out of the
+  // way of anything a customer is waiting on.
+  retention: 1,
+  customer_erasure: 1,
 } as const
 
 function makeWorker<T>(
@@ -134,6 +141,22 @@ async function main() {
       CONCURRENCY.summarize,
       processSummarize,
     ),
+    makeWorker<RetentionJob>(
+      QUEUE_NAMES.retention,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.retention,
+      processRetention,
+    ),
+    makeWorker<CustomerErasureJob>(
+      QUEUE_NAMES.customerErasure,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.customer_erasure,
+      processCustomerErasure,
+    ),
     makeWorker<KnowledgeIngestJob>(
       QUEUE_NAMES.knowledgeIngest,
       runtime,
@@ -143,6 +166,20 @@ async function main() {
       processKnowledgeIngest,
     ),
   ]
+
+  /**
+   * The nightly sweep.
+   *
+   * Registered by the worker rather than by a host cron so the schedule travels with the
+   * code and exists wherever the worker runs. A scheduler keyed by name is replaced on each
+   * start, so restarting or deploying never leaves two of them behind.
+   */
+  await runtime.queues.retention.upsertJobScheduler(
+    'retention-nightly',
+    { pattern: '17 3 * * *', tz: 'Asia/Bangkok' },
+    { name: 'retention', data: {} },
+  )
+  logger.info('retention scheduled', { pattern: '17 3 * * *', tz: 'Asia/Bangkok' })
 
   /**
    * A health endpoint, not an API.

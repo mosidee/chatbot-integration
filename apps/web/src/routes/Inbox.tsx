@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DeliveryTicks } from '../components/DeliveryTicks'
+import { EraseCustomer } from '../components/EraseCustomer'
 import { Lightbox } from '../components/Lightbox'
 import {
   Button,
@@ -382,6 +383,7 @@ function ConversationPane({
         onDiscard={(suggestionId) => {
           void api.conversations.discardSuggestion(conversationId, suggestionId).then(invalidate)
         }}
+        onErased={invalidate}
       />
     </div>
   )
@@ -502,6 +504,7 @@ function AiSidebar({
   onInsert,
   onInsertAndSend,
   onDiscard,
+  onErased,
 }: {
   detail: ConversationDetail
   className?: string
@@ -509,6 +512,7 @@ function AiSidebar({
   onInsert: (text: string) => void
   onInsertAndSend: (text: string, suggestionId: string) => void
   onDiscard: (suggestionId: string) => void
+  onErased: () => void
 }) {
   const { t } = useTranslation()
   const [openTrace, setOpenTrace] = useState<AiTrace | null>(null)
@@ -580,6 +584,7 @@ function AiSidebar({
         {detail.customer?.summary ? (
           <p className="mt-2 text-[13px] text-[var(--text-muted)]">{detail.customer.summary}</p>
         ) : null}
+        <EraseCustomer conversationId={detail.conversation.id} onErased={onErased} />
       </section>
 
       <section>

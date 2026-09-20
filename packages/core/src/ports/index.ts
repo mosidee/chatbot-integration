@@ -41,6 +41,12 @@ export type BlobStore = {
    */
   get(key: string): Promise<{ data: Uint8Array<ArrayBuffer>; mime: string }>
   put(key: string, data: Uint8Array<ArrayBuffer>, mime: string): Promise<void>
+  /**
+   * Erase one object. Silent when it is already gone, because retention and a customer's
+   * request to be erased both re-run after a partial failure and neither should fail on
+   * work already done.
+   */
+  remove(key: string): Promise<void>
   /** A URL an agent's browser can open. Not given to model providers; see ADR 0001. */
   urlFor(key: string): string
 }

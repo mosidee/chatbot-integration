@@ -184,9 +184,20 @@ screen rather than a deploy.
 Verified against a locally signed LINE webhook end to end. Real delivery needs accounts that
 do not exist yet.
 
-Next: **M4**, pilot readiness. The web widget with signed-token identification, customer merge
-suggestions, the review queue and feedback, the dashboard, and retention and delete-customer
-jobs.
+**M4 is in progress.** Delivered so far:
+
+- Retention. A nightly sweep, scheduled by the worker rather than a host cron so it exists
+  wherever the worker runs, deletes conversations whose last message is older than the
+  workspace's retention period, and the stored media with them. Age is measured from the last
+  message, so a long conversation is kept until it goes quiet rather than from when it began.
+- Erasure on request, which Thailand's PDPA gives a person a right to. An admin triggers it
+  beside the conversation where the request arrived, and it removes every conversation,
+  channel identity, summary and image belonging to that customer. The audit entry outlives
+  them and carries no personal data, which is what lets you show the request was honoured
+  without keeping what you were asked to delete.
+
+Still to come in M4: the web widget with signed-token identification, customer merge
+suggestions, the review queue and feedback, and the dashboard.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)

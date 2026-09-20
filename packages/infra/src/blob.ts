@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -58,6 +59,11 @@ export function createBlobStore(config: BlobConfig): BlobStore & { client: S3Cli
           ContentType: mime,
         }),
       )
+    },
+
+    async remove(key: string) {
+      // S3 answers 204 whether or not the key existed, which is the behaviour wanted here.
+      await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
     },
 
     urlFor(key: string) {
