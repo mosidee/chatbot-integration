@@ -326,6 +326,21 @@ export function settingsRoutes(ctx: ApiContext) {
       .put(
         '/task-slots/:task',
         async ({ workspaceId, params, body }) => {
+          // Params are merged, not replaced. The console saves a slot whenever a provider or
+          // model changes and sends only those fields, so replacing would quietly drop every
+          // tuning value the slot holds.
+          const existing = await db
+            .select({ params: schema.taskSlots.params })
+            .from(schema.taskSlots)
+            .where(
+              and(
+                eq(schema.taskSlots.workspaceId, workspaceId),
+                eq(schema.taskSlots.task, params.task),
+              ),
+            )
+            .limit(1)
+          const merged = { ...(existing[0]?.params ?? {}), ...(body.params ?? {}) }
+
           await db
             .insert(schema.taskSlots)
             .values({
@@ -336,7 +351,7 @@ export function settingsRoutes(ctx: ApiContext) {
               primaryModel: body.primaryModel ?? null,
               fallbackProviderId: body.fallbackProviderId ?? null,
               fallbackModel: body.fallbackModel ?? null,
-              params: body.params ?? {},
+              params: merged,
             })
             .onConflictDoUpdate({
               target: [schema.taskSlots.workspaceId, schema.taskSlots.task],
@@ -345,7 +360,7 @@ export function settingsRoutes(ctx: ApiContext) {
                 primaryModel: body.primaryModel ?? null,
                 fallbackProviderId: body.fallbackProviderId ?? null,
                 fallbackModel: body.fallbackModel ?? null,
-                params: body.params ?? {},
+                params: merged,
                 updatedAt: new Date(),
               },
             })

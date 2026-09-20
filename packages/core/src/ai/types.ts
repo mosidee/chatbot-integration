@@ -31,6 +31,15 @@ export type SlotConfig = {
      * is waiting on a webhook, so failing over quickly beats retrying a dead provider.
      */
     maxRetries?: number
+    /**
+     * Whether to ask an embedding model for a specific vector size. Defaults to true.
+     *
+     * Turn it off for a gateway or model that rejects the `dimensions` field outright, or
+     * that is already native to the size the store expects and treats the parameter as an
+     * error. The returned size is still checked, so a model that then answers with the
+     * wrong size fails loudly rather than filling the index with vectors it cannot compare.
+     */
+    sendDimensions?: boolean
     [key: string]: unknown
   }
 }

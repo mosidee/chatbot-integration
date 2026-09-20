@@ -6,8 +6,10 @@ import {
   configureMockProvider,
   customerSays,
   findTestChannelId,
+  resetEmbedSlot,
   signIn,
   uniqueCustomer,
+  uniqueToken,
 } from './helpers'
 
 /**
@@ -59,7 +61,7 @@ test('an agent takes over and replies, and the AI falls silent', async ({ page, 
   await page.getByTestId('take-over').click()
   await expect(page.getByTestId('return-to-ai')).toBeVisible()
 
-  const reply = `Handled by a person at ${Date.now()}`
+  const reply = `Handled by a person at ${uniqueToken()}`
   await page.getByTestId('composer').fill(reply)
   await page.getByTestId('send').click()
   // The composer clears only once the request succeeded, so this separates "the send
@@ -75,7 +77,7 @@ test('an agent takes over and replies, and the AI falls silent', async ({ page, 
   // The customer writes again while a human owns the conversation. The AI must stay silent.
   // The text is unique per run: the inbox list shows message previews, so a phrase reused
   // across runs would match more than one element.
-  const followUp = `แล้วมีโปรโมชั่นไหมคะ ${Date.now()}`
+  const followUp = `แล้วมีโปรโมชั่นไหมคะ ${uniqueToken()}`
   await customerSays(request, channelId, customer, followUp)
 
   // Wait for the new message to arrive rather than a fixed duration, so the assertion runs
@@ -192,4 +194,40 @@ test('every model the provider serves is offered, and an id can still be typed',
   // A slot with no provider cannot offer a model, and says so instead of taking free text
   // that could never be reached.
   await expect(page.getByTestId('slot-agent_chat-fallback-model')).toBeDisabled()
+})
+
+test('the embedding slot can stop sending the dimensions field, and remembers it', async ({
+  page,
+  request,
+}) => {
+  // Not every gateway accepts `dimensions`, and the console saves a slot whenever a provider
+  // or model changes. Those saves used to replace the slot's params wholesale, so an option
+  // set here would survive only until the next model change.
+  // The slot is put into a known state through the API, so the test does not depend on what
+  // a previous run left behind.
+  await resetEmbedSlot(request)
+
+  await signIn(page)
+  await page.goto('/settings')
+
+  const sendDimensions = page.getByTestId('slot-embed-send-dimensions')
+  await expect(sendDimensions).toBeChecked({ timeout: 20_000 })
+
+  // Offered for embeddings only: no other task sends the field.
+  await expect(page.locator('[data-testid$="-send-dimensions"]')).toHaveCount(1)
+
+  await sendDimensions.uncheck()
+  await page.reload()
+  await expect(page.getByTestId('slot-embed-send-dimensions')).not.toBeChecked({ timeout: 20_000 })
+
+  // Changing the model saves the slot without mentioning params. The option must survive it.
+  await page.getByTestId('slot-embed-primary-provider').selectOption({ index: 1 })
+  await page.getByTestId('slot-embed-primary-model').selectOption('mock-embedding')
+  await page.reload()
+  await expect(page.getByTestId('slot-embed-primary-model')).toHaveValue('mock-embedding', {
+    timeout: 20_000,
+  })
+  await expect(page.getByTestId('slot-embed-send-dimensions')).not.toBeChecked()
+
+  await resetEmbedSlot(request)
 })

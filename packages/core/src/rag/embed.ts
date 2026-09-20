@@ -11,6 +11,10 @@ import { NoSlotConfiguredError } from '../ai/types'
  * natively 1024, and OpenAI's text-embedding-3 models, which honour the parameter. A model
  * that ignores it and returns a different size is rejected loudly rather than silently
  * storing vectors the index cannot compare.
+ *
+ * Not every gateway accepts the field, though, so the slot can turn it off with
+ * `sendDimensions: false` and rely on the model's native size. The size check applies
+ * either way, which is what makes turning it off safe to try.
  */
 
 export type EmbedResult = {
@@ -42,12 +46,21 @@ export function clearEmbeddingCache(): void {
   cache.clear()
 }
 
-function assertDimensions(vectors: number[][], expected: number, model: string): void {
+function assertDimensions(
+  vectors: number[][],
+  expected: number,
+  model: string,
+  asked: boolean,
+): void {
   for (const vector of vectors) {
     if (vector.length !== expected) {
       throw new Error(
         `Embedding model "${model}" returned ${vector.length} dimensions, but the store expects ${expected}. ` +
-          'Choose a model that supports this size, or change EMBEDDING_DIMENSIONS and re-embed.',
+          (asked
+            ? 'Choose a model that supports this size, or change EMBEDDING_DIMENSIONS and re-embed.'
+            : 'The dimensions parameter is switched off for this slot, so the model answered at its ' +
+              'native size. Switch it back on, choose a model native to this size, or change ' +
+              'EMBEDDING_DIMENSIONS and re-embed.'),
       )
     }
   }
@@ -58,9 +71,11 @@ async function attempt(
   values: string[],
   dimensions: number,
   maxRetries: number,
+  sendDimensions: boolean,
 ): Promise<number[][]> {
   const model = providerFor(target).textEmbeddingModel(target.model)
-  const providerOptions = { openaiCompatible: { dimensions } }
+  // Omitted entirely rather than sent as undefined, so the field never reaches the wire.
+  const providerOptions = sendDimensions ? { openaiCompatible: { dimensions } } : undefined
 
   if (values.length === 1) {
     const only = values[0] ?? ''
@@ -89,12 +104,13 @@ export async function embedTexts(
   if (targets.length === 0) throw new NoSlotConfiguredError(slot.task)
 
   const maxRetries = options.maxRetries ?? slot.params.maxRetries ?? 1
+  const sendDimensions = slot.params.sendDimensions !== false
   let lastError: unknown
 
   for (const { target, usedFallback } of targets) {
     try {
-      const embeddings = await attempt(target, values, dimensions, maxRetries)
-      assertDimensions(embeddings, dimensions, target.model)
+      const embeddings = await attempt(target, values, dimensions, maxRetries, sendDimensions)
+      assertDimensions(embeddings, dimensions, target.model, sendDimensions)
       return { embeddings, model: target.model, usedFallback }
     } catch (error) {
       lastError = error
