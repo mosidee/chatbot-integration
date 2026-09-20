@@ -1,4 +1,5 @@
 import { generateText } from 'ai'
+import { stripReasoning } from './reasoning'
 import { runWithFallback } from './registry'
 import type { ImageInput, SlotConfig } from './types'
 
@@ -64,7 +65,9 @@ export async function describeImages(
   )
 
   return {
-    summary: attempt.result.text.trim(),
+    // Thinking left in the content would be injected into the chat prompt as if it were
+    // a description of the picture.
+    summary: stripReasoning(attempt.result.text),
     providerName: attempt.target.provider.name,
     model: attempt.target.model,
     usedFallback: attempt.usedFallback,
