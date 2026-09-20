@@ -56,7 +56,7 @@ jobs:
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then break; fi
             sleep 2
           done
-          docker run --rm --network host quay.io/minio/mc:latest sh -c \
+          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c \
             "mc alias set local http://localhost:9000 minioadmin minioadmin && \
              mc mb --ignore-existing local/media"
       - uses: oven-sh/setup-bun@v2
