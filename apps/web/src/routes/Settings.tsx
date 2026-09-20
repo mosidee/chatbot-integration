@@ -2,7 +2,12 @@ import type { ConversationMode, Language } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ModelField, refreshProviderModels, useProviderModels } from '../components/ModelField'
+import {
+  ModelField,
+  ModelVerify,
+  refreshProviderModels,
+  useProviderModels,
+} from '../components/ModelField'
 import { Button, Card, cn, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
 import { api, type Channel, type CredentialCheck, type Provider, type TaskSlot } from '../lib/api'
 
@@ -326,7 +331,7 @@ function TaskSlotsCard({
           <div key={task} className="rounded-lg border border-[var(--border)] p-2.5">
             <div className="mb-1.5 font-mono text-[12px] font-medium">{task}</div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <div className="flex gap-1.5">
+              <div className="flex min-w-0 gap-1.5">
                 <select
                   className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
                   data-testid={`slot-${task}-primary-provider`}
@@ -350,7 +355,7 @@ function TaskSlotsCard({
                 />
               </div>
 
-              <div className="flex gap-1.5">
+              <div className="flex min-w-0 gap-1.5">
                 <select
                   className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
                   data-testid={`slot-${task}-fallback-provider`}
@@ -374,6 +379,23 @@ function TaskSlotsCard({
                 />
               </div>
             </div>
+
+            <ModelVerify
+              testId={`slot-${task}-primary-model`}
+              task={task}
+              label={t('settings.primary')}
+              providerId={slot?.primaryProviderId ?? null}
+              model={slot?.primaryModel ?? null}
+              sendDimensions={slot?.params.sendDimensions !== false}
+            />
+            <ModelVerify
+              testId={`slot-${task}-fallback-model`}
+              task={task}
+              label={t('settings.fallback')}
+              providerId={slot?.fallbackProviderId ?? null}
+              model={slot?.fallbackModel ?? null}
+              sendDimensions={slot?.params.sendDimensions !== false}
+            />
 
             {task === 'embed' ? (
               <label className="mt-2 flex items-start gap-2 text-[12px] text-[var(--text-muted)]">

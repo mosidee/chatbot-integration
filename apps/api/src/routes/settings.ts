@@ -1,5 +1,14 @@
 import { getAdapter } from '@ci/channels'
-import { decryptJson, encryptJson, encryptSecret, newId, schema } from '@ci/db'
+import { verifyChatModel, verifyEmbeddingModel } from '@ci/core'
+import {
+  decryptJson,
+  decryptSecret,
+  EMBEDDING_DIMENSIONS,
+  encryptJson,
+  encryptSecret,
+  newId,
+  schema,
+} from '@ci/db'
 import { aiTaskSchema, channelTypeSchema, conversationModeSchema, languageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -308,6 +317,63 @@ export function settingsRoutes(ctx: ApiContext) {
           }
         },
         { auth: 'admin', params: z.object({ id: z.string() }) },
+      )
+
+      /**
+       * Call one model once, so a catalogue entry that the gateway will not actually serve
+       * is found here rather than by a customer asking a question and getting silence.
+       */
+      .post(
+        '/providers/:id/verify-model',
+        async ({ workspaceId, params, body, status }) => {
+          const rows = await db
+            .select()
+            .from(schema.providers)
+            .where(
+              and(
+                eq(schema.providers.id, params.id),
+                eq(schema.providers.workspaceId, workspaceId),
+              ),
+            )
+            .limit(1)
+          const provider = rows[0]
+          if (!provider) return status(404, { error: 'Provider not found' })
+
+          const target = {
+            provider: {
+              id: provider.id,
+              name: provider.name,
+              baseUrl: provider.baseUrl,
+              apiKey: provider.apiKeyEncrypted
+                ? await decryptSecret(provider.apiKeyEncrypted, env.APP_SECRET_KEY)
+                : null,
+              headers: provider.headersEncrypted
+                ? await decryptJson<Record<string, string>>(
+                    provider.headersEncrypted,
+                    env.APP_SECRET_KEY,
+                  )
+                : {},
+              supportsTools: provider.supportsTools,
+              supportsVision: provider.supportsVision,
+            },
+            model: body.model,
+          }
+
+          // An embedding slot holds an embedding model, which a chat request would refuse
+          // for the wrong reason entirely.
+          return body.task === 'embed'
+            ? await verifyEmbeddingModel(target, EMBEDDING_DIMENSIONS, body.sendDimensions ?? true)
+            : await verifyChatModel(target)
+        },
+        {
+          auth: 'admin',
+          params: z.object({ id: z.string() }),
+          body: z.object({
+            model: z.string().min(1),
+            task: aiTaskSchema,
+            sendDimensions: z.boolean().optional(),
+          }),
+        },
       )
 
       // ---- task slots ------------------------------------------------------------
