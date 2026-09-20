@@ -105,3 +105,49 @@ export async function resetEmbedSlot(request: APIRequestContext): Promise<void> 
   })
   if (!response.ok()) throw new Error(`Resetting the embed slot failed: ${response.status()}`)
 }
+
+/**
+ * Send an image as a customer, the way a platform webhook would.
+ *
+ * The bytes are a real one-pixel PNG uploaded through the API, so the attachment points at
+ * an object that actually exists and the console renders it rather than a broken image.
+ */
+export async function customerSendsImage(
+  request: APIRequestContext,
+  channelId: string,
+  externalId: string,
+): Promise<void> {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  const uploaded = await request.post(`${API_URL}/api/v1/uploads`, {
+    multipart: { file: { name: 'shot.png', mimeType: 'image/png', buffer: png } },
+  })
+  if (!uploaded.ok()) throw new Error(`Upload failed: ${uploaded.status()}`)
+  const { storageKey } = (await uploaded.json()) as { storageKey: string }
+
+  const response = await request.post(`${API_URL}/api/v1/simulator/${channelId}/inbound`, {
+    data: {
+      externalId,
+      displayName: externalId,
+      message: {
+        kind: 'image',
+        text: null,
+        attachments: [
+          {
+            storageKey,
+            sourceUrl: null,
+            mime: 'image/png',
+            sizeBytes: png.length,
+            fileName: 'shot.png',
+            width: null,
+            height: null,
+            durationMs: null,
+          },
+        ],
+      },
+    },
+  })
+  if (!response.ok()) throw new Error(`Simulator image send failed: ${response.status()}`)
+}

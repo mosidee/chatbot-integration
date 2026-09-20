@@ -2,6 +2,7 @@ import type { ConversationMode } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Lightbox } from '../components/Lightbox'
 import {
   Button,
   cn,
@@ -413,12 +414,18 @@ function Bubble({
   const { t, i18n } = useTranslation()
   const isCustomer = message.senderType === 'customer'
   const isAi = message.senderType === 'ai'
+  // Held per bubble rather than by the thread: only one picture can be open at a time
+  // anyway, and this keeps the state next to the thing that opens it.
+  const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
 
   return (
     <div
       className={cn('flex', isCustomer ? 'justify-start' : 'justify-end')}
       data-sender={message.senderType}
     >
+      {zoomed ? (
+        <Lightbox src={zoomed.src} alt={zoomed.alt} onClose={() => setZoomed(null)} />
+      ) : null}
       <div
         className={cn(
           'max-w-[85%] rounded-2xl px-3 py-2 text-sm sm:max-w-[70%]',
@@ -431,12 +438,25 @@ function Bubble({
       >
         {attachmentsOf(message).map((attachment) =>
           attachment.mime.startsWith('image/') ? (
-            <img
+            <button
               key={attachment.storageKey}
-              src={api.uploads.urlFor(attachment.storageKey)}
-              alt={attachment.fileName ?? ''}
-              className="mb-1 max-h-64 rounded-lg object-contain"
-            />
+              type="button"
+              data-testid="message-image"
+              className="mb-1 block cursor-zoom-in"
+              title={t('inbox.openImage')}
+              onClick={() =>
+                setZoomed({
+                  src: api.uploads.urlFor(attachment.storageKey),
+                  alt: attachment.fileName ?? '',
+                })
+              }
+            >
+              <img
+                src={api.uploads.urlFor(attachment.storageKey)}
+                alt={attachment.fileName ?? ''}
+                className="max-h-64 rounded-lg object-contain"
+              />
+            </button>
           ) : (
             <a
               key={attachment.storageKey}

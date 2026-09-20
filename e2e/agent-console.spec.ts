@@ -5,6 +5,7 @@ import {
   apiSignIn,
   configureMockProvider,
   customerSays,
+  customerSendsImage,
   findTestChannelId,
   resetEmbedSlot,
   signIn,
@@ -262,4 +263,40 @@ test('a model can be tested from settings before a customer finds out', async ({
 
   // Nothing to test until a model is chosen, so no button appears at all.
   await expect(page.getByTestId('slot-summarize-primary-model-verify')).toHaveCount(0)
+})
+
+test('an agent opens a customer photo full size', async ({ page, request }) => {
+  // A customer sends a screenshot of an error or a receipt. In the thread it is a couple of
+  // hundred pixels tall, which is right for scanning and useless for reading.
+  const channelId = await findTestChannelId(request)
+  const customer = uniqueCustomer('photo')
+
+  await signIn(page)
+  await customerSendsImage(request, channelId, customer)
+
+  const row = page.getByTestId('conversation-row').filter({ hasText: customer })
+  await expect(row).toBeVisible({ timeout: 25_000 })
+  await row.click()
+
+  const thumbnail = page.getByTestId('message-image').first()
+  await expect(thumbnail).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('lightbox')).toHaveCount(0)
+
+  await thumbnail.click()
+  await expect(page.getByTestId('lightbox')).toBeVisible()
+  await expect(page.getByTestId('lightbox-image')).toBeVisible()
+
+  // Clicking the picture itself must not close it: that is the one place nobody expects it.
+  await page.getByTestId('lightbox-image').click()
+  await expect(page.getByTestId('lightbox')).toBeVisible()
+
+  // Escape closes, because that is what every other overlay on a computer does.
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('lightbox')).toHaveCount(0)
+
+  // And so does clicking the backdrop.
+  await thumbnail.click()
+  await expect(page.getByTestId('lightbox')).toBeVisible()
+  await page.getByTestId('lightbox-close').click()
+  await expect(page.getByTestId('lightbox')).toHaveCount(0)
 })

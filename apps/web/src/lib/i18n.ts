@@ -23,6 +23,8 @@ const th = {
     failed: 'เข้าสู่ระบบไม่สำเร็จ',
   },
   inbox: {
+    image: 'รูปภาพ',
+    openImage: 'เปิดในแท็บใหม่',
     title: 'กล่องข้อความ',
     empty: 'ยังไม่มีบทสนทนา',
     waiting: 'รอเจ้าหน้าที่',
@@ -197,6 +199,8 @@ const en: typeof th = {
     failed: 'Sign in failed',
   },
   inbox: {
+    image: 'Image',
+    openImage: 'Open in new tab',
     title: 'Inbox',
     empty: 'No conversations yet',
     waiting: 'Waiting for a human',
