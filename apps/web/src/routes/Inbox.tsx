@@ -120,6 +120,7 @@ export function Inbox() {
                 <li key={conversation.id}>
                   <button
                     type="button"
+                    data-testid="conversation-row"
                     onClick={() => setSelectedId(conversation.id)}
                     className={cn(
                       'flex w-full flex-col gap-1 border-b border-[var(--border)] px-3 py-2.5 text-left transition-colors',
@@ -273,11 +274,16 @@ function ConversationPane({
 
           <div className="ml-auto flex items-center gap-1.5">
             {isHumanOwned ? (
-              <Button size="sm" onClick={() => returnToAi.mutate('')}>
+              <Button size="sm" data-testid="return-to-ai" onClick={() => returnToAi.mutate('')}>
                 {t('conversation.returnToAi')}
               </Button>
             ) : (
-              <Button size="sm" variant="primary" onClick={() => takeOver.mutate()}>
+              <Button
+                size="sm"
+                data-testid="take-over"
+                variant="primary"
+                onClick={() => takeOver.mutate()}
+              >
                 {t('conversation.takeOver')}
               </Button>
             )}
@@ -335,6 +341,7 @@ function ConversationPane({
           <div className="flex items-end gap-2">
             <Textarea
               rows={2}
+              data-testid="composer"
               value={draft}
               placeholder={t('conversation.placeholder')}
               onChange={(e) => setDraft(expandShortcut(e.target.value))}
@@ -347,6 +354,7 @@ function ConversationPane({
             />
             <Button
               variant="primary"
+              data-testid="send"
               disabled={!draft.trim() || send.isPending}
               onClick={() => send.mutate({ text: draft.trim() })}
             >
@@ -404,7 +412,10 @@ function Bubble({
   const isAi = message.senderType === 'ai'
 
   return (
-    <div className={cn('flex', isCustomer ? 'justify-start' : 'justify-end')}>
+    <div
+      className={cn('flex', isCustomer ? 'justify-start' : 'justify-end')}
+      data-sender={message.senderType}
+    >
       <div
         className={cn(
           'max-w-[85%] rounded-2xl px-3 py-2 text-sm sm:max-w-[70%]',
