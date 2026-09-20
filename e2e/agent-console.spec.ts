@@ -72,6 +72,11 @@ test('an agent takes over and replies, and the AI falls silent', async ({ page, 
     timeout: 20_000,
   })
 
+  // Outbound messages carry a delivery tick, the way every messaging app shows one. The
+  // test channel reports nothing beyond acceptance, so one tick is the honest state.
+  await expect(page.getByTestId('delivery-sent').first()).toBeVisible()
+  await expect(page.getByTestId('delivery-read')).toHaveCount(0)
+
   const aiBubblesBefore = await page.locator('[data-sender="ai"]').count()
   expect(aiBubblesBefore).toBeGreaterThan(0)
 
