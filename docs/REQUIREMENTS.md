@@ -163,8 +163,30 @@ image sent through the simulator is described by the vision slot and referenced 
 - An external retrieval adapter for operators already running Dify or RAGFlow.
 - Playwright covers the three core agent flows.
 
-Next: **M3**, the real channels. LINE and Messenger adapters, channel settings, media in and
-out, and the Meta App Review submission.
+**M3 is complete.** LINE and Messenger are implemented, and connecting them is a settings
+screen rather than a deploy.
+
+- Webhook signatures are verified over the exact bytes each platform sent, with tests covering
+  Thai, emoji, unusual whitespace and a re-serialised body.
+- The LINE adapter handles text, media, stickers, locations, follows, postbacks and unsends,
+  with fixtures typed against the SDK's own schema. Reply tokens are carried on the
+  conversation and used while fresh, so replies are free rather than billed as pushes.
+- The Messenger adapter speaks the Graph API directly on v26.0, handles stickers, quick
+  replies, postbacks, referrals and receipts, and refuses to send outside the 24-hour window
+  with an explanation rather than an error code.
+- Inbound media is downloaded into our own storage before the AI turn runs, because platform
+  references expire. A failed download degrades the message rather than dropping it.
+- Channel settings show the webhook URL and Meta's verify token alongside the credential
+  fields, with a button that asks the platform whether the credentials work.
+- `docs/CHANNEL-SETUP.md` covers connecting both platforms; `docs/META-REVIEW.md` covers the
+  App Review submission, which is the schedule's long pole.
+
+Verified against a locally signed LINE webhook end to end. Real delivery needs accounts that
+do not exist yet.
+
+Next: **M4**, pilot readiness. The web widget with signed-token identification, customer merge
+suggestions, the review queue and feedback, the dashboard, and retention and delete-customer
+jobs.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)
