@@ -377,6 +377,63 @@ export function settingsRoutes(ctx: ApiContext) {
         },
       )
 
+      // ---- canned responses --------------------------------------------------------
+      .get(
+        '/canned-responses',
+        async ({ workspaceId }) => {
+          const responses = await db
+            .select()
+            .from(schema.cannedResponses)
+            .where(eq(schema.cannedResponses.workspaceId, workspaceId))
+          return { responses }
+        },
+        { auth: 'agent' },
+      )
+
+      .post(
+        '/canned-responses',
+        async ({ workspaceId, body, status }) => {
+          const id = newId()
+          try {
+            await db.insert(schema.cannedResponses).values({
+              id,
+              workspaceId,
+              // Stored without the slash so the composer can match what an agent types.
+              shortcut: body.shortcut.replace(/^\//, ''),
+              language: body.language ?? null,
+              body: body.body,
+            })
+          } catch {
+            return status(409, { error: 'That shortcut is already in use' })
+          }
+          return { id }
+        },
+        {
+          auth: 'agent',
+          body: z.object({
+            shortcut: z.string().min(1).max(40),
+            language: languageSchema.nullable().optional(),
+            body: z.string().min(1).max(4000),
+          }),
+        },
+      )
+
+      .delete(
+        '/canned-responses/:id',
+        async ({ workspaceId, params }) => {
+          await db
+            .delete(schema.cannedResponses)
+            .where(
+              and(
+                eq(schema.cannedResponses.id, params.id),
+                eq(schema.cannedResponses.workspaceId, workspaceId),
+              ),
+            )
+          return { ok: true }
+        },
+        { auth: 'agent', params: z.object({ id: z.string() }) },
+      )
+
       // ---- people ----------------------------------------------------------------
       .get(
         '/members',

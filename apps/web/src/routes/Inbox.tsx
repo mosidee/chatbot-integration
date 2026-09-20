@@ -6,13 +6,22 @@ import {
   Button,
   cn,
   EmptyState,
+  ErrorNote,
   formatTime,
+  Input,
+  Label,
   ModeBadge,
   Spinner,
   Textarea,
   timeAgo,
 } from '../components/ui'
-import { api, type ConversationDetail, type ConversationListItem, type Message } from '../lib/api'
+import {
+  type AiTrace,
+  api,
+  type ConversationDetail,
+  type ConversationListItem,
+  type Message,
+} from '../lib/api'
 import { useRealtime } from '../lib/ws'
 
 /**
@@ -168,12 +177,27 @@ function ConversationPane({
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
   const [showSidebar, setShowSidebar] = useState(false)
+  const [promoting, setPromoting] = useState<Message | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const detail = useQuery({
     queryKey: ['conversation', conversationId],
     queryFn: () => api.conversations.detail(conversationId),
   })
+
+  const canned = useQuery({
+    queryKey: ['canned-responses'],
+    queryFn: () => api.settings.cannedResponses(),
+    staleTime: 300_000,
+  })
+
+  // `/shortcut ` expands as the agent types, so a saved reply costs no clicks.
+  const expandShortcut = (value: string): string => {
+    const match = value.match(/^\/(\S+)\s$/)
+    if (!match) return value
+    const found = canned.data?.responses.find((r) => r.shortcut === match[1])
+    return found ? `${found.body} ` : value
+  }
 
   // Follow the thread as messages arrive. Nothing to scroll to while it is empty.
   const messageCount = detail.data?.messages.length ?? 0
@@ -283,7 +307,17 @@ function ConversationPane({
           {data.messages.length === 0 ? (
             <EmptyState title={t('conversation.noMessages')} />
           ) : (
-            data.messages.map((message) => <Bubble key={message.id} message={message} />)
+            data.messages.map((message) => (
+              <Bubble
+                key={message.id}
+                message={message}
+                onPromote={
+                  message.direction === 'outbound' && message.text
+                    ? () => setPromoting(message)
+                    : undefined
+                }
+              />
+            ))
           )}
           {data.notes.map((note) => (
             <div
@@ -303,7 +337,7 @@ function ConversationPane({
               rows={2}
               value={draft}
               placeholder={t('conversation.placeholder')}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => setDraft(expandShortcut(e.target.value))}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && draft.trim()) {
                   e.preventDefault()
@@ -321,6 +355,10 @@ function ConversationPane({
           </div>
         </footer>
       </div>
+
+      {promoting ? (
+        <PromoteToKnowledge message={promoting} onClose={() => setPromoting(null)} />
+      ) : null}
 
       <AiSidebar
         detail={data}
@@ -354,8 +392,14 @@ function attachmentsOf(
     .map((a) => ({ storageKey: a.storageKey, mime: a.mime, fileName: a.fileName }))
 }
 
-function Bubble({ message }: { message: Message }) {
-  const { i18n } = useTranslation()
+function Bubble({
+  message,
+  onPromote,
+}: {
+  message: Message
+  onPromote?: (() => void) | undefined
+}) {
+  const { t, i18n } = useTranslation()
   const isCustomer = message.senderType === 'customer'
   const isAi = message.senderType === 'ai'
 
@@ -401,6 +445,15 @@ function Bubble({ message }: { message: Message }) {
           <span>{formatTime(message.createdAt, i18n.language)}</span>
           {message.status === 'failed' ? <span className="font-semibold">!</span> : null}
           {isAi ? <span>AI</span> : null}
+          {onPromote ? (
+            <button
+              type="button"
+              onClick={onPromote}
+              className="ml-1 underline decoration-dotted underline-offset-2"
+            >
+              {t('knowledge.saveAsKnowledge')}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -423,6 +476,7 @@ function AiSidebar({
   onDiscard: (suggestionId: string) => void
 }) {
   const { t } = useTranslation()
+  const [openTrace, setOpenTrace] = useState<AiTrace | null>(null)
   const suggestion = detail.suggestions[0]
 
   const traces = useQuery({
@@ -531,11 +585,201 @@ function AiSidebar({
             {lastTrace.error ? (
               <p className="text-[11px] text-red-600 dark:text-red-400">{lastTrace.error}</p>
             ) : null}
+            <Button size="sm" variant="ghost" onClick={() => setOpenTrace(lastTrace)}>
+              {t('sidebar.viewTrace')}
+            </Button>
           </div>
         ) : (
           <p className="text-[13px] text-[var(--text-muted)]">—</p>
         )}
       </section>
+
+      {openTrace ? <TraceDetail trace={openTrace} onClose={() => setOpenTrace(null)} /> : null}
     </aside>
+  )
+}
+
+/**
+ * The full record of one AI run: the exact prompt, the knowledge it was given, the tools it
+ * called and what it cost. This is the answer to "why did it say that", and the reason a
+ * wrong answer is a debugging task rather than a mystery.
+ */
+function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }) {
+  const { t } = useTranslation()
+  const prompt = trace.prompt as {
+    system?: string
+    messages?: { role: string; content: string }[]
+  } | null
+  const retrieved = (trace.retrieved ?? []) as { sourceTitle?: string; text?: string }[]
+  const toolCalls = (trace.toolCalls ?? []) as { toolName?: string; input?: unknown }[]
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        <header className="flex items-center gap-2 border-b border-[var(--border)] p-3">
+          <h2 className="text-sm font-semibold">{t('trace.title')}</h2>
+          <span className="font-mono text-[11px] text-[var(--text-muted)]">{trace.task}</span>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={onClose}>
+            {t('common.close')}
+          </Button>
+        </header>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 text-[13px]">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {(
+              [
+                [t('settings.model'), trace.model ?? '—'],
+                ['provider', trace.providerName ?? '—'],
+                ['tokens', `${trace.tokensIn ?? 0} / ${trace.tokensOut ?? 0}`],
+                ['latency', `${trace.latencyMs ?? 0} ms`],
+                [t('sidebar.cost'), trace.costEstimate ?? '—'],
+                ['outcome', trace.outcome],
+              ] as const
+            ).map(([label, value]) => (
+              <div key={label} className="flex justify-between gap-2">
+                <dt className="text-[var(--text-muted)]">{label}</dt>
+                <dd className="truncate font-mono text-[11px]">{String(value)}</dd>
+              </div>
+            ))}
+          </dl>
+
+          {trace.usedFallback ? (
+            <p className="text-[11px] text-amber-700 dark:text-amber-300">
+              {t('sidebar.fallbackUsed')}
+            </p>
+          ) : null}
+          {trace.error ? <ErrorNote message={trace.error} /> : null}
+
+          <TraceSection title={t('trace.knowledge')}>
+            {retrieved.length === 0 ? (
+              <p className="text-[var(--text-muted)]">{t('knowledge.noHits')}</p>
+            ) : (
+              <ul className="space-y-1">
+                {retrieved.map((chunk, i) => (
+                  <li
+                    key={`${chunk.sourceTitle}-${i}`}
+                    className="rounded border border-[var(--border)] p-1.5"
+                  >
+                    <span className="text-[11px] font-medium">{chunk.sourceTitle}</span>
+                    <p className="whitespace-pre-wrap">{chunk.text}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </TraceSection>
+
+          {toolCalls.length > 0 ? (
+            <TraceSection title={t('trace.tools')}>
+              <ul className="space-y-1">
+                {toolCalls.map((call, i) => (
+                  <li key={`${call.toolName}-${i}`} className="font-mono text-[11px]">
+                    {call.toolName}({JSON.stringify(call.input)})
+                  </li>
+                ))}
+              </ul>
+            </TraceSection>
+          ) : null}
+
+          <TraceSection title={t('trace.systemPrompt')}>
+            <pre className="whitespace-pre-wrap break-words rounded bg-[var(--surface-muted)] p-2 text-[11px]">
+              {prompt?.system ?? '—'}
+            </pre>
+          </TraceSection>
+
+          <TraceSection title={t('trace.messages')}>
+            <ul className="space-y-1">
+              {(prompt?.messages ?? []).map((m, i) => (
+                <li key={`${m.role}-${i}`}>
+                  <span className="text-[11px] font-medium text-[var(--text-muted)]">{m.role}</span>
+                  <p className="whitespace-pre-wrap break-words">{String(m.content)}</p>
+                </li>
+              ))}
+            </ul>
+          </TraceSection>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TraceSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+        {title}
+      </h3>
+      {children}
+    </section>
+  )
+}
+
+/**
+ * Promote a reply into the knowledge base.
+ *
+ * The agent edits before saving. Redaction masks card and ID numbers but deliberately keeps
+ * names, phone numbers and order references, because those are the identifiers the product
+ * extracts on purpose. A reply that helped one customer often names them, and that must not
+ * become a permanent answer given to everyone.
+ */
+function PromoteToKnowledge({ message, onClose }: { message: Message; onClose: () => void }) {
+  const { t, i18n } = useTranslation()
+  const [question, setQuestion] = useState('')
+  const [body, setBody] = useState(message.text)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.knowledge.fromMessage({
+        messageId: message.id,
+        title: question.slice(0, 80) || t('knowledge.untitled'),
+        question,
+        body,
+        language: i18n.language === 'th' ? 'th' : 'en',
+      }),
+    onSuccess: onClose,
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+      <div className="w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <h2 className="mb-1 text-sm font-semibold">{t('knowledge.saveAsKnowledge')}</h2>
+        <p className="mb-3 text-[13px] text-[var(--text-muted)]">{t('knowledge.promoteHint')}</p>
+
+        <div className="space-y-3">
+          <div>
+            <Label htmlFor="promote-question">{t('knowledge.question')}</Label>
+            <Input
+              id="promote-question"
+              value={question}
+              placeholder={t('knowledge.questionPlaceholder')}
+              onChange={(e) => setQuestion(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="promote-body">{t('knowledge.answer')}</Label>
+            <Textarea
+              id="promote-body"
+              rows={6}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+            />
+          </div>
+          {error ? <ErrorNote message={error} /> : null}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!question.trim() || !body.trim() || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {t('knowledge.save')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }

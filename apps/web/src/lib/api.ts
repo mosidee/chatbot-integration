@@ -200,6 +200,13 @@ export type Channel = {
   webhookUrl: string
 }
 
+export type CannedResponse = {
+  id: string
+  shortcut: string
+  language: Language | null
+  body: string
+}
+
 export type Member = {
   userId: string
   role: string
@@ -412,6 +419,10 @@ export const api = {
       put<{ ok: true }>(`/v1/settings/task-slots/${task}`, body),
     channels: () => get<{ channels: Channel[] }>('/v1/settings/channels'),
     members: () => get<{ members: Member[] }>('/v1/settings/members'),
+    cannedResponses: () => get<{ responses: CannedResponse[] }>('/v1/settings/canned-responses'),
+    createCannedResponse: (body: { shortcut: string; body: string; language?: Language | null }) =>
+      post<{ id: string }>('/v1/settings/canned-responses', body),
+    deleteCannedResponse: (id: string) => del<{ ok: true }>(`/v1/settings/canned-responses/${id}`),
   },
 
   auth: {

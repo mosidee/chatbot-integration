@@ -159,6 +159,8 @@ export function Settings() {
         }}
       />
 
+      <CannedResponsesCard />
+
       <Card className="space-y-2">
         <h2 className="text-sm font-semibold">{t('settings.channels')}</h2>
         {(channels.data?.channels ?? []).map((channel) => (
@@ -376,6 +378,86 @@ function TaskSlotsCard({
           </div>
         )
       })}
+    </Card>
+  )
+}
+
+/**
+ * Reusable replies. An agent types `/shortcut` followed by a space in the composer and the
+ * body expands in place, so a saved answer costs no clicks.
+ */
+function CannedResponsesCard() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [shortcut, setShortcut] = useState('')
+  const [body, setBody] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const responses = useQuery({
+    queryKey: ['canned-responses'],
+    queryFn: () => api.settings.cannedResponses(),
+  })
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['canned-responses'] })
+
+  const create = useMutation({
+    mutationFn: () => api.settings.createCannedResponse({ shortcut, body }),
+    onSuccess: () => {
+      setShortcut('')
+      setBody('')
+      setError(null)
+      refresh()
+    },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  })
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.settings.deleteCannedResponse(id),
+    onSuccess: refresh,
+  })
+
+  return (
+    <Card className="space-y-3">
+      <h2 className="text-sm font-semibold">{t('settings.cannedResponses')}</h2>
+      <p className="text-[13px] text-[var(--text-muted)]">{t('settings.cannedHint')}</p>
+
+      {(responses.data?.responses ?? []).map((response) => (
+        <div
+          key={response.id}
+          className="flex items-start gap-2 rounded-lg border border-[var(--border)] p-2.5 text-sm"
+        >
+          <code className="shrink-0 rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[12px]">
+            /{response.shortcut}
+          </code>
+          <p className="min-w-0 flex-1 whitespace-pre-wrap text-[13px]">{response.body}</p>
+          <Button size="sm" variant="ghost" onClick={() => remove.mutate(response.id)}>
+            ✕
+          </Button>
+        </div>
+      ))}
+
+      <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
+        <Input
+          placeholder={t('settings.shortcut')}
+          value={shortcut}
+          onChange={(e) => setShortcut(e.target.value)}
+        />
+        <Textarea
+          rows={2}
+          placeholder={t('settings.cannedBody')}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+        />
+      </div>
+      {error ? <ErrorNote message={error} /> : null}
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={!shortcut.trim() || !body.trim() || create.isPending}
+        onClick={() => create.mutate()}
+      >
+        {t('settings.addCanned')}
+      </Button>
     </Card>
   )
 }
