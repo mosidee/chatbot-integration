@@ -105,6 +105,11 @@ without spending money.
   `chat.completion.chunk` deltas holding no complete answer at all. `createCompatibleFetch`
   repairs both, assembling deltas including tool calls, whose arguments arrive as string
   fragments. Which shape a gateway uses can differ per upstream model, so test each one.
+- A reasoning model is supposed to report its thinking in a separate field. Several
+  gateways leave it in the message content instead, so a reply reaches the customer as
+  `<think>…</think>answer`, sometimes with the block empty. `stripReasoning` removes it
+  from both the answer and the vision description, before storage and before the next
+  prompt.
 - Structured output through an OpenAI-compatible provider is sent as
   `response_format: {type: 'json_object'}` and the schema is dropped. Put the schema in the
   prompt yourself, derived from the Zod schema so it cannot drift. DeepSeek additionally

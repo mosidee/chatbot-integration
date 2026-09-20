@@ -85,6 +85,41 @@ describe('runAgentTurn', () => {
     expect(result.trace.usedFallback).toBe(false)
   })
 
+  test('never sends the thinking of a model to the customer', async () => {
+    // Captured from production: a gateway left the reasoning block in the message content,
+    // so replies began with the tag. The customer read it.
+    const server = mock([{ kind: 'text', text: '<think></think>แพ็กเกจเริ่มต้น 990 บาทต่อเดือนค่ะ' }])
+
+    const result = await runAgentTurn({
+      input: input(),
+      chatSlot: slot(server.url),
+      visionSlot: null,
+      prices: {},
+      mode: 'answer',
+      maxRetries: 0,
+    })
+
+    expect(result.text).toBe('แพ็กเกจเริ่มต้น 990 บาทต่อเดือนค่ะ')
+    expect(result.trace.outcome).toBe('sent')
+  })
+
+  test('an answer that is nothing but thinking counts as empty', async () => {
+    // Which means it hands off rather than sending half a thought.
+    const server = mock([{ kind: 'text', text: '<think>still working it out' }])
+
+    const result = await runAgentTurn({
+      input: input(),
+      chatSlot: slot(server.url),
+      visionSlot: null,
+      prices: {},
+      mode: 'answer',
+      maxRetries: 0,
+    })
+
+    expect(result.text).toBe('')
+    expect(result.trace.outcome).toBe('error')
+  })
+
   test('records an empty answer as an error, not as a send', async () => {
     // A reasoning model can spend its whole output budget thinking and emit nothing. The
     // turn succeeds at the provider, so nothing else marks it as a failure, and a trace

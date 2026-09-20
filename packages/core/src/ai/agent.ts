@@ -1,6 +1,7 @@
 import { generateText, stepCountIs } from 'ai'
 import { estimateCost } from './cost'
 import { buildMessages, buildSystemPrompt } from './prompt'
+import { stripReasoning } from './reasoning'
 import { runWithFallback } from './registry'
 import { createInternalTools, createScratchpad, type ToolContext } from './tools'
 import type { AgentTurnInput, AgentTurnResult, PriceTable, SlotConfig, TraceRecord } from './types'
@@ -99,7 +100,9 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     const chatCost = estimateCost(prices, target.provider.name, target.model, tokensIn, tokensOut)
 
     const handoff = scratchpad.handoff
-    const text = result.text.trim()
+    // Some gateways leave a reasoning model's thinking inside the message content. It is
+    // not an answer and must never reach a customer.
+    const text = stripReasoning(result.text)
 
     const trace: TraceRecord = {
       task: chatSlot.task,
