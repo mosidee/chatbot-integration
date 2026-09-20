@@ -281,3 +281,84 @@ describe('capabilities and config', () => {
     expect(parsed.graphVersion).toMatch(/^v\d+\.\d+$/)
   })
 })
+
+describe('checking credentials', () => {
+  const realFetch = globalThis.fetch
+
+  /** Answers per Graph path, so each permission can be granted or withheld separately. */
+  function stubGraph(routes: Record<string, [number, unknown]>) {
+    const impl = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input)
+      for (const [fragment, [status, body]] of Object.entries(routes)) {
+        if (url.includes(fragment)) return Response.json(body as object, { status })
+      }
+      return Response.json({ error: { message: 'unexpected path' } }, { status: 404 })
+    }
+    ;(impl as unknown as { preconnect: () => void }).preconnect = () => {}
+    globalThis.fetch = impl as unknown as typeof fetch
+  }
+
+  const PERMISSION_ERROR = {
+    error: {
+      message:
+        "(#100) Object does not exist, cannot be loaded due to missing permission or reviewable feature, or does not support this operation. This endpoint requires the 'pages_read_engagement' permission",
+    },
+  }
+
+  test('accepts a token that can send, even when it cannot read the page name', async () => {
+    // The real case from the pilot. `pages_read_engagement` is not a permission a messaging
+    // integration uses, and demanding it reported a perfectly good token as rejected.
+    stubGraph({
+      messenger_profile: [200, { data: [] }],
+      'fields=name': [400, PERMISSION_ERROR],
+    })
+
+    const result = await messengerChannelAdapter.checkCredentials?.(CONFIG)
+
+    expect(result?.ok).toBe(true)
+    expect(result?.detail).toContain('pages_read_engagement')
+    globalThis.fetch = realFetch
+  })
+
+  test('names the page when the token may read it', async () => {
+    stubGraph({
+      messenger_profile: [200, { data: [] }],
+      'fields=name': [200, { name: 'Run Time Leb' }],
+    })
+
+    const result = await messengerChannelAdapter.checkCredentials?.(CONFIG)
+
+    expect(result?.ok).toBe(true)
+    expect(result?.detail).toContain('Run Time Leb')
+    globalThis.fetch = realFetch
+  })
+
+  test('rejects a token that cannot send', async () => {
+    stubGraph({
+      messenger_profile: [
+        400,
+        { error: { message: '(#200) This endpoint requires the pages_messaging permission' } },
+      ],
+    })
+
+    const result = await messengerChannelAdapter.checkCredentials?.(CONFIG)
+
+    expect(result?.ok).toBe(false)
+    expect(result?.detail).toContain('pages_messaging')
+    globalThis.fetch = realFetch
+  })
+
+  test('reports an unreachable Meta rather than throwing', async () => {
+    const impl = async () => {
+      throw new Error('getaddrinfo ENOTFOUND graph.facebook.com')
+    }
+    ;(impl as unknown as { preconnect: () => void }).preconnect = () => {}
+    globalThis.fetch = impl as unknown as typeof fetch
+
+    const result = await messengerChannelAdapter.checkCredentials?.(CONFIG)
+
+    expect(result?.ok).toBe(false)
+    expect(result?.detail).toContain('ENOTFOUND')
+    globalThis.fetch = realFetch
+  })
+})

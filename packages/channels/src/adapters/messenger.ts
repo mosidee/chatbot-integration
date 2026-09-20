@@ -37,6 +37,20 @@ const configSchema = z.object({
 })
 export type MessengerConfig = z.infer<typeof configSchema>
 
+/** A friendly page name when the token may read it, and null when it may not. */
+async function pageName(config: MessengerConfig): Promise<string | null> {
+  try {
+    const response = await fetch(`${graphUrl(config, config.pageId)}?fields=name`, {
+      headers: { authorization: `Bearer ${config.pageAccessToken}` },
+    })
+    if (!response.ok) return null
+    const body = (await response.json()) as { name?: string }
+    return body.name ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Messenger's limit for a single text message. */
 const MAX_TEXT_LENGTH = 2000
 
@@ -359,16 +373,23 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
     }
   },
 
+  /**
+   * Does this token let us do the one thing this channel is for: send messages?
+   *
+   * Reading the page's own name looks like the obvious check and is the wrong one. It needs
+   * `pages_read_engagement`, which a messaging integration never uses, so a token that can
+   * send perfectly well was reported as rejected. The messenger profile endpoint needs
+   * `pages_messaging`, which is exactly the permission we depend on.
+   *
+   * The page name is still fetched, because "connected to <page>" is worth far more to an
+   * operator than an id, but failing to read it is a missing nicety rather than a failure.
+   */
   async checkCredentials(config: MessengerConfig) {
     try {
-      const response = await fetch(`${graphUrl(config, config.pageId)}?fields=name,category`, {
+      const response = await fetch(`${graphUrl(config, 'me')}/messenger_profile?fields=greeting`, {
         headers: { authorization: `Bearer ${config.pageAccessToken}` },
       })
-      const body = (await response.json()) as {
-        name?: string
-        category?: string
-        error?: { message?: string }
-      }
+      const body = (await response.json()) as { error?: { message?: string } }
 
       if (!response.ok) {
         return {
@@ -377,13 +398,13 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
         }
       }
 
+      const name = await pageName(config)
       return {
         ok: true,
-        detail: `Connected to the page "${body.name ?? config.pageId}".`,
-        info: {
-          page: body.name ?? config.pageId,
-          ...(body.category ? { category: body.category } : {}),
-        },
+        detail: name
+          ? `The token can send as "${name}".`
+          : 'The token can send messages. Meta would not give us the page name, which needs the pages_read_engagement permission we do not otherwise use.',
+        info: { page: name ?? config.pageId },
       }
     } catch (error) {
       return {
