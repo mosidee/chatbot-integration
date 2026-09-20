@@ -342,9 +342,11 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
 
   async fetchProfile(externalId: string, config: MessengerConfig): Promise<ChannelProfile | null> {
     try {
-      const response = await fetch(
-        `${graphUrl(config, externalId)}?fields=name,profile_pic&access_token=${encodeURIComponent(config.pageAccessToken)}`,
-      )
+      // The token goes in a header, not the query string: a URL ends up in proxy logs,
+      // access logs and any intermediary's history.
+      const response = await fetch(`${graphUrl(config, externalId)}?fields=name,profile_pic`, {
+        headers: { authorization: `Bearer ${config.pageAccessToken}` },
+      })
       if (!response.ok) return null
       const body = (await response.json()) as { name?: string; profile_pic?: string }
       return {
@@ -359,9 +361,9 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
 
   async checkCredentials(config: MessengerConfig) {
     try {
-      const response = await fetch(
-        `${graphUrl(config, config.pageId)}?fields=name,category&access_token=${encodeURIComponent(config.pageAccessToken)}`,
-      )
+      const response = await fetch(`${graphUrl(config, config.pageId)}?fields=name,category`, {
+        headers: { authorization: `Bearer ${config.pageAccessToken}` },
+      })
       const body = (await response.json()) as {
         name?: string
         category?: string

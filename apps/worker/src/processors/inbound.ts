@@ -4,6 +4,7 @@ import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { type Database, schema } from '@ci/db'
 import type { InboundJob, Runtime } from '@ci/infra'
 import {
+  enrichIdentityProfile,
   loadChannel,
   loadWorkspaceSettings,
   resolveConversation,
@@ -70,6 +71,19 @@ export async function processInbound(
         defaultLanguage: settings.defaultLanguage,
         messagingWindowHours: adapter.capabilities.messagingWindowHours,
       })
+
+      // A new identity has no name yet. Messenger's webhook carries only a page-scoped id,
+      // so without this every conversation shows an opaque number in the inbox.
+      if (resolved.isNew) {
+        await enrichIdentityProfile(db, {
+          workspaceId: job.workspaceId,
+          identityId: resolved.channelIdentityId,
+          externalId: event.externalId,
+          adapter,
+          config,
+          logger,
+        })
+      }
 
       // Pull media into our own storage before the AI turn runs. A platform reference is
       // worthless later: LINE needs its blob endpoint and Messenger's CDN links expire.

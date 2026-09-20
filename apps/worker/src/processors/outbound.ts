@@ -61,26 +61,29 @@ export async function processOutbound(
     conversation.replyTokenExpiresAt !== null &&
     conversation.replyTokenExpiresAt.getTime() > Date.now()
 
+  const replyToken = replyTokenIsFresh ? conversation.replyToken : null
+
+  // Cleared before the attempt, not after it. A reply token is single-use whatever the
+  // outcome, so clearing it on success only would leave a spent token behind for the retry
+  // to present again, and LINE would reject it again.
+  if (replyToken) {
+    await db
+      .update(schema.conversations)
+      .set({ replyToken: null, replyTokenExpiresAt: null })
+      .where(eq(schema.conversations.id, conversation.id))
+  }
+
   try {
     const parts = toSendableParts(message.content, adapter.capabilities.maxTextLength)
     let lastPlatformId: string | null = null
-    let replyToken = replyTokenIsFresh ? conversation.replyToken : null
 
-    for (const part of parts) {
+    for (const [index, part] of parts.entries()) {
       const result = await adapter.send(identity.externalId, part, config, {
         messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
-        ...(replyToken ? { replyToken } : {}),
+        // Only the first part can use the token; the rest are pushes.
+        ...(index === 0 && replyToken ? { replyToken } : {}),
       })
       lastPlatformId = result.platformMessageId
-
-      if (replyToken) {
-        // Consumed, whether or not the platform accepted it: a reply token is single-use.
-        replyToken = null
-        await db
-          .update(schema.conversations)
-          .set({ replyToken: null, replyTokenExpiresAt: null })
-          .where(eq(schema.conversations.id, conversation.id))
-      }
     }
 
     await db
