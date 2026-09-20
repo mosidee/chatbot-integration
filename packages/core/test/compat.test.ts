@@ -9,6 +9,10 @@ import { createCompatibleFetch, recoverJsonBody } from '../src/ai/compat'
  * text/event-stream. Every reply came back as "Invalid JSON response" with no hint why.
  */
 
+/** One Server-Sent Events frame carrying a chunk, as a gateway writes it. */
+const frame = (payload: Record<string, unknown>): string =>
+  `data: ${JSON.stringify({ id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: 'm', ...payload })}`
+
 const COMPLETION = {
   id: 'chatcmpl-1',
   object: 'chat.completion',
@@ -27,14 +31,108 @@ describe('recoverJsonBody', () => {
     expect(JSON.parse(recoverJsonBody(body) as string)).toEqual(COMPLETION)
   })
 
-  test('takes the last payload from genuine event-stream frames', () => {
+  test('returns a complete completion delivered inside a single frame', () => {
+    const body = [`data: ${JSON.stringify(COMPLETION)}`, 'data: [DONE]', ''].join('\n\n')
+    expect(JSON.parse(recoverJsonBody(body) as string)).toEqual(COMPLETION)
+  })
+
+  test('assembles an answer that arrives only as deltas', () => {
+    // This gateway streams `chat.completion.chunk` frames even for a non-streaming request,
+    // so no frame holds the answer. Taking the last one yielded an empty reply.
     const body = [
-      `data: ${JSON.stringify({ choices: [{ delta: { content: 'สวัส' } }] })}`,
-      `data: ${JSON.stringify(COMPLETION)}`,
+      frame({ choices: [{ index: 0, delta: { role: 'assistant' } }] }),
+      frame({ choices: [{ index: 0, delta: { content: 'สวัสดี' } }] }),
+      frame({ choices: [{ index: 0, delta: { content: 'ค่ะ' } }] }),
+      frame({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+      }),
       'data: [DONE]',
       '',
     ].join('\n\n')
-    expect(JSON.parse(recoverJsonBody(body) as string)).toEqual(COMPLETION)
+
+    const recovered = JSON.parse(recoverJsonBody(body) as string) as typeof COMPLETION
+    expect(recovered.object).toBe('chat.completion')
+    expect(recovered.choices[0]?.message.content).toBe('สวัสดีค่ะ')
+    expect(recovered.choices[0]?.finish_reason).toBe('stop')
+    expect(recovered.usage).toEqual({ prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 })
+  })
+
+  test('assembles a tool call split across frames', () => {
+    // Handing off to a human is a tool call. Losing it means the customer waits forever.
+    const body = [
+      frame({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'handoff_to_human' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      frame({
+        choices: [
+          {
+            index: 0,
+            delta: { tool_calls: [{ index: 0, function: { arguments: '{"reason":' } }] },
+          },
+        ],
+      }),
+      frame({
+        choices: [
+          {
+            index: 0,
+            delta: { tool_calls: [{ index: 0, function: { arguments: '"pricing"}' } }] },
+          },
+        ],
+      }),
+      frame({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+      'data: [DONE]',
+      '',
+    ].join('\n\n')
+
+    const recovered = JSON.parse(recoverJsonBody(body) as string) as {
+      choices: {
+        message: {
+          content: string | null
+          tool_calls?: { id: string; function: { name: string; arguments: string } }[]
+        }
+        finish_reason: string
+      }[]
+    }
+    const call = recovered.choices[0]?.message.tool_calls?.[0]
+    expect(call?.id).toBe('call_1')
+    expect(call?.function.name).toBe('handoff_to_human')
+    expect(JSON.parse(call?.function.arguments ?? '{}')).toEqual({ reason: 'pricing' })
+    // Null, not empty, when the answer is a tool call. That is what the OpenAI API returns.
+    expect(recovered.choices[0]?.message.content).toBeNull()
+    expect(recovered.choices[0]?.finish_reason).toBe('tool_calls')
+  })
+
+  test('assembles the exact frames a real gateway sent for Gemini', () => {
+    // Captured from the gateway in use. Two frames, no content at all, because the model
+    // spent its budget on reasoning. The result must still be a well-formed completion.
+    const body =
+      'data: {"id":"chatcmpl-VMK","object":"chat.completion.chunk","created":1789903445,' +
+      '"model":"gemini-3.7-flash","choices":[{"index":0,"delta":{"role":"assistant"},' +
+      '"finish_reason":null}]}\n\n' +
+      'data: {"id":"chatcmpl-VMK","object":"chat.completion.chunk","created":1789903445,' +
+      '"model":"gemini-3.7-flash","choices":[{"index":0,"delta":{},"finish_reason":"length"}],' +
+      '"usage":{"prompt_tokens":2010,"completion_tokens":37,"total_tokens":2047}}\n\n'
+
+    const recovered = JSON.parse(recoverJsonBody(body) as string) as typeof COMPLETION
+    expect(recovered.object).toBe('chat.completion')
+    expect(recovered.id).toBe('chatcmpl-VMK')
+    expect(recovered.choices[0]?.message.content).toBe('')
+    expect(recovered.choices[0]?.finish_reason).toBe('length')
   })
 
   test('returns plain JSON unchanged', () => {
