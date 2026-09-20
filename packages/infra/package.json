@@ -17,6 +17,13 @@
     "@ci/shared": "workspace:*",
     "bullmq": "6.3.8",
     "drizzle-orm": "0.45.2",
-    "ioredis": "6.0.0"
+    "exceljs": "4.4.0",
+    "ioredis": "6.0.0",
+    "mammoth": "1.12.3",
+    "papaparse": "5.7.0",
+    "unpdf": "1.8.1"
+  },
+  "devDependencies": {
+    "@types/papaparse": "5.5.2"
   }
 }

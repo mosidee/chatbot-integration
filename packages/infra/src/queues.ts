@@ -16,6 +16,7 @@ export const QUEUE_NAMES = {
   outbound: 'outbound',
   waitingHuman: 'waiting_human',
   summarize: 'summarize',
+  knowledgeIngest: 'knowledge_ingest',
   retention: 'retention',
 } as const
 
@@ -56,7 +57,13 @@ export type JobPayloads = {
   outbound: OutboundJob
   waiting_human: WaitingHumanTimeoutJob
   summarize: { workspaceId: string; customerId: string; conversationId?: string | null }
+  knowledge_ingest: KnowledgeIngestJob
   retention: { workspaceId: string }
+}
+
+export type KnowledgeIngestJob = {
+  workspaceId: string
+  sourceId: string
 }
 
 export const DEFAULT_JOB_OPTIONS: JobsOptions = {
@@ -88,6 +95,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     suggestion: make(QUEUE_NAMES.suggestion),
     outbound: make(QUEUE_NAMES.outbound),
     waiting_human: make(QUEUE_NAMES.waitingHuman),
+    knowledge_ingest: make(QUEUE_NAMES.knowledgeIngest),
     summarize: make(QUEUE_NAMES.summarize),
     retention: make(QUEUE_NAMES.retention),
   }

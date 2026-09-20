@@ -6,6 +6,7 @@ import {
   createRedis,
   createRuntime,
   type InboundJob,
+  type KnowledgeIngestJob,
   type OutboundJob,
   QUEUE_NAMES,
   type Runtime,
@@ -16,6 +17,7 @@ import { type Job, Worker } from 'bullmq'
 
 import { processAiTurn } from './processors/ai-turn'
 import { processInbound } from './processors/inbound'
+import { processKnowledgeIngest } from './processors/knowledge-ingest'
 import { processOutbound } from './processors/outbound'
 import { processSuggestion } from './processors/suggestion'
 import { processSummarize, type SummarizeJob } from './processors/summarize'
@@ -37,6 +39,7 @@ const CONCURRENCY = {
   waiting_human: 5,
   // Summaries are background work; they must never crowd out a customer waiting on a reply.
   summarize: 2,
+  knowledge_ingest: 2,
 } as const
 
 function makeWorker<T>(
@@ -130,6 +133,14 @@ async function main() {
       logger,
       CONCURRENCY.summarize,
       processSummarize,
+    ),
+    makeWorker<KnowledgeIngestJob>(
+      QUEUE_NAMES.knowledgeIngest,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.knowledge_ingest,
+      processKnowledgeIngest,
     ),
   ]
 
