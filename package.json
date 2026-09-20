@@ -19,9 +19,10 @@
     "db:seed": "bun --cwd packages/db run seed",
     "auth:generate": "bunx auth@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts --yes",
     "test": "bun test",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && bun --cwd apps/web run typecheck",
     "lint": "biome check .",
-    "lint:fix": "biome check --write ."
+    "lint:fix": "biome check --write .",
+    "build:web": "bun --cwd apps/web run build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

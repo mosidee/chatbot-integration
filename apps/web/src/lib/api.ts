@@ -125,7 +125,12 @@ export type ConversationDetail = {
     handoffNote: string | null
   }
   customer: Customer | null
-  identity: { id: string; externalId: string; displayName: string | null; avatarUrl: string | null } | null
+  identity: {
+    id: string
+    externalId: string
+    displayName: string | null
+    avatarUrl: string | null
+  } | null
   messages: Message[]
   notes: InternalNote[]
   suggestions: Suggestion[]
@@ -159,7 +164,10 @@ export type WorkspaceSettings = {
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
   acknowledgementText: Record<string, string>
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
-  businessHours: { timezone: string; days: Record<string, { open: string; close: string } | undefined> }
+  businessHours: {
+    timezone: string
+    days: Record<string, { open: string; close: string } | undefined>
+  }
 }
 
 export type Provider = {
@@ -228,8 +236,7 @@ export const api = {
     detail: (id: string) => get<ConversationDetail>(`/v1/conversations/${id}`),
     send: (id: string, message: NormalizedMessage, suggestionId?: string) =>
       post<{ messageId: string }>(`/v1/conversations/${id}/messages`, { message, suggestionId }),
-    takeOver: (id: string) =>
-      post<{ mode: ConversationMode }>(`/v1/conversations/${id}/take-over`),
+    takeOver: (id: string) => post<{ mode: ConversationMode }>(`/v1/conversations/${id}/take-over`),
     returnToAi: (id: string, note?: string) =>
       post<{ mode: ConversationMode }>(`/v1/conversations/${id}/return-to-ai`, { note }),
     setMode: (id: string, mode: ConversationMode) =>

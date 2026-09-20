@@ -18,9 +18,16 @@ export type AuthedUser = {
   name: string
 }
 
+/**
+ * Mounts Better Auth's own routes. Applied once, at the root of the app: mounting it
+ * inside a prefixed group would bury /api/auth under that prefix.
+ */
+export function authHandler(ctx: ApiContext) {
+  return new Elysia({ name: 'auth-handler' }).mount(ctx.auth.handler)
+}
+
 export function authPlugin(ctx: ApiContext) {
   return new Elysia({ name: 'auth' })
-    .mount(ctx.auth.handler)
     .macro({
       auth: (minimumRole: 'viewer' | 'agent' | 'admin') => ({
         async resolve({

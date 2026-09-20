@@ -156,8 +156,7 @@ const en: typeof th = {
   },
   simulator: {
     title: 'Simulator',
-    description:
-      'Send messages as a customer to exercise the AI without LINE or Facebook.',
+    description: 'Send messages as a customer to exercise the AI without LINE or Facebook.',
     customerName: 'Customer name',
     customerId: 'Customer id',
     send: 'Send message',

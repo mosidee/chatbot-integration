@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
 import type { WsEvent } from '@ci/shared'
+import { useEffect, useRef } from 'react'
 
 /**
  * Live updates from the API.

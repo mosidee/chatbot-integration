@@ -1,6 +1,7 @@
 import cors from '@elysiajs/cors'
 import openapi from '@elysiajs/openapi'
 import Elysia from 'elysia'
+import { authHandler } from './auth-plugin'
 import type { ApiContext } from './context'
 import { conversationRoutes } from './routes/conversations'
 import { settingsRoutes } from './routes/settings'
@@ -48,6 +49,9 @@ export function createApp(ctx: ApiContext) {
         },
       )
     })
+
+    // Better Auth owns /api/auth/*; mounted at the root so its paths are not prefixed.
+    .use(authHandler(ctx))
 
     .use(createWsRoutes(ctx))
 
