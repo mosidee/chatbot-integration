@@ -4,6 +4,7 @@ import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { schema } from '@ci/db'
 import {
   applyReceipt,
+  conversationForReceipt,
   createEffectPorts,
   createEntry,
   createSource,
@@ -557,6 +558,52 @@ describe('the AI and human loop', () => {
 
     const inbound = (await messagesOf(f, conversation.id)).filter((m) => m.direction === 'inbound')
     expect(inbound.every((m) => m.status !== 'read')).toBe(true)
+  })
+
+  test('a receipt for an unknown customer opens no conversation', async () => {
+    // Receipts arrive after a conversation is resolved, which is precisely when resolving
+    // one the usual way would create a fresh, empty conversation. Seen in production on the
+    // first day Messenger was connected.
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    expect(
+      await conversationForReceipt(f.runtime.db, {
+        channelId: f.channelId,
+        externalId: 'nobody-has-ever-written',
+      }),
+    ).toBeNull()
+
+    const conversations = await f.runtime.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    expect(conversations).toHaveLength(0)
+  })
+
+  test('a receipt still reaches a conversation that has been resolved', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'hello')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    await updateConversation(f.runtime.db, f.workspaceId, conversation.id, { status: 'resolved' })
+
+    const found = await conversationForReceipt(f.runtime.db, {
+      channelId: f.channelId,
+      externalId: 'sim-customer-1',
+    })
+    expect(found).toBe(conversation.id)
+
+    const touched = await applyReceipt(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: found as string,
+      receipt: 'read',
+      watermark: Date.now() + 60_000,
+    })
+    expect(touched).toBeGreaterThan(0)
   })
 
   test('a retried webhook does not produce a second customer message', async () => {

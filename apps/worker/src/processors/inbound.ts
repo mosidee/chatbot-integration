@@ -5,6 +5,7 @@ import { type Database, schema } from '@ci/db'
 import type { InboundJob, Runtime } from '@ci/infra'
 import {
   applyReceipt,
+  conversationForReceipt,
   enrichIdentityProfile,
   loadChannel,
   loadWorkspaceSettings,
@@ -64,6 +65,35 @@ export async function processInbound(
     const events = adapter.parseInbound(request, config)
 
     for (const event of events) {
+      // Receipts are handled before a conversation is resolved, because resolving one
+      // creates it. A receipt arriving after its conversation was resolved would otherwise
+      // open a fresh, empty conversation, which is exactly when receipts tend to arrive.
+      if (
+        event.message.kind === 'event' &&
+        (event.message.event === 'delivered' || event.message.event === 'read')
+      ) {
+        const conversationId = await conversationForReceipt(db, {
+          channelId: job.channelId,
+          externalId: event.externalId,
+        })
+        if (!conversationId) continue
+
+        const watermark = Number(event.message.data.watermark ?? 0)
+        const touched = await applyReceipt(db, {
+          workspaceId: job.workspaceId,
+          conversationId,
+          receipt: event.message.event,
+          watermark: watermark > 0 ? watermark : event.timestamp.getTime(),
+        })
+        if (touched > 0) {
+          await publisher.publish(job.workspaceId, {
+            type: 'conversation.updated',
+            conversationId,
+          })
+        }
+        continue
+      }
+
       const resolved = await resolveConversation(db, {
         workspaceId: job.workspaceId,
         channelId: job.channelId,
@@ -84,29 +114,6 @@ export async function processInbound(
           config,
           logger,
         })
-      }
-
-      // A delivery or read receipt is not a message. It says something about messages we
-      // already sent, so it updates their status and never appears in the thread. Handled
-      // before anything is stored, or every receipt would leave a bubble behind.
-      if (
-        event.message.kind === 'event' &&
-        (event.message.event === 'delivered' || event.message.event === 'read')
-      ) {
-        const watermark = Number(event.message.data.watermark ?? 0)
-        const touched = await applyReceipt(db, {
-          workspaceId: job.workspaceId,
-          conversationId: resolved.conversationId,
-          receipt: event.message.event,
-          watermark: watermark > 0 ? watermark : event.timestamp.getTime(),
-        })
-        if (touched > 0) {
-          await publisher.publish(job.workspaceId, {
-            type: 'conversation.updated',
-            conversationId: resolved.conversationId,
-          })
-        }
-        continue
       }
 
       // Pull media into our own storage before the AI turn runs. A platform reference is
