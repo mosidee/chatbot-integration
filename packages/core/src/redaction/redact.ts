@@ -37,6 +37,62 @@ function digitsOf(raw: string): string {
   return raw.replace(/[^\d]/g, '')
 }
 
+/**
+ * Issuer prefixes for the card networks a Thai business actually sees.
+ *
+ * Luhn alone is not enough. Roughly one in ten random digit strings passes it, so a bare
+ * timestamp or a long order reference would be masked as a card. Since the product
+ * deliberately preserves order references, a candidate must also begin like a real card.
+ */
+const CARD_PREFIXES: { test: (digits: string) => boolean; lengths: number[] }[] = [
+  // Visa
+  { test: (d) => d.startsWith('4'), lengths: [13, 16, 19] },
+  // Mastercard
+  {
+    test: (d) => {
+      const two = Number(d.slice(0, 2))
+      const four = Number(d.slice(0, 4))
+      return (two >= 51 && two <= 55) || (four >= 2221 && four <= 2720)
+    },
+    lengths: [16],
+  },
+  // American Express
+  { test: (d) => d.startsWith('34') || d.startsWith('37'), lengths: [15] },
+  // JCB, common in Thailand
+  {
+    test: (d) => {
+      const four = Number(d.slice(0, 4))
+      return four >= 3528 && four <= 3589
+    },
+    lengths: [16, 17, 18, 19],
+  },
+  // UnionPay
+  { test: (d) => d.startsWith('62'), lengths: [16, 17, 18, 19] },
+  // Discover
+  {
+    test: (d) => {
+      const three = Number(d.slice(0, 3))
+      return d.startsWith('6011') || d.startsWith('65') || (three >= 644 && three <= 649)
+    },
+    lengths: [16, 19],
+  },
+  // Diners Club
+  {
+    test: (d) => {
+      const three = Number(d.slice(0, 3))
+      return (three >= 300 && three <= 305) || d.startsWith('36') || d.startsWith('38')
+    },
+    lengths: [14, 16, 19],
+  },
+]
+
+/** Does this look like a card number from a real network, at a length that network issues? */
+export function looksLikeCardNumber(digits: string): boolean {
+  return CARD_PREFIXES.some(
+    (network) => network.test(digits) && network.lengths.includes(digits.length),
+  )
+}
+
 /** Luhn check, used for payment card numbers. */
 export function isLuhnValid(digits: string): boolean {
   if (digits.length < 13 || digits.length > 19) return false
@@ -95,7 +151,7 @@ export function redactText(
       return mask('thai id', digits)
     }
 
-    if (options.cardNumbers && isLuhnValid(digits)) {
+    if (options.cardNumbers && looksLikeCardNumber(digits) && isLuhnValid(digits)) {
       counts.set('card_number', (counts.get('card_number') ?? 0) + 1)
       return mask('card', digits)
     }

@@ -24,7 +24,8 @@
     "lint:fix": "biome check --write .",
     "build:web": "cd apps/web && bun run build",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "db:reset": "docker compose -f docker-compose.dev.yml exec -T postgres psql -U ci -d chatbot_integration -c \"DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS drizzle CASCADE; CREATE SCHEMA public;\" && bun run db:migrate && bun run db:seed"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

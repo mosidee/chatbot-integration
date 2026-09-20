@@ -156,7 +156,10 @@ export function Inbox() {
         </div>
       </aside>
 
-      <section className={cn('min-w-0 flex-1', selectedId ? 'flex' : 'hidden md:flex')}>
+      <section
+        className={cn('min-w-0 flex-1', selectedId ? 'flex' : 'hidden md:flex')}
+        data-testid="composer-or-empty-inbox"
+      >
         {selectedId ? (
           <ConversationPane conversationId={selectedId} onBack={() => setSelectedId(null)} />
         ) : (

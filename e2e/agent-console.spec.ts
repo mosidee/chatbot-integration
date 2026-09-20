@@ -25,7 +25,9 @@ test('an agent signs in and sees a new conversation arrive without reloading', a
   request,
 }) => {
   await signIn(page)
-  await expect(page.getByTestId('conversation-row').first()).toBeVisible({ timeout: 20_000 })
+  // Signed in and on the inbox. Asserting a conversation exists here would be wrong: a
+  // freshly seeded database has none, which is exactly the state CI starts from.
+  await expect(page.getByTestId('composer-or-empty-inbox')).toBeVisible({ timeout: 20_000 })
 
   const channelId = await findTestChannelId(request)
   const customer = uniqueCustomer('live')
@@ -33,7 +35,9 @@ test('an agent signs in and sees a new conversation arrive without reloading', a
   // The page is already open. The conversation must appear over the socket.
   await customerSays(request, channelId, customer, 'สวัสดีค่ะ ราคาเท่าไหร่')
 
-  await expect(page.getByText(customer, { exact: false })).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('conversation-row').filter({ hasText: customer })).toBeVisible({
+    timeout: 25_000,
+  })
 })
 
 test('an agent takes over and replies, and the AI falls silent', async ({ page, request }) => {
@@ -43,10 +47,12 @@ test('an agent takes over and replies, and the AI falls silent', async ({ page, 
 
   await signIn(page)
 
-  await page.getByText(customer, { exact: false }).click()
+  const row = page.getByTestId('conversation-row').filter({ hasText: customer })
+  await expect(row).toBeVisible({ timeout: 25_000 })
+  await row.click()
 
   // The AI answers first, while it still owns the conversation.
-  await expect(page.locator('[data-sender="ai"]').first()).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('[data-sender="ai"]').first()).toBeVisible({ timeout: 25_000 })
 
   await page.getByTestId('take-over').click()
   await expect(page.getByTestId('return-to-ai')).toBeVisible()
@@ -54,7 +60,12 @@ test('an agent takes over and replies, and the AI falls silent', async ({ page, 
   const reply = `Handled by a person at ${Date.now()}`
   await page.getByTestId('composer').fill(reply)
   await page.getByTestId('send').click()
-  await expect(page.getByTestId('message-thread').getByText(reply)).toBeVisible()
+  // The composer clears only once the request succeeded, so this separates "the send
+  // failed" from "the bubble has not rendered yet".
+  await expect(page.getByTestId('composer')).toHaveValue('', { timeout: 20_000 })
+  await expect(page.getByTestId('message-thread').getByText(reply)).toBeVisible({
+    timeout: 20_000,
+  })
 
   const aiBubblesBefore = await page.locator('[data-sender="ai"]').count()
   expect(aiBubblesBefore).toBeGreaterThan(0)
@@ -72,7 +83,9 @@ test('an agent takes over and replies, and the AI falls silent', async ({ page, 
   await page.waitForTimeout(5000)
 
   await page.reload()
-  await page.getByText(customer, { exact: false }).click()
+  const rowAgain = page.getByTestId('conversation-row').filter({ hasText: customer })
+  await expect(rowAgain).toBeVisible({ timeout: 25_000 })
+  await rowAgain.click()
   // Anchor on content before counting: count() does not wait for the thread to render.
   await expect(page.getByTestId('message-thread').getByText(reply)).toBeVisible({
     timeout: 20_000,
@@ -91,7 +104,9 @@ test('an agent hands the conversation back to the AI', async ({ page, request })
   await customerSays(request, channelId, customer, 'คำถามแรกค่ะ')
 
   await signIn(page)
-  await page.getByText(customer, { exact: false }).click()
+  const row = page.getByTestId('conversation-row').filter({ hasText: customer })
+  await expect(row).toBeVisible({ timeout: 25_000 })
+  await row.click()
 
   await page.getByTestId('take-over').click()
   await expect(page.getByTestId('return-to-ai')).toBeVisible()
