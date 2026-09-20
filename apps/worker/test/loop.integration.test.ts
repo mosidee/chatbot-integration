@@ -3,6 +3,7 @@ import { signBodyBase64 } from '@ci/channels'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { schema } from '@ci/db'
 import {
+  applyReceipt,
   createEffectPorts,
   createEntry,
   createSource,
@@ -455,6 +456,107 @@ describe('the AI and human loop', () => {
     // Nothing was sent to the customer, which is the one thing that must stay true.
     const messages = await messagesOf(f, conversation.id)
     expect(messages.filter((m) => m.senderType === 'ai')).toHaveLength(0)
+  })
+
+  test('delivery and read receipts raise message status and never lower it', async () => {
+    // Messenger reports these as a watermark over the conversation, not per message, and
+    // the two often arrive out of order. Applying one blindly would flip a message that was
+    // read back to merely delivered, and the tick in the console would go backwards.
+    const provider = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'สวัสดีครับ')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    const outbound = (await messagesOf(f, conversation.id)).filter(
+      (m) => m.direction === 'outbound',
+    )
+    expect(outbound.length).toBeGreaterThan(0)
+    const first = outbound[0]
+    if (!first) throw new Error('expected an outbound message')
+    const sentAt = first.createdAt
+
+    const statusNow = async () => {
+      const rows = await messagesOf(f, conversation.id)
+      return rows.find((m) => m.id === first.id)?.status
+    }
+
+    const after = new Date(sentAt.getTime() + 1000).getTime()
+
+    expect(
+      await applyReceipt(f.runtime.db, {
+        workspaceId: f.workspaceId,
+        conversationId: conversation.id,
+        receipt: 'delivered',
+        watermark: after,
+      }),
+    ).toBe(outbound.length)
+    expect(await statusNow()).toBe('delivered')
+
+    await applyReceipt(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      receipt: 'read',
+      watermark: after,
+    })
+    expect(await statusNow()).toBe('read')
+
+    // The late duplicate. It must change nothing.
+    const touched = await applyReceipt(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      receipt: 'delivered',
+      watermark: after,
+    })
+    expect(touched).toBe(0)
+    expect(await statusNow()).toBe('read')
+  })
+
+  test('a receipt does not reach a message sent after its watermark', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'hello')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    const outbound = (await messagesOf(f, conversation.id)).filter(
+      (m) => m.direction === 'outbound',
+    )
+    const first = outbound[0]
+    if (!first) throw new Error('expected an outbound message')
+    const before = first.createdAt.getTime() - 1000
+
+    const touched = await applyReceipt(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      receipt: 'read',
+      watermark: before,
+    })
+
+    expect(touched).toBe(0)
+  })
+
+  test('a customer message is never marked delivered by a receipt', async () => {
+    // Receipts are about what we sent. Applying one to an inbound message would put a tick
+    // on the customer's own words.
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'hello')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    await applyReceipt(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      receipt: 'read',
+      watermark: Date.now() + 60_000,
+    })
+
+    const inbound = (await messagesOf(f, conversation.id)).filter((m) => m.direction === 'inbound')
+    expect(inbound.every((m) => m.status !== 'read')).toBe(true)
   })
 
   test('a retried webhook does not produce a second customer message', async () => {

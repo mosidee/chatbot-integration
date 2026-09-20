@@ -140,6 +140,10 @@ without spending money.
 - Webhook signatures must be computed over the exact bytes received. Never parse and
   re-serialise the body before verifying: it passes for ASCII and fails for Thai, so the bug
   looks like a platform outage.
+- Delivery and read receipts are not messages. Messenger reports them as a watermark over
+  the conversation, so they raise the status of every outbound message sent at or before
+  that instant and never appear in the thread. They arrive out of order, so `applyReceipt`
+  only ever raises a status, never lowers it.
 - LINE reply tokens are single-use and expire in about a minute. They are stored on the
   conversation and cleared the moment they are spent.
 - `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,

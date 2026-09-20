@@ -2,6 +2,7 @@ import type { ConversationMode } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { DeliveryTicks } from '../components/DeliveryTicks'
 import { Lightbox } from '../components/Lightbox'
 import {
   Button,
@@ -477,7 +478,7 @@ function Bubble({
           )}
         >
           <span>{formatTime(message.createdAt, i18n.language)}</span>
-          {message.status === 'failed' ? <span className="font-semibold">!</span> : null}
+          {isCustomer ? null : <DeliveryTicks status={message.status} />}
           {isAi ? <span>AI</span> : null}
           {onPromote ? (
             <button

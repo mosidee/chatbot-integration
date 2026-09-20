@@ -24,6 +24,11 @@ const th = {
   },
   inbox: {
     image: 'รูปภาพ',
+    deliveryQueued: 'รอส่ง',
+    deliverySent: 'ส่งแล้ว',
+    deliveryDelivered: 'ถึงผู้รับแล้ว',
+    deliveryRead: 'อ่านแล้ว',
+    deliveryFailed: 'ส่งไม่สำเร็จ',
     openImage: 'เปิดในแท็บใหม่',
     title: 'กล่องข้อความ',
     empty: 'ยังไม่มีบทสนทนา',
@@ -200,6 +205,11 @@ const en: typeof th = {
   },
   inbox: {
     image: 'Image',
+    deliveryQueued: 'Waiting to send',
+    deliverySent: 'Sent',
+    deliveryDelivered: 'Delivered',
+    deliveryRead: 'Read',
+    deliveryFailed: 'Not delivered',
     openImage: 'Open in new tab',
     title: 'Inbox',
     empty: 'No conversations yet',
