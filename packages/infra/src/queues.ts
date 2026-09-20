@@ -55,7 +55,7 @@ export type JobPayloads = {
   suggestion: SuggestionJob
   outbound: OutboundJob
   waiting_human: WaitingHumanTimeoutJob
-  summarize: { workspaceId: string; customerId: string }
+  summarize: { workspaceId: string; customerId: string; conversationId?: string | null }
   retention: { workspaceId: string }
 }
 
@@ -96,9 +96,18 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
 /**
  * Deterministic job id for the waiting-human fallback, so scheduling twice replaces the
  * timer rather than firing twice, and cancelling can find it without bookkeeping.
+ *
+ * No colons. BullMQ rejects a custom id containing ':' unless it splits into exactly three
+ * parts, a compatibility carve-out for repeatable jobs. A two-part id like
+ * `waiting-human:<id>` throws at enqueue time.
  */
 export function waitingHumanJobId(conversationId: string): string {
-  return `waiting-human:${conversationId}`
+  return `waiting-human-${conversationId}`
+}
+
+/** See waitingHumanJobId for why this avoids colons. */
+export function summaryJobId(conversationId: string): string {
+  return `summary-${conversationId}`
 }
 
 export async function closeQueues(queues: Queues): Promise<void> {

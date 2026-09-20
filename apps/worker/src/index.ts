@@ -18,6 +18,7 @@ import { processAiTurn } from './processors/ai-turn'
 import { processInbound } from './processors/inbound'
 import { processOutbound } from './processors/outbound'
 import { processSuggestion } from './processors/suggestion'
+import { processSummarize, type SummarizeJob } from './processors/summarize'
 import { processWaitingHumanTimeout } from './processors/waiting-human'
 
 /**
@@ -34,6 +35,8 @@ const CONCURRENCY = {
   suggestion: 5,
   outbound: 10,
   waiting_human: 5,
+  // Summaries are background work; they must never crowd out a customer waiting on a reply.
+  summarize: 2,
 } as const
 
 function makeWorker<T>(
@@ -119,6 +122,14 @@ async function main() {
       logger,
       CONCURRENCY.waiting_human,
       processWaitingHumanTimeout,
+    ),
+    makeWorker<SummarizeJob>(
+      QUEUE_NAMES.summarize,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.summarize,
+      processSummarize,
     ),
   ]
 

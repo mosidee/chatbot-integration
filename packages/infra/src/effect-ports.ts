@@ -3,7 +3,7 @@ import type { EffectContext, EffectPorts, Logger } from '@ci/core'
 import { type Database, decryptJson, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
 import { eq } from 'drizzle-orm'
-import { waitingHumanJobId } from './queues'
+import { summaryJobId, waitingHumanJobId } from './queues'
 import { loadWorkspaceSettings, storeMessage } from './repo'
 import type { Runtime } from './runtime'
 
@@ -27,7 +27,7 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
       await queues.ai_turn.add(
         'run',
         { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId, deliver },
-        { jobId: `ai-turn:${ctx.conversationId}:${Date.now()}` },
+        { jobId: `ai-turn-${ctx.conversationId}-${Date.now()}` },
       )
     },
 
@@ -93,6 +93,23 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
       await job?.remove().catch(() => {
         // Already running or gone; the processor re-checks the mode before acting.
       })
+    },
+
+    async enqueueSummary(ctx) {
+      const rows = await db
+        .select({ customerId: schema.conversations.customerId })
+        .from(schema.conversations)
+        .where(eq(schema.conversations.id, ctx.conversationId))
+        .limit(1)
+      const customerId = rows[0]?.customerId
+      if (!customerId) return
+
+      await queues.summarize.add(
+        'run',
+        { workspaceId: ctx.workspaceId, customerId, conversationId: ctx.conversationId },
+        // One pending summary per conversation: resolving twice should not rewrite twice.
+        { jobId: summaryJobId(ctx.conversationId), removeOnComplete: true },
+      )
     },
   }
 }

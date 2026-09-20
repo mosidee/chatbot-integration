@@ -11,6 +11,7 @@ import {
   storeMessage,
   toWebhookRequest,
   updateConversation,
+  waitingHumanJobId,
 } from '@ci/infra'
 import { asc, desc, eq } from 'drizzle-orm'
 import {
@@ -20,6 +21,8 @@ import {
 import { processAiTurn } from '../src/processors/ai-turn'
 import { processInbound } from '../src/processors/inbound'
 import { processSuggestion } from '../src/processors/suggestion'
+import { processSummarize } from '../src/processors/summarize'
+import { processWaitingHumanTimeout } from '../src/processors/waiting-human'
 import { createFixture, drainQueue, type Fixture } from './helpers/fixture'
 
 /**
@@ -605,5 +608,206 @@ describe('grounded answers', () => {
     }
     const system = chatRequest.messages.find((m) => m.role === 'system')?.content ?? ''
     expect(system).toContain('No knowledge base entries were retrieved')
+  })
+})
+
+describe('customer memory', () => {
+  test('resolving a conversation rewrites the summary and indexes it for recall', async () => {
+    const provider = mock([
+      { kind: 'text', text: 'ยินดีให้บริการค่ะ' },
+      {
+        kind: 'json',
+        value: {
+          summary: 'เจ้าของร้านทำผมในเชียงใหม่ สนใจแพ็กเกจเริ่มต้นและถามเรื่องการจองคิว',
+          facts: { city: 'Chiang Mai', interest: 'starter plan' },
+          openIssues: ['ยังไม่ได้ตัดสินใจสมัคร'],
+        },
+      },
+    ])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      embedBaseUrl: `${provider.url}/v1`,
+    })
+
+    await customerSays(f, 'สนใจแพ็กเกจเริ่มต้น ร้านอยู่เชียงใหม่ค่ะ')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    // Resolving is what folds the conversation into the customer's memory.
+    await humanAction(f, conversation.id, {
+      type: 'set_status',
+      at: new Date(),
+      status: 'resolved',
+    })
+
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    for (const job of await drainQueue<{
+      workspaceId: string
+      customerId: string
+      conversationId?: string | null
+    }>(f.runtime.queues.summarize)) {
+      await processSummarize(f.runtime, ports, f.runtime.logger, job)
+    }
+
+    const customers = await f.runtime.db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.workspaceId, f.workspaceId))
+
+    expect(customers[0]?.summary).toContain('เชียงใหม่')
+    expect(customers[0]?.summary).toContain('ยังไม่ได้ตัดสินใจสมัคร')
+    expect(customers[0]?.fields).toMatchObject({ city: 'Chiang Mai' })
+    expect(customers[0]?.summaryUpdatedAt).not.toBeNull()
+
+    // The history keeps what it said before, so a wrong summary can be traced.
+    const history = await f.runtime.db
+      .select()
+      .from(schema.customerSummaries)
+      .where(eq(schema.customerSummaries.workspaceId, f.workspaceId))
+    expect(history).toHaveLength(1)
+
+    // And the conversation is retrievable as this customer's own history.
+    const indexed = await f.runtime.db
+      .select()
+      .from(schema.conversationEmbeddings)
+      .where(eq(schema.conversationEmbeddings.workspaceId, f.workspaceId))
+    expect(indexed.length).toBeGreaterThan(0)
+    expect(indexed[0]?.customerId).toBe(customers[0]?.id)
+  })
+
+  test('a failed summary leaves the previous one intact', async () => {
+    const provider = mock([
+      { kind: 'text', text: 'ok' },
+      { kind: 'error', status: 500, message: 'summariser down' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'hello')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    await f.runtime.db
+      .update(schema.customers)
+      .set({ summary: 'An earlier summary worth keeping.' })
+      .where(eq(schema.customers.workspaceId, f.workspaceId))
+
+    await humanAction(f, conversation.id, {
+      type: 'set_status',
+      at: new Date(),
+      status: 'resolved',
+    })
+
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    for (const job of await drainQueue<{
+      workspaceId: string
+      customerId: string
+      conversationId?: string | null
+    }>(f.runtime.queues.summarize)) {
+      await processSummarize(f.runtime, ports, f.runtime.logger, job)
+    }
+
+    const customers = await f.runtime.db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.workspaceId, f.workspaceId))
+    expect(customers[0]?.summary).toBe('An earlier summary worth keeping.')
+
+    // The failure is still recorded, so it is visible rather than silent.
+    const traces = await f.runtime.db
+      .select()
+      .from(schema.aiTraces)
+      .where(eq(schema.aiTraces.workspaceId, f.workspaceId))
+    expect(traces.some((t) => t.task === 'summarize' && t.outcome === 'error')).toBe(true)
+  })
+})
+
+describe('the waiting-human fallback timer', () => {
+  test('a handoff schedules the timer when the workspace configures one', async () => {
+    // This path was never exercised before: the default fixture disables the timer, so a
+    // job id BullMQ rejected went unnoticed until a workspace turned the feature on.
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          { name: 'handoff_to_human', arguments: { reason: 'low_confidence', note: 'unsure' } },
+        ],
+      },
+      { kind: 'text', text: 'ขอโอนสายนะคะ' },
+    ])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      settings: { waitingHumanFallbackMinutes: 15 },
+    })
+
+    await customerSays(f, 'คำถามยากค่ะ')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.mode).toBe('waiting_human')
+
+    const scheduled = await f.runtime.queues.waiting_human.getJob(
+      waitingHumanJobId(conversation.id),
+    )
+    expect(scheduled).toBeTruthy()
+    expect(scheduled?.data).toMatchObject({ conversationId: conversation.id })
+  })
+
+  test('taking over cancels the timer so the customer is not interrupted', async () => {
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          { name: 'handoff_to_human', arguments: { reason: 'low_confidence', note: 'unsure' } },
+        ],
+      },
+      { kind: 'text', text: 'ขอโอนสายนะคะ' },
+    ])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      settings: { waitingHumanFallbackMinutes: 15 },
+    })
+
+    await customerSays(f, 'คำถามยากค่ะ')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+
+    const scheduled = await f.runtime.queues.waiting_human.getJob(
+      waitingHumanJobId(conversation.id),
+    )
+    expect(scheduled).toBeUndefined()
+  })
+
+  test('the timer acknowledges the customer when nobody has picked up', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      settings: { waitingHumanFallbackMinutes: 1 },
+    })
+
+    await customerSays(f, 'question')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    await humanAction(f, conversation.id, {
+      type: 'set_mode',
+      at: new Date(),
+      mode: 'waiting_human',
+    })
+
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    await processWaitingHumanTimeout(f.runtime, ports, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+    })
+
+    const messages = await messagesOf(f, conversation.id)
+    const ack = messages.find((m) => m.senderType === 'system')
+    expect(ack?.text).toBe('รอสักครู่นะคะ')
   })
 })

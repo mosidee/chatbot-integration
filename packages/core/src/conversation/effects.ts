@@ -56,6 +56,10 @@ export async function applyEffects(
       case 'cancel_waiting_human_timeout':
         await ports.cancelWaitingHumanTimeout(ctx)
         break
+
+      case 'enqueue_summary':
+        await ports.enqueueSummary(ctx)
+        break
     }
   }
 }

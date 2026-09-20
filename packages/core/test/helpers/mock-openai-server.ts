@@ -12,6 +12,8 @@ export type ToolCallSpec = { name: string; arguments: Record<string, unknown> }
 export type MockReply =
   | { kind: 'text'; text: string }
   | { kind: 'tool_calls'; toolCalls: ToolCallSpec[] }
+  /** Structured output: the value is returned as the assistant's JSON content. */
+  | { kind: 'json'; value: unknown }
   | { kind: 'error'; status: number; message: string }
 
 /** Hash character trigrams into a normalised vector of the requested size. */
@@ -116,15 +118,17 @@ export function startMockOpenAI(replies: MockReply[]): MockServer {
       const message =
         reply.kind === 'text'
           ? { role: 'assistant', content: reply.text }
-          : {
-              role: 'assistant',
-              content: null,
-              tool_calls: reply.toolCalls.map((call, i) => ({
-                id: `call_${i}`,
-                type: 'function',
-                function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-              })),
-            }
+          : reply.kind === 'json'
+            ? { role: 'assistant', content: JSON.stringify(reply.value) }
+            : {
+                role: 'assistant',
+                content: null,
+                tool_calls: reply.toolCalls.map((call, i) => ({
+                  id: `call_${i}`,
+                  type: 'function',
+                  function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+                })),
+              }
 
       return Response.json({
         id: 'chatcmpl-mock',

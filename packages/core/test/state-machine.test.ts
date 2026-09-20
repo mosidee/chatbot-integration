@@ -212,13 +212,22 @@ describe('mode and status changes', () => {
     expect(patch.handoffReason).toBeNull()
   })
 
-  test('resolving cancels the fallback timer', () => {
+  test('resolving cancels the fallback timer and folds the conversation into the summary', () => {
     const { effects } = transition(state({ mode: 'waiting_human' }), {
       type: 'set_status',
       at: AT,
       status: 'resolved',
     })
-    expect(effects).toEqual([{ type: 'cancel_waiting_human_timeout' }])
+    expect(types(effects)).toEqual(['cancel_waiting_human_timeout', 'enqueue_summary'])
+  })
+
+  test('snoozing does not trigger a summary', () => {
+    const { effects } = transition(state({ mode: 'ai' }), {
+      type: 'set_status',
+      at: AT,
+      status: 'snoozed',
+    })
+    expect(types(effects)).not.toContain('enqueue_summary')
   })
 
   test('assignment does not change the mode', () => {
