@@ -397,3 +397,25 @@ test('the loader script is served for a host page to embed', async ({ request })
   expect(body).toContain('data-channel')
   expect(body).toContain('/widget/index.html')
 })
+
+test('the demo page embeds the widget the way a host site would', async ({ page }) => {
+  // A stand-in for salon-saas, so the widget can be seen before that site embeds it.
+  await page.goto(`${API_URL}/widget-demo`)
+
+  // The launcher is injected by the loader, into the page, exactly as it will be elsewhere.
+  const launcher = page.getByRole('button', { name: 'แชทกับเรา' })
+  await expect(launcher).toBeVisible({ timeout: 20_000 })
+
+  // Closed until asked for: nothing of the conversation loads before a click.
+  const frame = page.locator('iframe')
+  await expect(frame).toBeHidden()
+
+  await launcher.click()
+  await expect(frame).toBeVisible()
+
+  const chat = page.frameLocator('iframe')
+  await expect(chat.locator('#text')).toBeVisible({ timeout: 20_000 })
+
+  // And the page shows the snippet to copy, with the real channel id in it.
+  await expect(page.locator('pre')).toContainText('data-channel=')
+})
