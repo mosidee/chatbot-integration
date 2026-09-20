@@ -10,6 +10,7 @@ import { simulatorRoutes } from './routes/simulator'
 import { traceRoutes } from './routes/traces'
 import { uploadRoutes } from './routes/uploads'
 import { webhookRoutes } from './routes/webhooks'
+import { widgetRoutes } from './routes/widget'
 import { createWsRoutes } from './ws'
 
 /**
@@ -58,6 +59,11 @@ export function createApp(ctx: ApiContext) {
 
       .use(createWsRoutes(ctx))
 
+      // Public, and deliberately outside /api/v1: the widget's contract is with embedded
+      // browsers rather than with the console, and versioning them together would tie a
+      // customer's page to our internal changes.
+      .group('/api/widget', (app) => app.use(widgetRoutes(ctx)))
+
       .group('/api/v1', (app) =>
         app
           .use(conversationRoutes(ctx))
@@ -86,6 +92,30 @@ export function createApp(ctx: ApiContext) {
            */
           const url = new URL(request.url)
           const isApi = url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')
+
+          /**
+           * The widget is served in every environment, not only production.
+           *
+           * Unlike the console, nothing else serves it during development: there is no Vite
+           * dev server in front of it, and the browser tests embed it from this origin. It
+           * is a built artefact either way, so serving it from disk is the same operation
+           * whichever environment we are in.
+           */
+          if (url.pathname.startsWith('/widget')) {
+            const root = `${process.cwd()}/apps/widget/dist`
+            const requested = url.pathname.replace(/^\/widget\/?/, '') || 'index.html'
+            const asset = Bun.file(`${root}/${requested}`)
+            if (await asset.exists()) return new Response(asset)
+
+            const shell = Bun.file(`${root}/index.html`)
+            if (await shell.exists()) {
+              return new Response(shell, { headers: { 'content-type': 'text/html' } })
+            }
+            return new Response('The widget has not been built. Run bun run build:widget.', {
+              status: 404,
+              headers: { 'content-type': 'text/plain' },
+            })
+          }
 
           if (env.NODE_ENV === 'production' && !isApi) {
             const root = `${process.cwd()}/apps/web/dist`

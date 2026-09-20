@@ -151,3 +151,13 @@ export async function customerSendsImage(
   })
   if (!response.ok()) throw new Error(`Simulator image send failed: ${response.status()}`)
 }
+
+/** The seeded web channel, which the widget is embedded against. */
+export async function findWebChannelId(request: APIRequestContext): Promise<string> {
+  const response = await request.get(`${API_URL}/api/v1/settings/channels`)
+  if (!response.ok()) throw new Error(`Listing channels failed: ${response.status()}`)
+  const body = (await response.json()) as { channels: { id: string; type: string }[] }
+  const channel = body.channels.find((c) => c.type === 'web')
+  if (!channel) throw new Error('No web channel is configured; run the seed first.')
+  return channel.id
+}

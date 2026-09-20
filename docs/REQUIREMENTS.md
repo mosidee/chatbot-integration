@@ -196,8 +196,15 @@ do not exist yet.
   them and carries no personal data, which is what lets you show the request was honoured
   without keeping what you were asked to delete.
 
-Still to come in M4: the web widget with signed-token identification, customer merge
-suggestions, the review queue and feedback, and the dashboard.
+- The web widget. A loader a host page embeds and a chat application in an iframe on our
+  own origin, so the host cannot read the conversation and the widget's requests are
+  same-origin. Anonymous by default; salon-saas can sign a short-lived token for its
+  logged-in user and the conversation attaches to that account instead. A session token
+  minted after we decide who the visitor is carries the identity, and no endpoint accepts a
+  conversation id, so a guessed id reaches nothing. See `docs/WIDGET.md`.
+
+Still to come in M4: customer merge suggestions, the review queue and feedback, and the
+dashboard.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)

@@ -19,6 +19,7 @@ media, Vite + React 19 for the console. Bun workspaces monorepo. Zod everywhere.
 apps/api      HTTP, WebSocket, webhooks. Thin.
 apps/worker   BullMQ processors. Where the real work happens.
 apps/web      Agent console (Vite React SPA).
+apps/widget   Embeddable chat widget: a loader script and an iframe app. No framework.
 packages/core      Framework-free domain: state machine, AI harness, redaction, ports.
 packages/channels  Normalised message model and one adapter per platform.
 packages/db        Drizzle schema, migrations, auth config, encryption.
@@ -144,6 +145,12 @@ without spending money.
   the conversation, so they raise the status of every outbound message sent at or before
   that instant and never appear in the thread. They arrive out of order, so `applyReceipt`
   only ever raises a status, never lowers it.
+- The widget is served by the API from `apps/widget/dist` in every environment, not only
+  production, because nothing else serves it: there is no Vite dev server in front of it
+  and the browser tests embed it. Run `bun run build:widget` or its routes 404.
+- A widget visitor's channel identity carries a prefix, `anon:` or `host:`, and the
+  prefixed form is what the identity is stored under. Sending the raw id instead created
+  an identity the session could never find again.
 - LINE reply tokens are single-use and expire in about a minute. They are stored on the
   conversation and cleared the moment they are spent.
 - `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,

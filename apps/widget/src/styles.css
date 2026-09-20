@@ -1,0 +1,133 @@
+/*
+ * Deliberately plain and self-contained. This runs in an iframe on somebody else's site,
+ * so nothing here can inherit from or leak into the host page.
+ */
+:root {
+  --accent: #2563eb;
+  --surface: #ffffff;
+  --muted: #667085;
+  --border: #e4e7ec;
+  --bubble: #f2f4f7;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans Thai', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--surface);
+  color: #101828;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.header button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bubble {
+  max-width: 82%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bubble.you {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.bubble.support {
+  align-self: flex-start;
+  background: var(--bubble);
+  border-bottom-left-radius: 4px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  margin: auto 0;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.composer input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.composer button {
+  border: 0;
+  border-radius: 10px;
+  padding: 0 16px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  color: #b42318;
+  font-size: 13px;
+  padding: 0 14px 8px;
+}
