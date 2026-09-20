@@ -1,0 +1,98 @@
+import { type JobsOptions, Queue } from 'bullmq'
+import type { Redis } from 'ioredis'
+
+/**
+ * Queue definitions.
+ *
+ * Webhook handlers must return quickly — LINE and Meta retry or disable endpoints that
+ * respond slowly — so every handler persists the raw event, enqueues, and returns. All
+ * real work happens here.
+ */
+
+export const QUEUE_NAMES = {
+  inbound: 'inbound',
+  aiTurn: 'ai_turn',
+  suggestion: 'suggestion',
+  outbound: 'outbound',
+  waitingHuman: 'waiting_human',
+  summarize: 'summarize',
+  retention: 'retention',
+} as const
+
+export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
+
+export type InboundJob = {
+  workspaceId: string
+  channelId: string
+  inboundEventId: string
+}
+
+export type AiTurnJob = {
+  workspaceId: string
+  conversationId: string
+  deliver: 'send' | 'draft'
+}
+
+export type SuggestionJob = {
+  workspaceId: string
+  conversationId: string
+}
+
+export type OutboundJob = {
+  workspaceId: string
+  conversationId: string
+  messageId: string
+}
+
+export type WaitingHumanTimeoutJob = {
+  workspaceId: string
+  conversationId: string
+}
+
+export type JobPayloads = {
+  inbound: InboundJob
+  ai_turn: AiTurnJob
+  suggestion: SuggestionJob
+  outbound: OutboundJob
+  waiting_human: WaitingHumanTimeoutJob
+  summarize: { workspaceId: string; customerId: string }
+  retention: { workspaceId: string }
+}
+
+export const DEFAULT_JOB_OPTIONS: JobsOptions = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 2000 },
+  removeOnComplete: { age: 3600, count: 1000 },
+  removeOnFail: { age: 86400 },
+}
+
+export type Queues = {
+  [K in QueueName]: Queue
+}
+
+export function createQueues(connection: Redis): Queues {
+  const make = (name: QueueName) =>
+    new Queue(name, { connection, defaultJobOptions: DEFAULT_JOB_OPTIONS })
+
+  return {
+    inbound: make(QUEUE_NAMES.inbound),
+    ai_turn: make(QUEUE_NAMES.aiTurn),
+    suggestion: make(QUEUE_NAMES.suggestion),
+    outbound: make(QUEUE_NAMES.outbound),
+    waiting_human: make(QUEUE_NAMES.waitingHuman),
+    summarize: make(QUEUE_NAMES.summarize),
+    retention: make(QUEUE_NAMES.retention),
+  }
+}
+
+/**
+ * Deterministic job id for the waiting-human fallback, so scheduling twice replaces the
+ * timer rather than firing twice, and cancelling can find it without bookkeeping.
+ */
+export function waitingHumanJobId(conversationId: string): string {
+  return `waiting-human:${conversationId}`
+}
+
+export async function closeQueues(queues: Queues): Promise<void> {
+  await Promise.all(Object.values(queues).map((q) => q.close()))
+}
