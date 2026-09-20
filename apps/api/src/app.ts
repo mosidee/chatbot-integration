@@ -69,32 +69,35 @@ export function createApp(ctx: ApiContext) {
           .use(webhookRoutes(ctx)),
       )
 
-      // In production the API serves the built SPA, so one container fronts the product and
-      // there is no cross-origin cookie problem. In development Vite serves it instead.
-      .get('/*', async ({ request, status }) => {
-        if (env.NODE_ENV !== 'production') return status(404, { error: 'Not found' })
-
-        const url = new URL(request.url)
-        if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) {
-          return status(404, { error: 'Not found' })
-        }
-
-        const root = `${process.cwd()}/apps/web/dist`
-        const candidate = Bun.file(`${root}${url.pathname}`)
-        if (url.pathname !== '/' && (await candidate.exists())) return new Response(candidate)
-
-        // Any other path is a client route; hand back the shell.
-        return new Response(Bun.file(`${root}/index.html`), {
-          headers: { 'content-type': 'text/html' },
-        })
-      })
-
-      .onError(({ code, error, set }) => {
+      .onError(async ({ code, error, set, request }) => {
         if (code === 'VALIDATION') {
           set.status = 422
           return { error: 'Validation failed', detail: String(error) }
         }
+
         if (code === 'NOT_FOUND') {
+          /**
+           * The single-page app is served from here rather than from a `/*` route.
+           *
+           * A wildcard route shadows Elysia's `.mount()`, so every GET to the mounted auth
+           * handler returned 404 while POST worked. That broke the browser's session check
+           * and would have broken OAuth callbacks, which are GETs. Serving the shell only
+           * once nothing else matched leaves every real route intact.
+           */
+          const url = new URL(request.url)
+          const isApi = url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')
+
+          if (env.NODE_ENV === 'production' && !isApi) {
+            const root = `${process.cwd()}/apps/web/dist`
+            const asset = Bun.file(`${root}${url.pathname}`)
+            if (url.pathname !== '/' && (await asset.exists())) return new Response(asset)
+
+            // Any other path is a client route; hand back the shell.
+            return new Response(Bun.file(`${root}/index.html`), {
+              headers: { 'content-type': 'text/html' },
+            })
+          }
+
           set.status = 404
           return { error: 'Not found' }
         }
