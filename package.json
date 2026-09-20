@@ -1,0 +1,36 @@
+{
+  "name": "chatbot-integration",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,worker,web -c blue,magenta,green \"bun run dev:api\" \"bun run dev:worker\" \"bun run dev:web\"",
+    "dev:api": "bun --watch apps/api/src/index.ts",
+    "dev:worker": "bun --watch apps/worker/src/index.ts",
+    "dev:web": "bun --cwd apps/web run dev",
+    "infra:up": "docker compose -f docker-compose.dev.yml up -d",
+    "infra:down": "docker compose -f docker-compose.dev.yml down",
+    "infra:reset": "docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d",
+    "db:generate": "bun --cwd packages/db run generate",
+    "db:migrate": "bun --cwd packages/db run migrate",
+    "db:seed": "bun --cwd packages/db run seed",
+    "auth:generate": "bunx @better-auth/cli@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json && bun --cwd apps/web run typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck:server": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/bun": "1.4.2",
+    "concurrently": "10.0.5",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  }
+}
