@@ -57,7 +57,16 @@ const server = Bun.serve({
     }
 
     if (url.pathname.endsWith('/models')) {
-      return Response.json({ object: 'list', data: [{ id: 'mock-model', object: 'model' }] })
+      // More than one, so a test can prove the console offers a choice rather than a single
+      // value it could have guessed.
+      return Response.json({
+        object: 'list',
+        data: [
+          { id: 'mock-model', object: 'model' },
+          { id: 'mock-model-vision', object: 'model' },
+          { id: 'mock-embedding', object: 'model' },
+        ],
+      })
     }
 
     const body = (await request.json()) as {

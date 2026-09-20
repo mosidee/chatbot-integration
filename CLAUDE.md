@@ -129,6 +129,10 @@ without spending money.
   root. A Docker runtime stage that copies `/app/node_modules` alone leaves every package
   unable to resolve its imports; copy the whole built tree.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
+- An `<input list>` shows its datalist arrow only on hover in Chrome and Safari, so the
+  control reads as a plain text box and nobody discovers the list. `styles.css` keeps
+  `::-webkit-calendar-picker-indicator` visible. The popup cannot be opened from script, so
+  that indicator is the only affordance there is.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 

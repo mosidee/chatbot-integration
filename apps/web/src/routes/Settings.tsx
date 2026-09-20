@@ -2,6 +2,12 @@ import type { ConversationMode, Language } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  ModelField,
+  ProviderModelList,
+  refreshProviderModels,
+  useProviderModels,
+} from '../components/ModelField'
 import { Button, Card, cn, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
 import { api, type Channel, type CredentialCheck, type Provider, type TaskSlot } from '../lib/api'
 
@@ -261,6 +267,7 @@ function TaskSlotsCard({
   onChange: () => void
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
 
   const save = useMutation({
     mutationFn: ({ task, body }: { task: string; body: Record<string, unknown> }) =>
@@ -268,12 +275,49 @@ function TaskSlotsCard({
     onSuccess: onChange,
   })
 
+  /** A slot is stored whole, so every edit resends the three fields it did not touch. */
+  const patchSlot = (task: string, slot: TaskSlot | undefined, patch: Record<string, unknown>) =>
+    save.mutate({
+      task,
+      body: {
+        primaryProviderId: slot?.primaryProviderId ?? null,
+        primaryModel: slot?.primaryModel ?? null,
+        fallbackProviderId: slot?.fallbackProviderId ?? null,
+        fallbackModel: slot?.fallbackModel ?? null,
+        ...patch,
+      },
+    })
+
+  // Only the providers a slot actually points at are asked for their model list.
+  const usedProviderIds = [
+    ...new Set(
+      slots.flatMap((s) => [s.primaryProviderId, s.fallbackProviderId]).filter((id) => id !== null),
+    ),
+  ]
+
   return (
     <Card className="space-y-2">
-      <h2 className="text-sm font-semibold">{t('settings.taskSlots')}</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">{t('settings.taskSlots')}</h2>
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid="refresh-models"
+          onClick={() => refreshProviderModels(queryClient)}
+        >
+          {t('settings.refreshModels')}
+        </Button>
+      </div>
       <p className="text-[13px] text-[var(--text-muted)]">
         {t('settings.primary')} / {t('settings.fallback')}
       </p>
+
+      {usedProviderIds.map((id) => (
+        <ProviderModelList key={id} providerId={id} />
+      ))}
+      {usedProviderIds.map((id) => (
+        <ModelListNote key={id} providerId={id} providers={providers} />
+      ))}
 
       {TASKS.map((task) => {
         const slot = slots.find((s) => s.task === task)
@@ -284,17 +328,10 @@ function TaskSlotsCard({
               <div className="flex gap-1.5">
                 <select
                   className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
+                  data-testid={`slot-${task}-primary-provider`}
                   value={slot?.primaryProviderId ?? ''}
                   onChange={(e) =>
-                    save.mutate({
-                      task,
-                      body: {
-                        primaryProviderId: e.target.value || null,
-                        primaryModel: slot?.primaryModel ?? null,
-                        fallbackProviderId: slot?.fallbackProviderId ?? null,
-                        fallbackModel: slot?.fallbackModel ?? null,
-                      },
-                    })
+                    patchSlot(task, slot, { primaryProviderId: e.target.value || null })
                   }
                 >
                   <option value="">{t('settings.none')}</option>
@@ -304,38 +341,21 @@ function TaskSlotsCard({
                     </option>
                   ))}
                 </select>
-                <Input
-                  className="h-8 flex-1 text-[13px]"
-                  placeholder={t('settings.model')}
-                  defaultValue={slot?.primaryModel ?? ''}
-                  onBlur={(e) =>
-                    save.mutate({
-                      task,
-                      body: {
-                        primaryProviderId: slot?.primaryProviderId ?? null,
-                        primaryModel: e.target.value || null,
-                        fallbackProviderId: slot?.fallbackProviderId ?? null,
-                        fallbackModel: slot?.fallbackModel ?? null,
-                      },
-                    })
-                  }
+                <ModelField
+                  testId={`slot-${task}-primary-model`}
+                  providerId={slot?.primaryProviderId ?? null}
+                  value={slot?.primaryModel ?? null}
+                  onSave={(model) => patchSlot(task, slot, { primaryModel: model })}
                 />
               </div>
 
               <div className="flex gap-1.5">
                 <select
                   className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
+                  data-testid={`slot-${task}-fallback-provider`}
                   value={slot?.fallbackProviderId ?? ''}
                   onChange={(e) =>
-                    save.mutate({
-                      task,
-                      body: {
-                        primaryProviderId: slot?.primaryProviderId ?? null,
-                        primaryModel: slot?.primaryModel ?? null,
-                        fallbackProviderId: e.target.value || null,
-                        fallbackModel: slot?.fallbackModel ?? null,
-                      },
-                    })
+                    patchSlot(task, slot, { fallbackProviderId: e.target.value || null })
                   }
                 >
                   <option value="">{t('settings.none')}</option>
@@ -345,21 +365,11 @@ function TaskSlotsCard({
                     </option>
                   ))}
                 </select>
-                <Input
-                  className="h-8 flex-1 text-[13px]"
-                  placeholder={t('settings.model')}
-                  defaultValue={slot?.fallbackModel ?? ''}
-                  onBlur={(e) =>
-                    save.mutate({
-                      task,
-                      body: {
-                        primaryProviderId: slot?.primaryProviderId ?? null,
-                        primaryModel: slot?.primaryModel ?? null,
-                        fallbackProviderId: slot?.fallbackProviderId ?? null,
-                        fallbackModel: e.target.value || null,
-                      },
-                    })
-                  }
+                <ModelField
+                  testId={`slot-${task}-fallback-model`}
+                  providerId={slot?.fallbackProviderId ?? null}
+                  value={slot?.fallbackModel ?? null}
+                  onSave={(model) => patchSlot(task, slot, { fallbackModel: model })}
                 />
               </div>
             </div>
@@ -367,6 +377,29 @@ function TaskSlotsCard({
         )
       })}
     </Card>
+  )
+}
+
+/**
+ * Said once per provider rather than under every field: a gateway either serves `/models`
+ * or it does not, and fourteen copies of the same sentence would drown the card.
+ */
+function ModelListNote({ providerId, providers }: { providerId: string; providers: Provider[] }) {
+  const { t } = useTranslation()
+  const models = useProviderModels(providerId)
+  const name = providers.find((p) => p.id === providerId)?.name ?? providerId
+
+  if (models.isPending) return null
+  const count = models.data?.models.length ?? 0
+  if (count > 0) return null
+
+  return (
+    <p
+      className="text-[12px] text-[var(--text-muted)]"
+      data-testid={`model-list-note-${providerId}`}
+    >
+      {name}: {t('settings.noModelList')}
+    </p>
   )
 }
 

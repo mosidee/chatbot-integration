@@ -144,3 +144,33 @@ test('signing in returns to the page that was asked for', async ({ page }) => {
 
   await page.waitForURL('**/knowledge', { timeout: 20_000 })
 })
+
+test('a model is chosen from the list the provider serves', async ({ page }) => {
+  // Before this, the model was typed from memory. A gateway can serve dozens of ids and a
+  // typo only surfaced when a customer message failed.
+  await signIn(page)
+  await page.goto('/settings')
+
+  const modelField = page.getByTestId('slot-agent_chat-primary-model')
+  await expect(modelField).toHaveValue('mock-model', { timeout: 20_000 })
+
+  // The field offers the provider's models. A datalist is drawn by the browser, not the
+  // page, so the options are asserted in the document rather than clicked.
+  const listId = await modelField.getAttribute('list')
+  expect(listId).toBeTruthy()
+  const options = page.locator(`#${listId} option`)
+  await expect(options).toHaveCount(3, { timeout: 20_000 })
+  await expect(options.nth(1)).toHaveAttribute('value', 'mock-model-vision')
+
+  // Choosing one saves it without a save button, and it survives a reload.
+  await modelField.fill('mock-model-vision')
+  await modelField.blur()
+  await page.reload()
+  await expect(page.getByTestId('slot-agent_chat-primary-model')).toHaveValue('mock-model-vision', {
+    timeout: 20_000,
+  })
+
+  // A slot with no provider cannot offer a model, and says so instead of taking free text
+  // that could never be reached.
+  await expect(page.getByTestId('slot-agent_chat-fallback-model')).toBeDisabled()
+})
