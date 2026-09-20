@@ -19,11 +19,18 @@ export type AuthedUser = {
 }
 
 /**
- * Mounts Better Auth's own routes. Applied once, at the root of the app: mounting it
- * inside a prefixed group would bury /api/auth under that prefix.
+ * Better Auth's own routes.
+ *
+ * Routed explicitly rather than with `.mount()`. A bare mount attaches at the root and then
+ * receives every request Elysia did not match, answering with its own 404 — which meant the
+ * console could not be served at all once the wildcard route that had been hiding the
+ * problem was removed. Matching `/api/auth/*` keeps it to its own territory, and the handler
+ * still receives the untouched request, so the paths it expects are intact.
  */
 export function authHandler(ctx: ApiContext) {
-  return new Elysia({ name: 'auth-handler' }).mount(ctx.auth.handler)
+  return new Elysia({ name: 'auth-handler' }).all('/api/auth/*', ({ request }) =>
+    ctx.auth.handler(request),
+  )
 }
 
 export function authPlugin(ctx: ApiContext) {
