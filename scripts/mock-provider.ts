@@ -28,7 +28,9 @@ const server = Bun.serve({
       object: 'chat.completion',
       created: Math.floor(Date.now() / 1000),
       model: 'mock-model',
-      choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
+      choices: [
+        { index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' },
+      ],
       usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
     })
   },
