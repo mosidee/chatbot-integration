@@ -37,20 +37,6 @@ import { organization, user } from './auth'
 
 const ts = (name: string) => timestamp(name, { withTimezone: true })
 
-/** pgvector column. Declared here so migrations create it; used from M2 onward. */
-export const vector = customType<{ data: number[]; driverData: string }>({
-  dataType(config) {
-    const dims = (config as { dimensions?: number } | undefined)?.dimensions ?? 1024
-    return `vector(${dims})`
-  },
-  toDriver(value) {
-    return JSON.stringify(value)
-  },
-  fromDriver(value) {
-    return JSON.parse(value) as number[]
-  },
-})
-
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------

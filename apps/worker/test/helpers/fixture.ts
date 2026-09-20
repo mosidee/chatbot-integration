@@ -46,7 +46,7 @@ export async function createFixture(options: {
   // each other's jobs.
   const runtime = createRuntime('test', env, { queuePrefix: `{test-${workspaceId.slice(0, 8)}}` })
   const { db } = runtime
-  const slug = `test-${workspaceId.slice(0, 8)}`
+  const slug = `test-${workspaceId}`
 
   await db.insert(schema.organization).values({
     id: workspaceId,

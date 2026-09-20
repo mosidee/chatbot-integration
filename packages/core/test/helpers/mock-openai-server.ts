@@ -14,6 +14,31 @@ export type MockReply =
   | { kind: 'tool_calls'; toolCalls: ToolCallSpec[] }
   | { kind: 'error'; status: number; message: string }
 
+/** Hash character trigrams into a normalised vector of the requested size. */
+export function trigramEmbedding(text: string, dimensions: number): number[] {
+  const vector = new Array<number>(dimensions).fill(0)
+  const normalised = ` ${text.toLowerCase().trim()} `
+
+  for (let i = 0; i < normalised.length - 2; i += 1) {
+    const gram = normalised.slice(i, i + 3)
+    let hash = 2166136261
+    for (let c = 0; c < gram.length; c += 1) {
+      hash ^= gram.charCodeAt(c)
+      hash = Math.imul(hash, 16777619)
+    }
+    const slot = Math.abs(hash) % dimensions
+    vector[slot] = (vector[slot] ?? 0) + 1
+  }
+
+  const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0))
+  if (magnitude === 0) {
+    // An empty string still needs a unit vector; pgvector cannot compare a zero vector.
+    vector[0] = 1
+    return vector
+  }
+  return vector.map((v) => v / magnitude)
+}
+
 const ONE_PIXEL_PNG = Uint8Array.from(
   atob(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -45,6 +70,30 @@ export function startMockOpenAI(replies: MockReply[]): MockServer {
       // so tests need a URL that actually resolves.
       if (url.pathname.startsWith('/img/')) {
         return new Response(ONE_PIXEL_PNG, { headers: { 'content-type': 'image/png' } })
+      }
+
+      // Deterministic embeddings: character trigrams hashed into a fixed-size vector, then
+      // normalised. Crude, but genuinely semantic in the only sense tests need — text that
+      // shares substrings produces nearby vectors — so retrieval assertions mean something.
+      if (url.pathname.endsWith('/embeddings')) {
+        const payload = (await request.json()) as {
+          input?: string | string[]
+          model?: string
+          dimensions?: number
+        }
+        const inputs = Array.isArray(payload.input) ? payload.input : [payload.input ?? '']
+        const dimensions = payload.dimensions ?? 1024
+
+        return Response.json({
+          object: 'list',
+          model: payload.model ?? 'mock-embed',
+          data: inputs.map((text, index) => ({
+            object: 'embedding',
+            index,
+            embedding: trigramEmbedding(text, dimensions),
+          })),
+          usage: { prompt_tokens: inputs.join(' ').length, total_tokens: inputs.join(' ').length },
+        })
       }
 
       if (url.pathname.endsWith('/models')) {
