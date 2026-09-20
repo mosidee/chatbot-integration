@@ -55,10 +55,16 @@ describe('recoverJsonBody', () => {
 })
 
 describe('createCompatibleFetch', () => {
+  /** Stands in for the global fetch, which carries `preconnect` in these types. */
+  const stubFetch = (body: string, contentType: string, status: number): typeof fetch => {
+    const impl = async () =>
+      new Response(body, { status, headers: { 'content-type': contentType } })
+    impl.preconnect = () => {}
+    return impl as unknown as typeof fetch
+  }
+
   const respond = (body: string, contentType: string, status = 200) =>
-    createCompatibleFetch(
-      async () => new Response(body, { status, headers: { 'content-type': contentType } }),
-    )
+    createCompatibleFetch(stubFetch(body, contentType, status))
 
   test('repairs a stream-framed answer to a non-streaming request', async () => {
     const tolerant = respond(`${JSON.stringify(COMPLETION)}data: [DONE]`, 'text/event-stream')
