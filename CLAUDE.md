@@ -90,6 +90,9 @@ without spending money.
 - On macOS with Colima, a host process cannot reach MinIO: the port forwarder corrupts
   SigV4 requests and every call fails with `InvalidAccessKeyId`, even though containers on
   the same network work. Set `S3_ENDPOINT=file://./.data/media` locally; see ADR 0002.
+- Redis outlives a database reset. After `bun run db:seed` on a wiped database, old jobs can
+  reference rows that no longer exist and the worker logs "message vanished" warnings. They
+  are harmless; `bun run infra:reset` clears them.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.

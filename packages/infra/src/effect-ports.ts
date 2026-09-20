@@ -18,11 +18,15 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
 
   return {
     async enqueueAiTurn(ctx, deliver) {
+      // One turn per inbound message, so no message can go unanswered.
+      //
+      // A burst therefore produces a reply each, and those replies interleave with the
+      // later messages. Collapsing them needs a debounce: a deterministic job id alone
+      // would drop any message that arrived while a turn was already running, which is a
+      // worse failure than answering twice. Tracked for M2.
       await queues.ai_turn.add(
         'run',
         { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId, deliver },
-        // One pending turn per conversation: a burst of customer messages should produce
-        // one considered reply, not a reply per message.
         { jobId: `ai-turn:${ctx.conversationId}:${Date.now()}` },
       )
     },

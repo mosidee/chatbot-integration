@@ -99,8 +99,11 @@ Media lives in the `miniodata` volume; back it up too once customers start sendi
 The application is already stateless, with Redis for fan-out and queues, and S3-compatible
 storage for media. To grow:
 
-1. Run more `api` and `worker` containers behind the proxy. No sticky sessions are needed.
-2. Put PgBouncer in front of Postgres; several replicas multiply connections.
-3. Move media to R2 or S3 by changing the `S3_*` variables only.
-4. When one machine is no longer enough, push the same images to Fly.io, Cloud Run or a
+1. **Move migrations out of the API's start command first.** The API image runs
+   `migrate` before `index.ts`, which is right for one replica and a race for several.
+   Run migrations as a one-shot job, then start the replicas.
+2. Run more `api` and `worker` containers behind the proxy. No sticky sessions are needed.
+3. Put PgBouncer in front of Postgres; several replicas multiply connections.
+4. Move media to R2 or S3 by changing the `S3_*` variables only.
+5. When one machine is no longer enough, push the same images to Fly.io, Cloud Run or a
    Kubernetes cluster. Nothing in the code assumes a single host.

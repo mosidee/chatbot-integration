@@ -55,6 +55,9 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] One-click take over; one-click return to AI with optional instruction note the AI reads
 - [v1] `waiting_human` queue; optional fallback to AI after N minutes outside business hours
 - [v1] Assignment to agent; status open / snoozed / resolved; tags
+- [next] Debounce AI turns so a burst of customer messages produces one considered reply
+  rather than one per message. Needs care: a deterministic job id alone would drop a message
+  that arrived mid-turn
 - [later] Auto-return to AI after human inactivity; assignment rules / round-robin; SLA timers
 
 ### 3.3 AI harness
