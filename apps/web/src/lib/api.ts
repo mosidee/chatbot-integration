@@ -44,6 +44,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       // Keep the status text.
     }
+
+    // A session that expired mid-visit should land on the sign-in page, not on a console
+    // full of failed requests.
+    if (response.status === 401 && !location.pathname.startsWith('/login')) {
+      location.href = '/login'
+    }
+
     throw new ApiError(response.status, message)
   }
 
@@ -445,10 +452,21 @@ export const api = {
   },
 
   auth: {
-    session: () =>
-      get<{ user: { id: string; name: string; email: string; image: string | null } } | null>(
-        '/auth/get-session',
-      ),
+    /** Null when nobody is signed in. Used by the route guard, so it must never throw. */
+    session: async (): Promise<{
+      user: { id: string; name: string; email: string; image: string | null }
+    } | null> => {
+      try {
+        const response = await fetch('/api/auth/get-session', { credentials: 'include' })
+        if (!response.ok) return null
+        const body = (await response.json()) as {
+          user?: { id: string; name: string; email: string; image: string | null }
+        } | null
+        return body?.user ? { user: body.user } : null
+      } catch {
+        return null
+      }
+    },
     signIn: (email: string, password: string) =>
       post<{ user: { id: string } }>('/auth/sign-in/email', { email, password }),
     signOut: () => post<unknown>('/auth/sign-out'),

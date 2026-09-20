@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
   apiSignIn,
   configureMockProvider,
   customerSays,
@@ -113,4 +115,32 @@ test('an agent hands the conversation back to the AI', async ({ page, request })
 
   await page.getByTestId('return-to-ai').click()
   await expect(page.getByTestId('take-over')).toBeVisible()
+})
+
+test('the console cannot be opened without signing in', async ({ page }) => {
+  // Opening the address without a session used to render the shell: navigation and an empty
+  // inbox, with every request behind it failing. No data leaked, but it looked like being
+  // signed in.
+  await page.context().clearCookies()
+
+  await page.goto('/')
+  await page.waitForURL('**/login**', { timeout: 20_000 })
+  await expect(page.getByTestId('login-email')).toBeVisible()
+
+  // A deeper route is guarded too, and remembers where it was headed.
+  await page.goto('/settings')
+  await page.waitForURL('**/login**', { timeout: 20_000 })
+  expect(new URL(page.url()).searchParams.get('next')).toBe('/settings')
+})
+
+test('signing in returns to the page that was asked for', async ({ page }) => {
+  await page.context().clearCookies()
+  await page.goto('/knowledge')
+  await page.waitForURL('**/login**', { timeout: 20_000 })
+
+  await page.getByTestId('login-email').fill(ADMIN_EMAIL)
+  await page.getByTestId('login-password').fill(ADMIN_PASSWORD)
+  await page.getByTestId('login-submit').click()
+
+  await page.waitForURL('**/knowledge', { timeout: 20_000 })
 })

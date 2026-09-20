@@ -5,9 +5,11 @@ import {
   createRouter,
   Outlet,
   RouterProvider,
+  redirect,
 } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { api } from './lib/api'
 import './lib/i18n'
 import './styles.css'
 import { Layout } from './components/Layout'
@@ -36,12 +38,33 @@ const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   component: Login,
+  // Somebody already signed in has no business on the sign-in page.
+  beforeLoad: async () => {
+    const session = await api.auth.session()
+    if (session) throw redirect({ to: '/' })
+  },
 })
 
+/**
+ * Everything inside the console requires a session.
+ *
+ * Without this the shell rendered for anyone who opened the address: the navigation and an
+ * empty inbox appeared, and every request behind it failed with 401. No data was exposed,
+ * but it looked like being signed in, which is its own kind of wrong.
+ */
 const appRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'app',
   component: Layout,
+  beforeLoad: async ({ location }) => {
+    const session = await api.auth.session()
+    if (!session) {
+      throw redirect({
+        to: '/login',
+        search: location.pathname === '/' ? undefined : { next: location.pathname },
+      })
+    }
+  },
 })
 
 const routeTree = rootRoute.addChildren([
