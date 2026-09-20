@@ -147,7 +147,24 @@ instruction into the next prompt; card numbers never reach the database or the p
 provider outage falls over to the secondary; a total failure hands off to a human; and an
 image sent through the simulator is described by the vision slot and referenced in the reply.
 
-Next: **M2**, knowledge and memory.
+**M2 is complete.** The AI now answers from a knowledge base and remembers customers.
+
+- Knowledge: Q&A entries, articles, and uploaded PDF, DOCX, XLSX, CSV and text files, parsed
+  in the worker behind one parser interface. Extraction that yields nothing usable fails with
+  its reason shown in the knowledge screen, because the likeliest first upload is a Thai scan.
+- Hybrid retrieval on Postgres: pgvector for meaning, `word_similarity` over a GIN trigram
+  index for literal matches, fused with per-list floors. ADR 0003 records the measurements
+  that chose those functions. Optional cross-encoder reranking on top.
+- The agent pre-fetches knowledge for each customer message and can search for more, plus
+  recall over that customer's own past conversations, scoped so it can never reach another's.
+- Rolling per-customer summaries written on resolve, with history kept.
+- Agent console: knowledge management with a two-half test-search box, promote-a-reply,
+  canned responses with composer shortcuts, and a full AI trace view.
+- An external retrieval adapter for operators already running Dify or RAGFlow.
+- Playwright covers the three core agent flows.
+
+Next: **M3**, the real channels. LINE and Messenger adapters, channel settings, media in and
+out, and the Meta App Review submission.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)
