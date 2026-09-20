@@ -1,0 +1,22 @@
+{
+  "name": "@ci/infra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1136.0",
+    "@ci/channels": "workspace:*",
+    "@ci/config": "workspace:*",
+    "@ci/core": "workspace:*",
+    "@ci/db": "workspace:*",
+    "@ci/shared": "workspace:*",
+    "bullmq": "6.3.8",
+    "drizzle-orm": "0.45.2",
+    "ioredis": "6.0.0"
+  }
+}

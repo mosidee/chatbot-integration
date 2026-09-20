@@ -1,0 +1,100 @@
+import { splitText } from '@ci/channels'
+import type { EffectPorts, Logger } from '@ci/core'
+import { schema } from '@ci/db'
+import type { OutboundJob, Runtime } from '@ci/infra'
+import { loadChannel } from '@ci/infra'
+import type { NormalizedMessage } from '@ci/shared'
+import { and, eq } from 'drizzle-orm'
+
+/**
+ * Deliver a stored outbound message through its channel.
+ *
+ * The message row is written before delivery is attempted, so an agent always sees what
+ * was meant to go out even when the platform rejects it. Long text is split to the
+ * platform's limit here rather than in the AI, which should write naturally.
+ */
+export async function processOutbound(
+  runtime: Runtime,
+  _ports: EffectPorts,
+  logger: Logger,
+  job: OutboundJob,
+): Promise<void> {
+  const { db, env, publisher } = runtime
+
+  const rows = await db
+    .select()
+    .from(schema.messages)
+    .where(
+      and(eq(schema.messages.id, job.messageId), eq(schema.messages.workspaceId, job.workspaceId)),
+    )
+    .limit(1)
+
+  const message = rows[0]
+  if (!message) {
+    logger.warn('outbound message vanished', { messageId: job.messageId })
+    return
+  }
+  if (message.status === 'sent' || message.status === 'delivered') return
+
+  const conversationRows = await db
+    .select()
+    .from(schema.conversations)
+    .where(eq(schema.conversations.id, job.conversationId))
+    .limit(1)
+  const conversation = conversationRows[0]
+  if (!conversation) return
+
+  const identityRows = await db
+    .select()
+    .from(schema.channelIdentities)
+    .where(eq(schema.channelIdentities.id, conversation.channelIdentityId))
+    .limit(1)
+  const identity = identityRows[0]
+  if (!identity) return
+
+  const { adapter, config } = await loadChannel(db, conversation.channelId, env.APP_SECRET_KEY)
+
+  try {
+    const parts = toSendableParts(message.content, adapter.capabilities.maxTextLength)
+    let lastPlatformId: string | null = null
+
+    for (const part of parts) {
+      const result = await adapter.send(identity.externalId, part, config, {
+        messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
+      })
+      lastPlatformId = result.platformMessageId
+    }
+
+    await db
+      .update(schema.messages)
+      .set({ status: 'sent', platformMessageId: lastPlatformId, error: null })
+      .where(eq(schema.messages.id, message.id))
+
+    await publisher.publish(job.workspaceId, {
+      type: 'message.updated',
+      conversationId: job.conversationId,
+      messageId: message.id,
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    await db
+      .update(schema.messages)
+      .set({ status: 'failed', error: reason })
+      .where(eq(schema.messages.id, message.id))
+
+    await publisher.publish(job.workspaceId, {
+      type: 'message.updated',
+      conversationId: job.conversationId,
+      messageId: message.id,
+    })
+    throw error
+  }
+}
+
+/** Split only text; other kinds go out as one message. */
+function toSendableParts(message: NormalizedMessage, maxLength: number): NormalizedMessage[] {
+  if (message.kind !== 'text') return [message]
+  const chunks = splitText(message.text, maxLength)
+  if (chunks.length <= 1) return [message]
+  return chunks.map((text) => ({ kind: 'text' as const, text }))
+}

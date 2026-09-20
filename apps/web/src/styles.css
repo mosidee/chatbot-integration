@@ -1,0 +1,51 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', 'Noto Sans Thai', ui-sans-serif, system-ui, sans-serif;
+
+  /* One accent, used sparingly: the inbox is dense and colour has to mean something. */
+  --color-brand-50: oklch(0.97 0.02 250);
+  --color-brand-100: oklch(0.93 0.04 250);
+  --color-brand-500: oklch(0.58 0.16 250);
+  --color-brand-600: oklch(0.51 0.16 250);
+  --color-brand-700: oklch(0.44 0.14 250);
+}
+
+:root {
+  color-scheme: light;
+  --surface: oklch(1 0 0);
+  --surface-muted: oklch(0.975 0.003 250);
+  --border: oklch(0.91 0.005 250);
+  --text: oklch(0.22 0.01 250);
+  --text-muted: oklch(0.52 0.01 250);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface: oklch(0.19 0.01 250);
+    --surface-muted: oklch(0.23 0.012 250);
+    --border: oklch(0.31 0.012 250);
+    --text: oklch(0.95 0.005 250);
+    --text-muted: oklch(0.68 0.01 250);
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thai needs a little more line height than Latin to stay readable at small sizes. */
+:lang(th) {
+  line-height: 1.7;
+}

@@ -55,6 +55,9 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] One-click take over; one-click return to AI with optional instruction note the AI reads
 - [v1] `waiting_human` queue; optional fallback to AI after N minutes outside business hours
 - [v1] Assignment to agent; status open / snoozed / resolved; tags
+- [next] Debounce AI turns so a burst of customer messages produces one considered reply
+  rather than one per message. Needs care: a deterministic job id alone would drop a message
+  that arrived mid-turn
 - [later] Auto-return to AI after human inactivity; assignment rules / round-robin; SLA timers
 
 ### 3.3 AI harness
@@ -118,6 +121,33 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] Staging on VPS behind Nginx Proxy Manager (WebSocket enabled)
 - [v1] CI: typecheck, lint, unit tests incl. webhook fixture replay
 - [later] Multi-workspace UI, billing, Cloudflare Containers / Fly.io deployment recipes
+
+## 3.9 Milestone status
+
+**M1 is complete.** The skeleton and the AI/human loop run end to end, locally and as
+container images. Delivered:
+
+- Monorepo, Docker Compose infrastructure, CI running lint, typecheck, migrations, 147
+  tests and the web build.
+- Database schema for the whole M1 surface with `workspace_id` on every tenant-owned table,
+  Better Auth with admin/agent/viewer roles, AES-256-GCM credential encryption.
+- Conversation state machine and redaction as pure, exhaustively tested functions.
+- AI harness over any OpenAI-compatible provider, with per-task slots, fallback, tools and a
+  separate vision slot.
+- Channel adapter contract with the test and web channels; LINE and Messenger slot in at M3
+  without touching the domain.
+- API, worker, realtime updates, media upload, and the agent console with inbox,
+  conversation view, AI sidebar, simulator and settings in Thai and English.
+- Deployment: Dockerfiles, production compose, and a VPS guide.
+
+Verified against the M1 definition of done: a Thai question is answered by the AI in Thai;
+taking over stops the AI and produces suggestions instead; an AI turn queued before a
+take-over refuses to send when it runs afterwards; returning to the AI passes an agent's
+instruction into the next prompt; card numbers never reach the database or the provider; a
+provider outage falls over to the secondary; a total failure hands off to a human; and an
+image sent through the simulator is described by the vision slot and referenced in the reply.
+
+Next: **M2**, knowledge and memory.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)

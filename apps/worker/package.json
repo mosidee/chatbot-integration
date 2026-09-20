@@ -1,0 +1,22 @@
+{
+  "name": "@ci/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@ci/channels": "workspace:*",
+    "@ci/config": "workspace:*",
+    "@ci/core": "workspace:*",
+    "@ci/db": "workspace:*",
+    "@ci/infra": "workspace:*",
+    "@ci/shared": "workspace:*",
+    "bullmq": "6.3.8",
+    "drizzle-orm": "0.45.2",
+    "zod": "4.6.5"
+  }
+}

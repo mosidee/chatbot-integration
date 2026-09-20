@@ -1,0 +1,25 @@
+{
+  "name": "@ci/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@ci/channels": "workspace:*",
+    "@ci/config": "workspace:*",
+    "@ci/core": "workspace:*",
+    "@ci/db": "workspace:*",
+    "@ci/infra": "workspace:*",
+    "@ci/shared": "workspace:*",
+    "@elysiajs/cors": "1.4.2",
+    "@elysiajs/openapi": "1.4.16",
+    "better-auth": "1.7.5",
+    "drizzle-orm": "0.45.2",
+    "elysia": "1.4.30",
+    "zod": "4.6.5"
+  }
+}

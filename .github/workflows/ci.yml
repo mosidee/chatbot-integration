@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci_dev_password
+          POSTGRES_DB: chatbot_integration
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci -d chatbot_integration"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://ci:ci_dev_password@localhost:5432/chatbot_integration
+      REDIS_URL: redis://localhost:6379
+      APP_SECRET_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BETTER_AUTH_SECRET: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+      BETTER_AUTH_URL: http://localhost:3000
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: media
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_FORCE_PATH_STYLE: "true"
+      PUBLIC_API_URL: http://localhost:3000
+      PUBLIC_WEB_URL: http://localhost:5173
+      WEBHOOK_BASE_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # MinIO needs a server command, which GitHub service containers cannot override,
+      # so it runs as a step instead.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then break; fi
+            sleep 2
+          done
+          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c \
+            "mc alias set local http://localhost:9000 minioadmin minioadmin && \
+             mc mb --ignore-existing local/media"
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.2 }
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run db:migrate
+      - run: bun test
+      - run: bun run build:web
