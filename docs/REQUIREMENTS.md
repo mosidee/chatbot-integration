@@ -203,8 +203,13 @@ do not exist yet.
   minted after we decide who the visitor is carries the identity, and no endpoint accepts a
   conversation id, so a guessed id reaches nothing. See `docs/WIDGET.md`.
 
-Still to come in M4: customer merge suggestions, the review queue and feedback, and the
-dashboard.
+- The dashboard. Volume, the share of turns the AI answered on its own, median time to a
+  first reply, estimated cost, why it handed off, and which channels the traffic came from,
+  over a window of 7, 14 or 30 days. Few figures on purpose: the handoff reasons are the
+  list of what to write into the knowledge base next, and everything else answers whether
+  the pilot is working. Computed in Postgres and drawn without a charting library.
+
+Still to come in M4: customer merge suggestions, and the review queue and feedback.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)

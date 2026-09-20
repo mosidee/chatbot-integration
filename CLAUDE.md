@@ -151,6 +151,10 @@ without spending money.
 - A widget visitor's channel identity carries a prefix, `anon:` or `host:`, and the
   prefixed form is what the identity is stored under. Sending the raw id instead created
   an identity the session could never find again.
+- A raw `sql` template hands its parameters straight to postgres-js, which refuses a Date:
+  "The 'string' argument must be of type string". The query builder serialises Dates, raw
+  SQL does not. Pass `date.toISOString()` and cast it, as `packages/infra/src/dashboard.ts`
+  does.
 - LINE reply tokens are single-use and expire in about a minute. They are stored on the
   conversation and cleared the moment they are spent.
 - `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,

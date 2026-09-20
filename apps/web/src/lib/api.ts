@@ -239,6 +239,34 @@ export type Member = {
   image: string | null
 }
 
+export type DashboardDay = {
+  day: string
+  conversations: number
+  customerMessages: number
+  answered: number
+  handoffs: number
+  cost: number
+}
+
+export type Dashboard = {
+  since: string
+  days: DashboardDay[]
+  totals: {
+    conversations: number
+    customerMessages: number
+    answered: number
+    handoffs: number
+    errors: number
+    cost: number
+    tokensIn: number
+    tokensOut: number
+  }
+  firstResponse: { medianSeconds: number | null; conversations: number }
+  handoffReasons: { reason: string; conversations: number }[]
+  channels: { channel: string; type: string; conversations: number }[]
+  waitingNow: number
+}
+
 export type ConversationFilters = {
   status?: ConversationStatus
   mode?: ConversationMode
@@ -327,6 +355,10 @@ export const api = {
     },
     /** Same-origin URL the browser can render; access follows the session. */
     urlFor: (storageKey: string) => `/api/v1/uploads/${storageKey}`,
+  },
+
+  dashboard: {
+    load: (days = 14) => get<Dashboard>(`/v1/dashboard?days=${days}`),
   },
 
   conversations: {

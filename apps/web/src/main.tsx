@@ -13,6 +13,7 @@ import { api } from './lib/api'
 import './lib/i18n'
 import './styles.css'
 import { Layout } from './components/Layout'
+import { Dashboard } from './routes/Dashboard'
 import { Inbox } from './routes/Inbox'
 import { Knowledge } from './routes/Knowledge'
 import { Login } from './routes/Login'
@@ -71,6 +72,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   appRoute.addChildren([
     createRoute({ getParentRoute: () => appRoute, path: '/', component: Inbox }),
+    createRoute({ getParentRoute: () => appRoute, path: '/dashboard', component: Dashboard }),
     createRoute({ getParentRoute: () => appRoute, path: '/knowledge', component: Knowledge }),
     createRoute({ getParentRoute: () => appRoute, path: '/simulator', component: Simulator }),
     createRoute({ getParentRoute: () => appRoute, path: '/settings', component: Settings }),
