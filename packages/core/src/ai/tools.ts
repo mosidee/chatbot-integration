@@ -1,6 +1,6 @@
 import { tool } from 'ai'
 import { z } from 'zod'
-import type { CustomerContext, HandoffIntent } from './types'
+import type { CustomerContext, HandoffIntent, RetrievedChunk } from './types'
 
 /**
  * Internal tools available to the agent.
@@ -14,15 +14,34 @@ export type TurnScratchpad = {
   handoff: HandoffIntent | null
   customerFieldUpdates: Record<string, string>
   tagsToAdd: string[]
+  /** Everything retrieval surfaced this turn, pre-fetched or via a tool, for the trace. */
+  retrieved: RetrievedChunk[]
 }
 
 export function createScratchpad(): TurnScratchpad {
-  return { handoff: null, customerFieldUpdates: {}, tagsToAdd: [] }
+  return { handoff: null, customerFieldUpdates: {}, tagsToAdd: [], retrieved: [] }
+}
+
+export type PastConversationHit = {
+  conversationId: string
+  text: string
+  at: Date
 }
 
 export type ToolContext = {
   customer: CustomerContext
   scratchpad: TurnScratchpad
+  /**
+   * Optional capabilities. A tool is only offered to the model when its capability is
+   * present, so a workspace with no knowledge base does not advertise a search that can
+   * only ever come back empty.
+   */
+  searchKnowledge?: (query: string) => Promise<RetrievedChunk[]>
+  /**
+   * Already bound to this customer by the caller. The tool cannot widen the scope, which is
+   * what keeps one customer's history out of another's conversation.
+   */
+  searchPastConversations?: (query: string) => Promise<PastConversationHit[]>
 }
 
 const handoffReasonForAi = z.enum([
@@ -97,6 +116,58 @@ export function createInternalTools(ctx: ToolContext) {
         fields: ctx.customer.fields,
       }),
     }),
+
+    ...(ctx.searchKnowledge
+      ? {
+          search_knowledge: tool({
+            description: [
+              'Search the knowledge base for product facts. Use this when the customer asks',
+              'something the entries already supplied do not cover, or when you want to check',
+              'a detail before stating it. Search with the words the customer used.',
+            ].join(' '),
+            inputSchema: z.object({
+              query: z.string().min(1).max(300).describe('What to look up'),
+            }),
+            execute: async ({ query }) => {
+              const chunks = await (
+                ctx.searchKnowledge as (q: string) => Promise<RetrievedChunk[]>
+              )(query)
+              for (const chunk of chunks) {
+                if (!ctx.scratchpad.retrieved.some((r) => r.id === chunk.id)) {
+                  ctx.scratchpad.retrieved.push(chunk)
+                }
+              }
+              return {
+                found: chunks.length,
+                entries: chunks.map((c) => ({ source: c.sourceTitle, text: c.text })),
+              }
+            },
+          }),
+        }
+      : {}),
+
+    ...(ctx.searchPastConversations
+      ? {
+          search_past_conversations: tool({
+            description: [
+              "Search this customer's own earlier conversations. Use it when they refer to",
+              "something discussed before. It only ever returns this customer's history.",
+            ].join(' '),
+            inputSchema: z.object({
+              query: z.string().min(1).max(300),
+            }),
+            execute: async ({ query }) => {
+              const hits = await (
+                ctx.searchPastConversations as (q: string) => Promise<PastConversationHit[]>
+              )(query)
+              return {
+                found: hits.length,
+                excerpts: hits.map((h) => ({ when: h.at.toISOString(), text: h.text })),
+              }
+            },
+          }),
+        }
+      : {}),
   }
 }
 

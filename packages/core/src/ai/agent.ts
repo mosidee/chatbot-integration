@@ -2,7 +2,7 @@ import { generateText, stepCountIs } from 'ai'
 import { estimateCost } from './cost'
 import { buildMessages, buildSystemPrompt } from './prompt'
 import { runWithFallback } from './registry'
-import { createInternalTools, createScratchpad } from './tools'
+import { createInternalTools, createScratchpad, type ToolContext } from './tools'
 import type { AgentTurnInput, AgentTurnResult, PriceTable, SlotConfig, TraceRecord } from './types'
 import { describeImages } from './vision'
 
@@ -18,6 +18,13 @@ export type RunAgentTurnOptions = {
   maxSteps?: number
   /** Overrides the slot's retry count. Tests set 0 to fail over immediately. */
   maxRetries?: number
+  /**
+   * Retrieval capabilities. Each is optional: a tool is only offered to the model when its
+   * capability is supplied, so a workspace with no knowledge base does not advertise a
+   * search that could only come back empty.
+   */
+  searchKnowledge?: ToolContext['searchKnowledge']
+  searchPastConversations?: ToolContext['searchPastConversations']
 }
 
 /**
@@ -63,7 +70,12 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       // Models without function calling take the answer-only path: knowledge is already
       // in the system prompt, so they can still answer, just not act.
       const tools = target.provider.supportsTools
-        ? createInternalTools({ customer: input.customer, scratchpad })
+        ? createInternalTools({
+            customer: input.customer,
+            scratchpad,
+            searchKnowledge: options.searchKnowledge,
+            searchPastConversations: options.searchPastConversations,
+          })
         : undefined
 
       return generateText({
@@ -94,7 +106,12 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       usedFallback,
       prompt: { system, messages },
       toolCalls: result.steps?.flatMap((s) => s.toolCalls ?? []) ?? [],
-      retrieved: input.retrieved,
+      // Pre-fetched chunks plus anything the model looked up itself, so the trace shows
+      // every piece of knowledge that could have shaped the answer.
+      retrieved: [
+        ...input.retrieved,
+        ...scratchpad.retrieved.filter((r) => !input.retrieved.some((p) => p.id === r.id)),
+      ],
       tokensIn,
       tokensOut,
       latencyMs: Date.now() - startedAt,

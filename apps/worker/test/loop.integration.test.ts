@@ -3,6 +3,9 @@ import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { schema } from '@ci/db'
 import {
   createEffectPorts,
+  createEntry,
+  createSource,
+  indexEntry,
   ingestWebhook,
   loadWorkspaceSettings,
   storeMessage,
@@ -539,5 +542,68 @@ describe('the AI and human loop', () => {
       expect(rows.length).toBeGreaterThan(0)
       for (const row of rows) expect(row.workspaceId).toBe(f.workspaceId)
     }
+  })
+})
+
+describe('grounded answers', () => {
+  test('knowledge is retrieved and reaches the model before it answers', async () => {
+    const provider = mock([{ kind: 'text', text: 'แพ็กเกจเริ่มต้น 990 บาทต่อเดือนค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      embedBaseUrl: `${provider.url}/v1`,
+    })
+
+    // A knowledge entry the customer's question should pull in.
+    const sourceId = await createSource(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      kind: 'qa',
+      title: 'Pricing',
+    })
+    const entryId = await createEntry(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      sourceId,
+      language: 'th',
+      question: 'แพ็กเกจราคาเท่าไหร่',
+      body: 'แพ็กเกจเริ่มต้นของ salon-saas ราคา 990 บาทต่อเดือน รวมการจองคิวออนไลน์',
+    })
+    await indexEntry(f.runtime.db, entryId, f.embedSlot())
+
+    await customerSays(f, 'ราคาเท่าไหร่คะ')
+    await runQueuedWork(f)
+
+    // The chat request carried the knowledge, so the answer is grounded rather than guessed.
+    const chatRequest = provider.requests.find((r) => {
+      const body = r as { messages?: { role: string; content: unknown }[] }
+      return body.messages?.some((m) => m.role === 'system')
+    }) as { messages: { role: string; content: string }[] }
+    const system = chatRequest.messages.find((m) => m.role === 'system')?.content ?? ''
+    expect(system).toContain('990')
+    expect(system).toContain('Knowledge base entries retrieved')
+
+    // And the trace records what was retrieved, so the answer can be audited.
+    const traces = await f.runtime.db
+      .select()
+      .from(schema.aiTraces)
+      .where(eq(schema.aiTraces.workspaceId, f.workspaceId))
+    const retrieved = traces[0]?.retrieved as { text: string }[] | null
+    expect(retrieved?.length ?? 0).toBeGreaterThan(0)
+    expect(JSON.stringify(retrieved)).toContain('990')
+  })
+
+  test('with no knowledge the model is told to hand off rather than guess', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      embedBaseUrl: `${provider.url}/v1`,
+    })
+
+    await customerSays(f, 'มีโปรโมชั่นอะไรบ้างคะ')
+    await runQueuedWork(f)
+
+    const chatRequest = provider.requests.at(-1) as {
+      messages: { role: string; content: string }[]
+    }
+    const system = chatRequest.messages.find((m) => m.role === 'system')?.content ?? ''
+    expect(system).toContain('No knowledge base entries were retrieved')
   })
 })
