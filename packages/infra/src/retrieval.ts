@@ -122,12 +122,18 @@ export function createPostgresRetriever(
         { topN: limit },
       )
 
-      const ordered = reranked
-        ? reranked.items.flatMap((item) => {
-            const fusedEntry = forRerank.find((f) => f.id === item.id)
-            return fusedEntry ? [{ ...fusedEntry, fusedScore: item.score }] : []
-          })
-        : survivors
+      let ordered = survivors
+      if (reranked) {
+        const promoted = reranked.items.flatMap((item) => {
+          const fusedEntry = forRerank.find((f) => f.id === item.id)
+          return fusedEntry ? [{ ...fusedEntry, fusedScore: item.score }] : []
+        })
+        // Some rerankers return only what clears their own threshold. Anything they left
+        // out keeps its fused position behind what they promoted, so reranking can reorder
+        // results but never returns fewer than the query would have without it.
+        const promotedIds = new Set(promoted.map((p) => p.id))
+        ordered = [...promoted, ...survivors.filter((s) => !promotedIds.has(s.id))]
+      }
 
       const chunks = ordered.slice(0, limit).flatMap((f) => {
         const row = byId.get(f.id)

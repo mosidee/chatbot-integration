@@ -7,6 +7,7 @@ import {
   loadTurnContext,
   loadWorkspaceSettings,
   recordTrace,
+  resolveExternalRetrieval,
   usableSlot,
   workspaceHasKnowledge,
 } from '@ci/infra'
@@ -52,7 +53,10 @@ export async function processSuggestion(
     channelType: context.channel.type,
     embedSlot,
     rerankSlot: usableSlot(aiConfig, 'rerank'),
-    externalRetrieval: settings.externalRetrieval,
+    externalRetrieval: await resolveExternalRetrieval(
+      settings.externalRetrieval,
+      env.APP_SECRET_KEY,
+    ),
     hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
   })
 

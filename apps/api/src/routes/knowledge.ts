@@ -6,6 +6,7 @@ import {
   createSource,
   loadAiConfig,
   loadWorkspaceSettings,
+  resolveExternalRetrieval,
   usableSlot,
 } from '@ci/infra'
 import { channelTypeSchema, languageSchema } from '@ci/shared'
@@ -296,8 +297,12 @@ export function knowledgeRoutes(ctx: ApiContext) {
             settings.modelPrices,
           )
           // The same source a real turn would use, so the box tests what customers get.
-          const retriever = settings.externalRetrieval
-            ? createExternalRetriever(settings.externalRetrieval)
+          const external = await resolveExternalRetrieval(
+            settings.externalRetrieval,
+            env.APP_SECRET_KEY,
+          )
+          const retriever = external
+            ? createExternalRetriever(external)
             : createPostgresRetriever(db, {
                 embedSlot: usableSlot(aiConfig, 'embed'),
                 rerankSlot: usableSlot(aiConfig, 'rerank'),

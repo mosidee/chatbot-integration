@@ -20,6 +20,7 @@ import {
   loadWorkspaceSettings,
   mergeCustomerFields,
   recordTrace,
+  resolveExternalRetrieval,
   storeMessage,
   updateConversation,
   usableSlot,
@@ -94,7 +95,10 @@ export async function processAiTurn(
     channelType: context.channel.type,
     embedSlot,
     rerankSlot: usableSlot(aiConfig, 'rerank'),
-    externalRetrieval: settings.externalRetrieval,
+    externalRetrieval: await resolveExternalRetrieval(
+      settings.externalRetrieval,
+      env.APP_SECRET_KEY,
+    ),
     hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
   })
 

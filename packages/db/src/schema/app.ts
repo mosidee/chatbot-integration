@@ -112,7 +112,11 @@ export type WorkspaceSettings = {
   externalRetrieval: {
     kind: 'dify' | 'ragflow' | 'generic'
     baseUrl: string
-    apiKey: string | null
+    /**
+     * AES-256-GCM, like every other credential here. The settings endpoint reports
+     * `hasApiKey` and never returns this, because a viewer can read workspace settings.
+     */
+    apiKeyEncrypted: string | null
     datasetId: string | null
     topK?: number
     scoreThreshold?: number

@@ -4,6 +4,35 @@ import type { ChannelType, Language } from '@ci/shared'
 import { createPostgresRetriever, searchPastConversations } from './retrieval'
 import { createExternalRetriever, type ExternalRetrievalConfig } from './retrieval-external'
 
+export type StoredExternalRetrieval = {
+  kind: 'dify' | 'ragflow' | 'generic'
+  baseUrl: string
+  apiKeyEncrypted: string | null
+  datasetId: string | null
+  topK?: number
+  scoreThreshold?: number
+}
+
+/**
+ * Turn the stored config into a usable one, decrypting the key at the moment of use so a
+ * plaintext credential never sits in a row, a log line or a response.
+ */
+export async function resolveExternalRetrieval(
+  stored: StoredExternalRetrieval | null | undefined,
+  secretKey: string,
+): Promise<ExternalRetrievalConfig | null> {
+  if (!stored) return null
+  const { decryptSecret } = await import('@ci/db')
+  return {
+    kind: stored.kind,
+    baseUrl: stored.baseUrl,
+    apiKey: stored.apiKeyEncrypted ? await decryptSecret(stored.apiKeyEncrypted, secretKey) : null,
+    datasetId: stored.datasetId,
+    ...(stored.topK !== undefined ? { topK: stored.topK } : {}),
+    ...(stored.scoreThreshold !== undefined ? { scoreThreshold: stored.scoreThreshold } : {}),
+  }
+}
+
 /**
  * The retrieval a single AI turn is allowed to do.
  *

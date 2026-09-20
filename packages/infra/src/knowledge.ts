@@ -32,15 +32,26 @@ export async function indexEntry(
   const entry = rows[0]
   if (!entry) return { chunks: 0, model: null, skipped: true }
 
-  await db.delete(schema.knowledgeChunks).where(eq(schema.knowledgeChunks.entryId, entryId))
+  const clearChunks = () =>
+    db.delete(schema.knowledgeChunks).where(eq(schema.knowledgeChunks.entryId, entryId))
 
-  if (!entry.enabled) return { chunks: 0, model: null, skipped: true }
+  if (!entry.enabled) {
+    await clearChunks()
+    return { chunks: 0, model: null, skipped: true }
+  }
 
   const pieces = chunkQa(entry.question, entry.body)
-  if (pieces.length === 0) return { chunks: 0, model: null, skipped: true }
+  if (pieces.length === 0) {
+    await clearChunks()
+    return { chunks: 0, model: null, skipped: true }
+  }
 
-  // Without an embedding provider the chunks are still stored, so keyword retrieval works.
-  // The embedding column stays null and a later re-index fills it in.
+  // Embed before replacing anything. Deleting first would mean a provider failure mid-edit
+  // left the entry with no chunks at all, silently dropping it out of retrieval until
+  // somebody noticed and re-indexed.
+  //
+  // Without an embedding provider the chunks are still stored, so keyword retrieval works;
+  // the embedding column stays null and a later re-index fills it in.
   let embeddings: number[][] = []
   let model: string | null = null
   if (embedSlot) {
@@ -49,19 +60,23 @@ export async function indexEntry(
     model = embedded.model
   }
 
-  await db.insert(schema.knowledgeChunks).values(
-    pieces.map((text, index) => ({
-      id: newId(),
-      workspaceId: entry.workspaceId,
-      sourceId: entry.sourceId,
-      entryId: entry.id,
-      language: entry.language,
-      ord: index,
-      text,
-      embedding: embeddings[index] ?? null,
-      embeddingModel: model,
-    })),
-  )
+  // Replace atomically, so retrieval never sees an entry mid-rewrite.
+  await db.transaction(async (tx) => {
+    await tx.delete(schema.knowledgeChunks).where(eq(schema.knowledgeChunks.entryId, entryId))
+    await tx.insert(schema.knowledgeChunks).values(
+      pieces.map((text, index) => ({
+        id: newId(),
+        workspaceId: entry.workspaceId,
+        sourceId: entry.sourceId,
+        entryId: entry.id,
+        language: entry.language,
+        ord: index,
+        text,
+        embedding: embeddings[index] ?? null,
+        embeddingModel: model,
+      })),
+    )
+  })
 
   return { chunks: pieces.length, model, skipped: false }
 }

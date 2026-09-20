@@ -365,3 +365,101 @@ describe('recall over past conversations', () => {
     expect(hits).toHaveLength(0)
   })
 })
+
+describe('reranking', () => {
+  /** Index a handful of entries so ordering is observable. */
+  async function seedEntries(
+    fixture: KnowledgeFixture,
+    embedSlot: ReturnType<KnowledgeFixture['embedSlot']>,
+  ) {
+    const bodies = [
+      'Refunds are processed within seven business days.',
+      'The starter plan costs 990 THB per month.',
+      'Opening hours are nine to six, Monday to Friday.',
+      'Staff accounts are unlimited on the pro plan.',
+    ]
+    for (const body of bodies) {
+      const entryId = await createEntry(fixture.db, {
+        workspaceId: fixture.workspaceId,
+        sourceId: fixture.sourceId,
+        language: 'en',
+        question: null,
+        body,
+      })
+      await indexEntry(fixture.db, entryId, embedSlot)
+    }
+  }
+
+  test('a configured reranker reorders the results and is reported in the result', async () => {
+    const { fixture, embedSlot, server } = await setup()
+    await seedEntries(fixture, embedSlot)
+
+    const rerankSlot = fixture.embedSlot(`${server.url}/v1`)
+    const withoutRerank = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
+    const withRerank = createPostgresRetriever(fixture.db, {
+      embedSlot,
+      rerankSlot: { ...rerankSlot, task: 'rerank' },
+      fusion: TEST_FUSION,
+    })
+
+    const plain = await withoutRerank.retrieve({
+      workspaceId: fixture.workspaceId,
+      query: 'plan',
+      limit: 3,
+    })
+    const ranked = await withRerank.retrieve({
+      workspaceId: fixture.workspaceId,
+      query: 'plan',
+      limit: 3,
+    })
+
+    expect(plain.usedRerank).toBe(false)
+    expect(ranked.usedRerank).toBe(true)
+    // The mock reranker reverses the order it is given, so the ordering must differ.
+    expect(ranked.chunks.map((c) => c.id)).not.toEqual(plain.chunks.map((c) => c.id))
+  })
+
+  test('reranking never returns fewer results than the query would without it', async () => {
+    const { fixture, embedSlot, server } = await setup()
+    await seedEntries(fixture, embedSlot)
+
+    const rerankSlot = { ...fixture.embedSlot(`${server.url}/v1`), task: 'rerank' as const }
+    const plain = await createPostgresRetriever(fixture.db, {
+      embedSlot,
+      fusion: TEST_FUSION,
+    }).retrieve({ workspaceId: fixture.workspaceId, query: 'plan', limit: 3 })
+
+    const ranked = await createPostgresRetriever(fixture.db, {
+      embedSlot,
+      rerankSlot,
+      fusion: TEST_FUSION,
+    }).retrieve({ workspaceId: fixture.workspaceId, query: 'plan', limit: 3 })
+
+    expect(ranked.chunks).toHaveLength(plain.chunks.length)
+    // The same set of chunks, possibly in a different order.
+    expect(new Set(ranked.chunks.map((c) => c.id))).toEqual(new Set(plain.chunks.map((c) => c.id)))
+  })
+
+  test('a reranker that fails leaves the fused order untouched', async () => {
+    const { fixture, embedSlot } = await setup()
+    await seedEntries(fixture, embedSlot)
+
+    const plain = await createPostgresRetriever(fixture.db, {
+      embedSlot,
+      fusion: TEST_FUSION,
+    }).retrieve({ workspaceId: fixture.workspaceId, query: 'plan', limit: 3 })
+
+    const brokenRerank = {
+      ...fixture.embedSlot('http://localhost:1/v1'),
+      task: 'rerank' as const,
+    }
+    const ranked = await createPostgresRetriever(fixture.db, {
+      embedSlot,
+      rerankSlot: brokenRerank,
+      fusion: TEST_FUSION,
+    }).retrieve({ workspaceId: fixture.workspaceId, query: 'plan', limit: 3 })
+
+    expect(ranked.usedRerank).toBe(false)
+    expect(ranked.chunks.map((c) => c.id)).toEqual(plain.chunks.map((c) => c.id))
+  })
+})

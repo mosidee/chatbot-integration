@@ -68,7 +68,8 @@ an ADR.
 bun run infra:up        # Postgres, Redis, MinIO in Docker
 bun run db:migrate      # apply migrations (creates extensions first)
 bun run db:seed         # workspace, admin user, test and web channels
-bun run db:reset        # drop both schemas, migrate and seed (see the gotchas)
+bun run db:reset        # DESTROYS ALL DATA, then migrates and seeds. Local only:
+                        # it refuses production and any non-local database
 bun run dev             # api + worker + web with hot reload
 bun run test            # unit and integration (needs infra:up)
 bun run test:e2e        # Playwright browser tests (starts the app itself)
@@ -112,7 +113,8 @@ without spending money.
 - Browser tests find controls by `data-testid`, not by visible text: the console defaults to
   Thai, so label matchers would depend on the active language.
 - `DROP SCHEMA public CASCADE` leaves Drizzle's journal in its own `drizzle` schema, so the
-  next migrate is a no-op against an empty database. Use `bun run db:reset`, which drops both.
+  next migrate is a no-op against an empty database that claims to be migrated. `bun run
+  db:reset` drops both, and refuses to run against production or a non-local host.
 - Card redaction requires an issuer prefix as well as a Luhn check. Roughly one in ten random
   digit strings passes Luhn, so without the prefix a timestamp or a long order reference gets
   masked, which contradicts deliberately preserving order references.

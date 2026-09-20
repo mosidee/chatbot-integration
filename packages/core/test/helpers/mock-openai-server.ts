@@ -96,6 +96,21 @@ export function startMockOpenAI(replies: MockReply[]): MockServer {
         })
       }
 
+      // A reranker that simply reverses the given order: clearly different from the fused
+      // order, so a test can tell whether reranking actually took effect.
+      if (url.pathname.endsWith('/rerank')) {
+        const payload = (await request.json()) as { documents?: string[]; top_n?: number }
+        const documents = payload.documents ?? []
+        const indices = documents.map((_, i) => i).reverse()
+        const limited = payload.top_n === undefined ? indices : indices.slice(0, payload.top_n)
+        return Response.json({
+          results: limited.map((index, rank) => ({
+            index,
+            relevance_score: 1 - rank / Math.max(limited.length, 1),
+          })),
+        })
+      }
+
       if (url.pathname.endsWith('/models')) {
         return Response.json({
           object: 'list',
