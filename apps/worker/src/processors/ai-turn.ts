@@ -160,8 +160,23 @@ export async function processAiTurn(
     return
   }
 
+  // An empty answer used to end the turn here, which left the customer with silence and
+  // told nobody. Seen in production when a reasoning model spent its whole output budget
+  // thinking: the conversation simply stopped. Whatever the cause, a person is told.
   if (!result.text) {
-    logger.warn('AI produced an empty reply', { conversationId: job.conversationId })
+    logger.warn('AI produced an empty reply', {
+      conversationId: job.conversationId,
+      tokensOut: result.trace.tokensOut,
+    })
+    if (job.deliver === 'draft') return
+    await handOff(
+      runtime,
+      ports,
+      logger,
+      job,
+      'model_error',
+      'The AI returned nothing at all, so this needs a person. The trace shows what it was asked.',
+    )
     return
   }
 

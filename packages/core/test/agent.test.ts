@@ -85,6 +85,42 @@ describe('runAgentTurn', () => {
     expect(result.trace.usedFallback).toBe(false)
   })
 
+  test('records an empty answer as an error, not as a send', async () => {
+    // A reasoning model can spend its whole output budget thinking and emit nothing. The
+    // turn succeeds at the provider, so nothing else marks it as a failure, and a trace
+    // saying "sent" for a turn the customer never saw hides it completely.
+    const server = mock([{ kind: 'text', text: '' }])
+
+    const result = await runAgentTurn({
+      input: input(),
+      chatSlot: slot(server.url),
+      visionSlot: null,
+      prices: {},
+      mode: 'answer',
+      maxRetries: 0,
+    })
+
+    expect(result.text).toBe('')
+    expect(result.trace.outcome).toBe('error')
+    expect(result.trace.error).toContain('no text')
+  })
+
+  test('treats whitespace as empty', async () => {
+    const server = mock([{ kind: 'text', text: '   \n  ' }])
+
+    const result = await runAgentTurn({
+      input: input(),
+      chatSlot: slot(server.url),
+      visionSlot: null,
+      prices: {},
+      mode: 'answer',
+      maxRetries: 0,
+    })
+
+    expect(result.text).toBe('')
+    expect(result.trace.outcome).toBe('error')
+  })
+
   test('sends the persona and the customer message to the provider', async () => {
     const server = mock([{ kind: 'text', text: 'ok' }])
     await runAgentTurn({

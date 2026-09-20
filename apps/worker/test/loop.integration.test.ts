@@ -431,6 +431,32 @@ describe('the AI and human loop', () => {
     expect(conversation.handoffReason).toBe('model_error')
   })
 
+  test('an empty answer hands off instead of leaving the customer in silence', async () => {
+    // Seen on a live LINE conversation: a reasoning model spent its whole output budget
+    // thinking and returned nothing. The turn ended quietly, the customer was never
+    // answered, and no colleague was told there was anything to answer.
+    const mute = mock([{ kind: 'text', text: '' }])
+    const f = await fixture({ providerBaseUrl: mute.url })
+
+    await customerSays(f, 'ช่วยดูรูปนี้ให้หน่อยค่ะ')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.mode).toBe('waiting_human')
+    expect(conversation.handoffReason).toBe('model_error')
+
+    // And a colleague can see why, rather than finding an unanswered conversation.
+    const notes = await f.runtime.db
+      .select()
+      .from(schema.internalNotes)
+      .where(eq(schema.internalNotes.conversationId, conversation.id))
+    expect(notes.map((n) => n.body).join(' ')).toContain('nothing at all')
+
+    // Nothing was sent to the customer, which is the one thing that must stay true.
+    const messages = await messagesOf(f, conversation.id)
+    expect(messages.filter((m) => m.senderType === 'ai')).toHaveLength(0)
+  })
+
   test('a retried webhook does not produce a second customer message', async () => {
     const provider = mock([{ kind: 'text', text: 'ok' }])
     const f = await fixture({ providerBaseUrl: provider.url })
