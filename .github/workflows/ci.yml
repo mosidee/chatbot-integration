@@ -65,8 +65,10 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run db:migrate
-      - run: bun run test
+      # The console must be built before the tests: the routing contract asserts that the
+      # API serves it, which it cannot do without the assets.
       - run: bun run build:web
+      - run: bun run test
 
   e2e:
     name: browser tests
