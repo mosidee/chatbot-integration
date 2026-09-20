@@ -143,6 +143,9 @@ const th = {
     typeModelIn: 'พิมพ์ชื่อรุ่นเอง...',
     backToList: 'เลือกจากรายการ',
     unlisted: 'ไม่อยู่ในรายการ',
+    sendDimensions: 'ส่งค่า dimensions ไปกับคำขอ embedding',
+    sendDimensionsHint:
+      'ปิดได้ถ้าผู้ให้บริการไม่รับค่านี้ โมเดลจะตอบกลับด้วยขนาดมาตรฐานของตัวเอง ระบบยังตรวจขนาดให้อยู่',
     none: 'ไม่ใช้',
     webhookUrl: 'ที่อยู่ Webhook',
     connectLine: 'เชื่อมต่อ LINE',
@@ -310,6 +313,9 @@ const en: typeof th = {
     typeModelIn: 'Type a model id...',
     backToList: 'List',
     unlisted: 'not listed',
+    sendDimensions: 'Send the dimensions parameter with embedding requests',
+    sendDimensionsHint:
+      'Turn this off for a provider that rejects the field. The model then answers at its own native size, which is still checked.',
     none: 'None',
     webhookUrl: 'Webhook URL',
     connectLine: 'Connect LINE',

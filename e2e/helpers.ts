@@ -79,5 +79,29 @@ export async function customerSays(
   if (!response.ok()) throw new Error(`Simulator send failed: ${response.status()}`)
 }
 
-export const uniqueCustomer = (label: string): string =>
-  `e2e-${label}-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+export const uniqueCustomer = (label: string): string => `e2e-${label}-${uniqueToken()}`
+
+/**
+ * A token unique to one run, and deliberately not a plain run of digits.
+ *
+ * `Date.now()` is thirteen digits, which is the length of a Thai national ID, and about one
+ * in ten such numbers satisfies its checksum. Redaction then masks it before it is stored,
+ * the text a test looks for never appears, and the suite fails roughly one run in ten while
+ * the product is behaving exactly as designed.
+ */
+export const uniqueToken = (): string =>
+  `r${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`
+
+/** Return the embedding slot to its default: no provider, and the dimensions field sent. */
+export async function resetEmbedSlot(request: APIRequestContext): Promise<void> {
+  const response = await request.put(`${API_URL}/api/v1/settings/task-slots/embed`, {
+    data: {
+      primaryProviderId: null,
+      primaryModel: null,
+      fallbackProviderId: null,
+      fallbackModel: null,
+      params: { sendDimensions: true },
+    },
+  })
+  if (!response.ok()) throw new Error(`Resetting the embed slot failed: ${response.status()}`)
+}

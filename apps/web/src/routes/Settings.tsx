@@ -252,6 +252,15 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
   )
 }
 
+type SlotBody = {
+  primaryProviderId: string | null
+  primaryModel: string | null
+  fallbackProviderId: string | null
+  fallbackModel: string | null
+  /** Merged by the API rather than replacing what the slot holds. */
+  params?: Record<string, unknown>
+}
+
 function TaskSlotsCard({
   slots,
   providers,
@@ -265,13 +274,13 @@ function TaskSlotsCard({
   const queryClient = useQueryClient()
 
   const save = useMutation({
-    mutationFn: ({ task, body }: { task: string; body: Record<string, unknown> }) =>
+    mutationFn: ({ task, body }: { task: string; body: SlotBody }) =>
       api.settings.setTaskSlot(task, body),
     onSuccess: onChange,
   })
 
-  /** A slot is stored whole, so every edit resends the three fields it did not touch. */
-  const patchSlot = (task: string, slot: TaskSlot | undefined, patch: Record<string, unknown>) =>
+  /** A slot is stored whole, so every edit resends the fields it did not touch. */
+  const patchSlot = (task: string, slot: TaskSlot | undefined, patch: Partial<SlotBody>) =>
     save.mutate({
       task,
       body: {
@@ -365,6 +374,31 @@ function TaskSlotsCard({
                 />
               </div>
             </div>
+
+            {task === 'embed' ? (
+              <label className="mt-2 flex items-start gap-2 text-[12px] text-[var(--text-muted)]">
+                {/*
+                  Uncontrolled, and remounted by its key when the saved value changes. A
+                  controlled checkbox here would snap back on click and only settle once the
+                  save returned, which reads as a control that does not work. The key also
+                  restores the box if the save fails.
+                */}
+                <input
+                  key={String(slot?.params.sendDimensions !== false)}
+                  type="checkbox"
+                  className="mt-0.5"
+                  data-testid="slot-embed-send-dimensions"
+                  defaultChecked={slot?.params.sendDimensions !== false}
+                  onChange={(e) =>
+                    patchSlot(task, slot, { params: { sendDimensions: e.target.checked } })
+                  }
+                />
+                <span>
+                  {t('settings.sendDimensions')}
+                  <span className="block">{t('settings.sendDimensionsHint')}</span>
+                </span>
+              </label>
+            ) : null}
           </div>
         )
       })}

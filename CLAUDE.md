@@ -112,6 +112,10 @@ without spending money.
   Browser tests run through `bun run test:e2e`.
 - Browser tests find controls by `data-testid`, not by visible text: the console defaults to
   Thai, so label matchers would depend on the active language.
+- A browser test must not put a bare thirteen-digit number in message text. `Date.now()` is
+  thirteen digits, and about one in ten of those satisfies the Thai national ID checksum, so
+  redaction masks it, the text the test waits for never appears, and the suite fails one run
+  in ten while the product is correct. Use `uniqueToken()` from the e2e helpers.
 - `DROP SCHEMA public CASCADE` leaves Drizzle's journal in its own `drizzle` schema, so the
   next migrate is a no-op against an empty database that claims to be migrated. `bun run
   db:reset` drops both, and refuses to run against production or a non-local host.
