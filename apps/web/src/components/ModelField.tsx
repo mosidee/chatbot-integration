@@ -182,64 +182,89 @@ export function ModelField({
 /**
  * Calling one model once, to find out whether the gateway will actually serve it.
  *
- * Rendered across the whole slot row rather than beside the model, because a provider's
- * refusal is a sentence, not a word, and the fix depends on reading it: an unmapped model
- * id, an entitlement the account lacks and a credential of the wrong kind all look the
- * same until you see what the provider said.
+ * The button sits beside the model it tests, and the answer goes on the line below,
+ * because a refusal is a sentence rather than a word: an unmapped model id, an entitlement
+ * the account lacks and a credential of the wrong kind all look the same until you read
+ * what the provider said.
  */
-export function ModelVerify({
-  providerId,
-  model,
-  task,
-  label,
-  sendDimensions,
-  testId,
-}: {
+export type ModelVerification = ReturnType<typeof useModelVerification>
+
+export function useModelVerification(input: {
   providerId: string | null
   model: string | null
   task: string
-  label: string
   sendDimensions?: boolean
-  testId: string
 }) {
-  const { t } = useTranslation()
   // Not cached: what the gateway serves can change without anything here changing.
-  const verify = useMutation({
+  const mutation = useMutation({
     mutationFn: (): Promise<VerifyResult> =>
-      api.settings.verifyModel(providerId as string, {
-        model: model as string,
-        task,
-        sendDimensions,
+      api.settings.verifyModel(input.providerId as string, {
+        model: input.model as string,
+        task: input.task,
+        sendDimensions: input.sendDimensions,
       }),
   })
 
-  if (!providerId || !model) return null
+  return {
+    available: Boolean(input.providerId && input.model),
+    isPending: mutation.isPending,
+    result: mutation.data,
+    run: () => mutation.mutate(),
+  }
+}
+
+export function VerifyButton({
+  verification,
+  label,
+  testId,
+}: {
+  verification: ModelVerification
+  label: string
+  testId: string
+}) {
+  const { t } = useTranslation()
+
+  // Rendered even with nothing to test, so the two rows of a slot keep the same column
+  // widths. A button that appears and disappears made the provider and model controls jump
+  // width between the primary and fallback lines.
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      // A fixed width in both languages: "primary" and "fallback" are different lengths,
+      // and without it the two rows of a slot end their selects at different points.
+      className="h-8 w-[104px] shrink-0 px-2 text-[12px]"
+      data-testid={`${testId}-verify`}
+      disabled={!verification.available || verification.isPending}
+      onClick={verification.run}
+    >
+      {verification.isPending ? t('settings.verifying') : `${t('settings.verify')} ${label}`}
+    </Button>
+  )
+}
+
+export function VerifyMessage({
+  verification,
+  testId,
+}: {
+  verification: ModelVerification
+  testId: string
+}) {
+  const { t } = useTranslation()
+  const result = verification.result
+  if (!result) return null
 
   return (
-    <div className="mt-1.5 flex items-start gap-2">
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-6 shrink-0 px-1.5 text-[11px]"
-        data-testid={`${testId}-verify`}
-        disabled={verify.isPending}
-        onClick={() => verify.mutate()}
-      >
-        {verify.isPending ? t('settings.verifying') : `${t('settings.verify')} ${label}`}
-      </Button>
-      {verify.data ? (
-        <p
-          className={cn(
-            'min-w-0 break-words pt-0.5 text-[11px]',
-            verify.data.ok ? 'text-emerald-600' : 'text-red-600',
-          )}
-          data-testid={`${testId}-verify-result`}
-        >
-          {verify.data.ok
-            ? `${t('settings.verifyOk')} (${verify.data.detail})`
-            : `${t('settings.verifyFailed')}: ${verify.data.error}`}
-        </p>
-      ) : null}
-    </div>
+    <p
+      className={cn(
+        'mt-1 break-words text-[11px]',
+        result.ok ? 'text-emerald-600' : 'text-red-600',
+      )}
+      data-testid={`${testId}-verify-result`}
+    >
+      {result.ok
+        ? `${t('settings.verifyOk')} (${result.detail})`
+        : `${t('settings.verifyFailed')}: ${result.error}`}
+    </p>
   )
 }

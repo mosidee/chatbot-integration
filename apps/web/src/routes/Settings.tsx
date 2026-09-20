@@ -4,9 +4,11 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ModelField,
-  ModelVerify,
   refreshProviderModels,
+  useModelVerification,
   useProviderModels,
+  VerifyButton,
+  VerifyMessage,
 } from '../components/ModelField'
 import { Button, Card, cn, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
 import { api, type Channel, type CredentialCheck, type Provider, type TaskSlot } from '../lib/api'
@@ -266,6 +268,65 @@ type SlotBody = {
   params?: Record<string, unknown>
 }
 
+/**
+ * One target of a task slot: the provider, the model, and a button that tests exactly that
+ * pair. Primary and fallback each get their own line, which is what leaves room for the
+ * test button beside the model rather than stranded below it.
+ */
+function SlotTargetRow({
+  testId,
+  task,
+  label,
+  providers,
+  providerId,
+  model,
+  sendDimensions,
+  onProviderChange,
+  onModelChange,
+}: {
+  testId: string
+  task: string
+  label: string
+  providers: Provider[]
+  providerId: string | null
+  model: string | null
+  sendDimensions: boolean
+  onProviderChange: (id: string | null) => void
+  onModelChange: (model: string | null) => void
+}) {
+  const { t } = useTranslation()
+  const verification = useModelVerification({ providerId, model, task, sendDimensions })
+
+  return (
+    <div className="mt-1.5">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <select
+          className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
+          data-testid={`${testId}-provider`}
+          aria-label={label}
+          value={providerId ?? ''}
+          onChange={(e) => onProviderChange(e.target.value || null)}
+        >
+          <option value="">{t('settings.none')}</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <ModelField
+          testId={`${testId}-model`}
+          providerId={providerId}
+          value={model}
+          onSave={onModelChange}
+        />
+        <VerifyButton verification={verification} label={label} testId={`${testId}-model`} />
+      </div>
+      <VerifyMessage verification={verification} testId={`${testId}-model`} />
+    </div>
+  )
+}
+
 function TaskSlotsCard({
   slots,
   providers,
@@ -330,71 +391,27 @@ function TaskSlotsCard({
         return (
           <div key={task} className="rounded-lg border border-[var(--border)] p-2.5">
             <div className="mb-1.5 font-mono text-[12px] font-medium">{task}</div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div className="flex min-w-0 gap-1.5">
-                <select
-                  className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
-                  data-testid={`slot-${task}-primary-provider`}
-                  value={slot?.primaryProviderId ?? ''}
-                  onChange={(e) =>
-                    patchSlot(task, slot, { primaryProviderId: e.target.value || null })
-                  }
-                >
-                  <option value="">{t('settings.none')}</option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <ModelField
-                  testId={`slot-${task}-primary-model`}
-                  providerId={slot?.primaryProviderId ?? null}
-                  value={slot?.primaryModel ?? null}
-                  onSave={(model) => patchSlot(task, slot, { primaryModel: model })}
-                />
-              </div>
-
-              <div className="flex min-w-0 gap-1.5">
-                <select
-                  className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
-                  data-testid={`slot-${task}-fallback-provider`}
-                  value={slot?.fallbackProviderId ?? ''}
-                  onChange={(e) =>
-                    patchSlot(task, slot, { fallbackProviderId: e.target.value || null })
-                  }
-                >
-                  <option value="">{t('settings.none')}</option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <ModelField
-                  testId={`slot-${task}-fallback-model`}
-                  providerId={slot?.fallbackProviderId ?? null}
-                  value={slot?.fallbackModel ?? null}
-                  onSave={(model) => patchSlot(task, slot, { fallbackModel: model })}
-                />
-              </div>
-            </div>
-
-            <ModelVerify
-              testId={`slot-${task}-primary-model`}
+            <SlotTargetRow
+              testId={`slot-${task}-primary`}
               task={task}
               label={t('settings.primary')}
+              providers={providers}
               providerId={slot?.primaryProviderId ?? null}
               model={slot?.primaryModel ?? null}
               sendDimensions={slot?.params.sendDimensions !== false}
+              onProviderChange={(id) => patchSlot(task, slot, { primaryProviderId: id })}
+              onModelChange={(model) => patchSlot(task, slot, { primaryModel: model })}
             />
-            <ModelVerify
-              testId={`slot-${task}-fallback-model`}
+            <SlotTargetRow
+              testId={`slot-${task}-fallback`}
               task={task}
               label={t('settings.fallback')}
+              providers={providers}
               providerId={slot?.fallbackProviderId ?? null}
               model={slot?.fallbackModel ?? null}
               sendDimensions={slot?.params.sendDimensions !== false}
+              onProviderChange={(id) => patchSlot(task, slot, { fallbackProviderId: id })}
+              onModelChange={(model) => patchSlot(task, slot, { fallbackModel: model })}
             />
 
             {task === 'embed' ? (

@@ -261,8 +261,9 @@ test('a model can be tested from settings before a customer finds out', async ({
     { timeout: 20_000 },
   )
 
-  // Nothing to test until a model is chosen, so no button appears at all.
-  await expect(page.getByTestId('slot-summarize-primary-model-verify')).toHaveCount(0)
+  // Nothing to test until a model is chosen. The button stays in place, so the two rows of
+  // a slot keep the same column widths, but it cannot be pressed.
+  await expect(page.getByTestId('slot-summarize-primary-model-verify')).toBeDisabled()
 })
 
 test('an agent opens a customer photo full size', async ({ page, request }) => {
