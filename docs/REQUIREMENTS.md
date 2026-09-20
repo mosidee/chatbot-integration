@@ -44,7 +44,8 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] Embeddable web chat widget (script tag), anonymous or **signed-token (JWT) identified** user
 - [v1] Channel settings: paste credentials, show webhook URL, signature status, "send test message"
 - [v1] Webhook ingestion: verify → persist raw event → enqueue → 200 within ms; idempotency on platform message IDs
-- [later] "Connect Facebook Page" OAuth flow; LINE Login; other channels (WhatsApp, Instagram, Telegram)
+- [later] "Connect Facebook Page" OAuth flow; LINE Login
+- [later] Additional channels, in order of ease: **Instagram DM** (Meta Graph API, same review as Messenger), **Telegram** (Bot API, no review), **WhatsApp** (Meta Cloud API; needs business number, Business Verification, 24 h customer-service window and paid templates outside it), **TikTok** (Business Messaging API is partner-gated via TikTok Business Center, region-restricted in EEA/CH/UK; TikTok Shop Customer Service API is a separate, harder approval). Design hooks now: per-conversation messaging-window expiry, and a template outbound message type
 - [later] Rich templates (LINE Flex, Messenger generic template) via channel-neutral card schema
 
 ### 3.2 Conversation and handoff
