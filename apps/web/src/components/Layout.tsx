@@ -16,6 +16,7 @@ export function Layout() {
 
   const items = [
     { to: '/', label: t('nav.inbox') },
+    { to: '/knowledge', label: t('nav.knowledge') },
     { to: '/simulator', label: t('nav.simulator') },
     { to: '/settings', label: t('nav.settings') },
   ]
