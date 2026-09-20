@@ -16,6 +16,9 @@ export default defineConfig({
     proxy: {
       // The API owns cookies, so the dev server proxies rather than doing cross-origin.
       '/api': { target: 'http://localhost:3000', changeOrigin: true },
+      // The widget is served by the API. In production it shares this origin; in
+      // development the console is on Vite, so the preview needs a way through.
+      '/widget': { target: 'http://localhost:3000', changeOrigin: true },
       '/ws': { target: 'ws://localhost:3000', ws: true },
     },
   },
