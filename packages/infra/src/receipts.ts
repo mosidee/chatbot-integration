@@ -1,5 +1,5 @@
 import { type Database, schema } from '@ci/db'
-import { and, eq, inArray, lte } from 'drizzle-orm'
+import { and, desc, eq, inArray, lte } from 'drizzle-orm'
 
 /**
  * Delivery and read receipts.
@@ -51,4 +51,40 @@ export async function applyReceipt(
     .returning({ id: schema.messages.id })
 
   return updated.length
+}
+
+/**
+ * The conversation a receipt refers to, or null.
+ *
+ * Deliberately a lookup and never a create. A receipt says something about messages already
+ * sent, so if there is no identity or no conversation there is nothing it can describe.
+ * Resolving one the usual way opened an empty conversation every time a receipt arrived
+ * after its conversation had been resolved, which is exactly when they do arrive.
+ */
+export async function conversationForReceipt(
+  db: Database,
+  input: { channelId: string; externalId: string },
+): Promise<string | null> {
+  const [identity] = await db
+    .select({ id: schema.channelIdentities.id })
+    .from(schema.channelIdentities)
+    .where(
+      and(
+        eq(schema.channelIdentities.channelId, input.channelId),
+        eq(schema.channelIdentities.externalId, input.externalId),
+      ),
+    )
+    .limit(1)
+  if (!identity) return null
+
+  // The most recent one, open or resolved: a receipt can land after a conversation closes
+  // and the messages it covers are still in there.
+  const [conversation] = await db
+    .select({ id: schema.conversations.id })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.channelIdentityId, identity.id))
+    .orderBy(desc(schema.conversations.createdAt))
+    .limit(1)
+
+  return conversation?.id ?? null
 }
