@@ -26,6 +26,7 @@ function fakePorts(failing: Partial<Record<keyof EffectPorts, Error>> = {}) {
     notifyAgents: record('notifyAgents'),
     scheduleWaitingHumanTimeout: record('scheduleWaitingHumanTimeout'),
     cancelWaitingHumanTimeout: record('cancelWaitingHumanTimeout'),
+    enqueueSummary: record('enqueueSummary'),
   } as unknown as EffectPorts
 
   return { ports, calls }
@@ -51,6 +52,7 @@ describe('applyEffects', () => {
       { type: 'notify_agents', reason: 'handoff' },
       { type: 'schedule_waiting_human_timeout', minutes: 15 },
       { type: 'cancel_waiting_human_timeout' },
+      { type: 'enqueue_summary' },
       { type: 'send_acknowledgement', language: 'th' },
     ]
 
@@ -63,6 +65,7 @@ describe('applyEffects', () => {
       'notifyAgents',
       'scheduleWaitingHumanTimeout',
       'cancelWaitingHumanTimeout',
+      'enqueueSummary',
       'sendAcknowledgement',
     ])
   })

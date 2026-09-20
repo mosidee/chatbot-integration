@@ -18,14 +18,18 @@
     "db:migrate": "cd packages/db && bun run migrate",
     "db:seed": "cd packages/db && bun run seed",
     "auth:generate": "bunx auth@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts --yes",
-    "test": "bun test",
+    "test": "bun test apps packages",
     "typecheck": "tsc -p tsconfig.json && cd apps/web && tsc -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "build:web": "cd apps/web && bun run build"
+    "build:web": "cd apps/web && bun run build",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "db:reset": "bun run scripts/db-reset.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@playwright/test": "1.63.0",
     "@types/bun": "1.4.2",
     "concurrently": "10.0.5",
     "typescript": "5.9.3"

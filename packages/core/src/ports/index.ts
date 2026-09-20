@@ -29,6 +29,8 @@ export type EffectPorts = {
   notifyAgents(ctx: EffectContext, reason: NotifyReason): Promise<void>
   scheduleWaitingHumanTimeout(ctx: EffectContext, minutes: number): Promise<void>
   cancelWaitingHumanTimeout(ctx: EffectContext): Promise<void>
+  /** Queue a summary rewrite. The implementation resolves the customer from the conversation. */
+  enqueueSummary(ctx: EffectContext): Promise<void>
 }
 
 /** Object storage, used to read media before handing it to a vision model. */

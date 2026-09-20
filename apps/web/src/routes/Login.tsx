@@ -33,6 +33,7 @@ export function Login() {
             <Label htmlFor="email">{t('auth.email')}</Label>
             <Input
               id="email"
+              data-testid="login-email"
               type="email"
               autoComplete="username"
               required
@@ -44,6 +45,7 @@ export function Login() {
             <Label htmlFor="password">{t('auth.password')}</Label>
             <Input
               id="password"
+              data-testid="login-password"
               type="password"
               autoComplete="current-password"
               required
@@ -52,7 +54,13 @@ export function Login() {
             />
           </div>
           {error ? <ErrorNote message={error} /> : null}
-          <Button type="submit" variant="primary" className="w-full" disabled={busy}>
+          <Button
+            type="submit"
+            data-testid="login-submit"
+            variant="primary"
+            className="w-full"
+            disabled={busy}
+          >
             {t('auth.signIn')}
           </Button>
         </form>

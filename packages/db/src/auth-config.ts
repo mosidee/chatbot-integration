@@ -33,6 +33,18 @@ function baseOptions(db: AnyDrizzle, overrides: AuthOverrides = {}) {
     database: drizzleAdapter(db, { provider: 'pg' as const, schema }),
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL ?? 'http://localhost:3000',
+    /**
+     * Origins allowed to call the auth endpoints.
+     *
+     * In development the console runs on Vite's port and proxies to the API on another, so
+     * the browser's Origin never matches baseURL and every sign-in is rejected as Forbidden.
+     * In production both are the same host and this is simply that host.
+     */
+    trustedOrigins: [
+      process.env.BETTER_AUTH_URL ?? 'http://localhost:3000',
+      process.env.PUBLIC_WEB_URL ?? 'http://localhost:5173',
+      process.env.PUBLIC_API_URL ?? 'http://localhost:3000',
+    ].filter((origin, index, all) => all.indexOf(origin) === index),
     emailAndPassword: {
       enabled: true,
       // Invite-only: the API exposes no public sign-up route.

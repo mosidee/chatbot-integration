@@ -37,6 +37,8 @@ export const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
   API_PORT: z.coerce.number().int().positive().default(3000),
+  /** The worker serves only a health endpoint, for container checks and test readiness. */
+  WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3001),
   PUBLIC_API_URL: z.string().default('http://localhost:3000'),
   PUBLIC_WEB_URL: z.string().default('http://localhost:5173'),
   WEBHOOK_BASE_URL: z.string().default('http://localhost:3000'),

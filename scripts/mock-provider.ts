@@ -4,10 +4,57 @@
  */
 const port = Number(process.env.MOCK_PORT ?? 4010)
 
+function trigramEmbedding(text: string, dimensions: number): number[] {
+  const vector = new Array<number>(dimensions).fill(0)
+  const normalised = ` ${text.toLowerCase().trim()} `
+
+  for (let i = 0; i < normalised.length - 2; i += 1) {
+    const gram = normalised.slice(i, i + 3)
+    let hash = 2166136261
+    for (let c = 0; c < gram.length; c += 1) {
+      hash ^= gram.charCodeAt(c)
+      hash = Math.imul(hash, 16777619)
+    }
+    const slot = Math.abs(hash) % dimensions
+    vector[slot] = (vector[slot] ?? 0) + 1
+  }
+
+  const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0))
+  if (magnitude === 0) {
+    vector[0] = 1
+    return vector
+  }
+  return vector.map((v) => v / magnitude)
+}
+
 const server = Bun.serve({
   port,
   async fetch(request) {
     const url = new URL(request.url)
+
+    // Deterministic embeddings: character trigrams hashed into a fixed-size vector, then
+    // normalised, so text sharing substrings lands nearby. Enough for retrieval to behave
+    // meaningfully without calling a real provider.
+    if (url.pathname.endsWith('/embeddings')) {
+      const payload = (await request.json()) as {
+        input?: string | string[]
+        model?: string
+        dimensions?: number
+      }
+      const inputs = Array.isArray(payload.input) ? payload.input : [payload.input ?? '']
+      const dimensions = payload.dimensions ?? 1024
+
+      return Response.json({
+        object: 'list',
+        model: payload.model ?? 'mock-embed-model',
+        data: inputs.map((text, index) => ({
+          object: 'embedding',
+          index,
+          embedding: trigramEmbedding(text, dimensions),
+        })),
+        usage: { prompt_tokens: 10, total_tokens: 10 },
+      })
+    }
 
     if (url.pathname.endsWith('/models')) {
       return Response.json({ object: 'list', data: [{ id: 'mock-model', object: 'model' }] })

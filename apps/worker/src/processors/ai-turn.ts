@@ -14,14 +14,17 @@ import type { AiTurnJob, Runtime } from '@ci/infra'
 import {
   addConversationTags,
   addInternalNote,
+  createTurnRetrieval,
   loadAiConfig,
   loadTurnContext,
   loadWorkspaceSettings,
   mergeCustomerFields,
   recordTrace,
+  resolveExternalRetrieval,
   storeMessage,
   updateConversation,
   usableSlot,
+  workspaceHasKnowledge,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
 import { eq } from 'drizzle-orm'
@@ -81,6 +84,34 @@ export async function processAiTurn(
   const visionSlot = usableSlot(aiConfig, 'vision')
   const images = visionSlot ? await readImages(runtime, recentMessages) : []
 
+  // Retrieval is bound to this workspace, customer and conversation before the model sees
+  // it, so the tools it is offered cannot widen their own scope.
+  const embedSlot = usableSlot(aiConfig, 'embed')
+  const retrieval = createTurnRetrieval(db, {
+    workspaceId: job.workspaceId,
+    customerId: conversation.customerId,
+    conversationId: job.conversationId,
+    language: customer.primaryLanguage ?? settings.defaultLanguage,
+    channelType: context.channel.type,
+    embedSlot,
+    rerankSlot: usableSlot(aiConfig, 'rerank'),
+    externalRetrieval: await resolveExternalRetrieval(
+      settings.externalRetrieval,
+      env.APP_SECRET_KEY,
+    ),
+    hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
+  })
+
+  // Pre-fetch for the newest customer message so the model has the obvious facts in hand
+  // without spending a tool call on them.
+  const newestCustomerText = [...recentMessages]
+    .reverse()
+    .find((m) => m.senderType === 'customer')?.text
+  const prefetched =
+    retrieval.enabled.knowledge && newestCustomerText
+      ? await retrieval.prefetch(newestCustomerText).catch(() => [])
+      : []
+
   const input: AgentTurnInput = {
     workspace: { persona: settings.persona, defaultLanguage: settings.defaultLanguage },
     customer: {
@@ -91,7 +122,7 @@ export async function processAiTurn(
     },
     recentMessages: recentMessages.map(toTurn),
     internalNotes: notes.map((n) => ({ body: n.body, at: n.createdAt })),
-    retrieved: [],
+    retrieved: prefetched,
     images,
   }
 
@@ -101,6 +132,10 @@ export async function processAiTurn(
     visionSlot,
     prices: aiConfig.prices,
     mode: job.deliver === 'draft' ? 'suggest' : 'answer',
+    ...(retrieval.enabled.knowledge ? { searchKnowledge: retrieval.searchKnowledge } : {}),
+    ...(retrieval.enabled.pastConversations
+      ? { searchPastConversations: retrieval.searchPastConversations }
+      : {}),
   })
 
   const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)

@@ -55,6 +55,8 @@ export type Effect =
   | { type: 'schedule_waiting_human_timeout'; minutes: number }
   /** Cancel a previously scheduled fallback check. */
   | { type: 'cancel_waiting_human_timeout' }
+  /** Fold the conversation into the customer's rolling summary and index it for recall. */
+  | { type: 'enqueue_summary' }
 
 export type TransitionOptions = {
   /** Minutes before a `waiting_human` conversation gets an AI fallback. Null disables it. */
@@ -181,7 +183,10 @@ export function transition(
     case 'set_status':
       return {
         patch: { status: event.status },
-        effects: event.status === 'resolved' ? [{ type: 'cancel_waiting_human_timeout' }] : [],
+        effects:
+          event.status === 'resolved'
+            ? [{ type: 'cancel_waiting_human_timeout' }, { type: 'enqueue_summary' }]
+            : [],
       }
 
     case 'waiting_human_timeout': {

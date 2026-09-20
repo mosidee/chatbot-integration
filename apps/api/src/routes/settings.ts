@@ -31,7 +31,25 @@ export function settingsRoutes(ctx: ApiContext) {
             .limit(1)
           const workspace = rows[0]
           if (!workspace) return status(404, { error: 'Workspace not found' })
-          return { settings: workspace.settings }
+
+          // A viewer can read settings, so the external retrieval credential is reported as
+          // present rather than returned, exactly as provider keys are.
+          const { externalRetrieval, ...rest } = workspace.settings
+          return {
+            settings: {
+              ...rest,
+              externalRetrieval: externalRetrieval
+                ? {
+                    kind: externalRetrieval.kind,
+                    baseUrl: externalRetrieval.baseUrl,
+                    datasetId: externalRetrieval.datasetId,
+                    topK: externalRetrieval.topK,
+                    scoreThreshold: externalRetrieval.scoreThreshold,
+                    hasApiKey: Boolean(externalRetrieval.apiKeyEncrypted),
+                  }
+                : null,
+            },
+          }
         },
         { auth: 'viewer' },
       )
@@ -47,7 +65,29 @@ export function settingsRoutes(ctx: ApiContext) {
           const workspace = rows[0]
           if (!workspace) return status(404, { error: 'Workspace not found' })
 
-          const merged = { ...workspace.settings, ...body }
+          const { externalRetrieval: incomingExternal, ...plainBody } = body
+          const merged: typeof workspace.settings = { ...workspace.settings, ...plainBody }
+
+          if (incomingExternal !== undefined) {
+            merged.externalRetrieval = incomingExternal
+              ? {
+                  kind: incomingExternal.kind,
+                  baseUrl: incomingExternal.baseUrl,
+                  datasetId: incomingExternal.datasetId ?? null,
+                  ...(incomingExternal.topK !== undefined ? { topK: incomingExternal.topK } : {}),
+                  ...(incomingExternal.scoreThreshold !== undefined
+                    ? { scoreThreshold: incomingExternal.scoreThreshold }
+                    : {}),
+                  // An omitted key keeps whatever was stored; an empty string clears it.
+                  apiKeyEncrypted:
+                    incomingExternal.apiKey === undefined
+                      ? (workspace.settings.externalRetrieval?.apiKeyEncrypted ?? null)
+                      : incomingExternal.apiKey
+                        ? await encryptSecret(incomingExternal.apiKey, env.APP_SECRET_KEY)
+                        : null,
+                }
+              : null
+          }
           await db
             .update(schema.workspaces)
             .set({ settings: merged, updatedAt: new Date() })
@@ -80,6 +120,18 @@ export function settingsRoutes(ctx: ApiContext) {
                   z.object({ open: z.string(), close: z.string() }).optional(),
                 ),
               })
+              .optional(),
+            externalRetrieval: z
+              .object({
+                kind: z.enum(['dify', 'ragflow', 'generic']),
+                baseUrl: z.string().url(),
+                /** Omit to keep the stored key; send an empty string to clear it. */
+                apiKey: z.string().optional(),
+                datasetId: z.string().nullable().optional(),
+                topK: z.number().int().min(1).max(50).optional(),
+                scoreThreshold: z.number().min(0).max(1).optional(),
+              })
+              .nullable()
               .optional(),
           }),
         },
@@ -375,6 +427,63 @@ export function settingsRoutes(ctx: ApiContext) {
             config: z.record(z.string(), z.unknown()).optional(),
           }),
         },
+      )
+
+      // ---- canned responses --------------------------------------------------------
+      .get(
+        '/canned-responses',
+        async ({ workspaceId }) => {
+          const responses = await db
+            .select()
+            .from(schema.cannedResponses)
+            .where(eq(schema.cannedResponses.workspaceId, workspaceId))
+          return { responses }
+        },
+        { auth: 'agent' },
+      )
+
+      .post(
+        '/canned-responses',
+        async ({ workspaceId, body, status }) => {
+          const id = newId()
+          try {
+            await db.insert(schema.cannedResponses).values({
+              id,
+              workspaceId,
+              // Stored without the slash so the composer can match what an agent types.
+              shortcut: body.shortcut.replace(/^\//, ''),
+              language: body.language ?? null,
+              body: body.body,
+            })
+          } catch {
+            return status(409, { error: 'That shortcut is already in use' })
+          }
+          return { id }
+        },
+        {
+          auth: 'agent',
+          body: z.object({
+            shortcut: z.string().min(1).max(40),
+            language: languageSchema.nullable().optional(),
+            body: z.string().min(1).max(4000),
+          }),
+        },
+      )
+
+      .delete(
+        '/canned-responses/:id',
+        async ({ workspaceId, params }) => {
+          await db
+            .delete(schema.cannedResponses)
+            .where(
+              and(
+                eq(schema.cannedResponses.id, params.id),
+                eq(schema.cannedResponses.workspaceId, workspaceId),
+              ),
+            )
+          return { ok: true }
+        },
+        { auth: 'agent', params: z.object({ id: z.string() }) },
       )
 
       // ---- people ----------------------------------------------------------------

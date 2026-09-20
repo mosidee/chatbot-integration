@@ -200,6 +200,13 @@ export type Channel = {
   webhookUrl: string
 }
 
+export type CannedResponse = {
+  id: string
+  shortcut: string
+  language: Language | null
+  body: string
+}
+
 export type Member = {
   userId: string
   role: string
@@ -227,6 +234,48 @@ export type UploadResult = {
   mime: string
   sizeBytes: number
   fileName: string
+}
+
+export type KnowledgeSource = {
+  id: string
+  kind: 'qa' | 'article' | 'file' | 'url'
+  title: string
+  status: 'pending' | 'processing' | 'ready' | 'failed'
+  error: string | null
+  mime: string | null
+  byteSize: number | null
+  meta: Record<string, unknown>
+  createdAt: string
+  entryCount: number
+  chunkCount: number
+}
+
+export type KnowledgeEntry = {
+  id: string
+  sourceId: string
+  language: Language
+  question: string | null
+  body: string
+  tags: string[]
+  channelTypes: string[]
+  enabled: boolean
+}
+
+export type SearchHit = {
+  id: string
+  sourceId: string
+  sourceTitle: string
+  text: string
+  score: number
+  denseScore: number | null
+  keywordScore: number | null
+}
+
+export type SearchResult = {
+  embeddingModel: string | null
+  chunks: SearchHit[]
+  dense: SearchHit[]
+  keyword: SearchHit[]
 }
 
 export const api = {
@@ -301,6 +350,53 @@ export const api = {
       ),
   },
 
+  knowledge: {
+    sources: () => get<{ sources: KnowledgeSource[] }>('/v1/knowledge/sources'),
+    createSource: (body: {
+      title: string
+      language: Language
+      question?: string | null
+      body: string
+      tags?: string[]
+      channelTypes?: string[]
+    }) => post<{ sourceId: string }>('/v1/knowledge/sources', body),
+    uploadFile: async (file: File): Promise<{ sourceId: string }> => {
+      const form = new FormData()
+      form.append('file', file)
+      const response = await fetch('/api/v1/knowledge/sources/file', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      })
+      if (!response.ok) {
+        let message = response.statusText
+        try {
+          const body = (await response.json()) as { error?: string }
+          if (body.error) message = body.error
+        } catch {
+          // Keep the status text.
+        }
+        throw new ApiError(response.status, message)
+      }
+      return (await response.json()) as { sourceId: string }
+    },
+    entries: (sourceId: string) =>
+      get<{ entries: KnowledgeEntry[] }>(`/v1/knowledge/sources/${sourceId}/entries`),
+    updateEntry: (id: string, body: Record<string, unknown>) =>
+      patch<{ ok: true }>(`/v1/knowledge/entries/${id}`, body),
+    reindex: (sourceId: string) => post<{ ok: true }>(`/v1/knowledge/sources/${sourceId}/reindex`),
+    deleteSource: (sourceId: string) => del<{ ok: true }>(`/v1/knowledge/sources/${sourceId}`),
+    search: (body: { query: string; language?: Language | null; limit?: number }) =>
+      post<SearchResult>('/v1/knowledge/search', body),
+    fromMessage: (body: {
+      messageId: string
+      title: string
+      question: string
+      body: string
+      language: Language
+    }) => post<{ sourceId: string }>('/v1/knowledge/from-message', body),
+  },
+
   settings: {
     workspace: () => get<{ settings: WorkspaceSettings }>('/v1/settings/workspace'),
     updateWorkspace: (patchBody: Partial<WorkspaceSettings>) =>
@@ -323,6 +419,10 @@ export const api = {
       put<{ ok: true }>(`/v1/settings/task-slots/${task}`, body),
     channels: () => get<{ channels: Channel[] }>('/v1/settings/channels'),
     members: () => get<{ members: Member[] }>('/v1/settings/members'),
+    cannedResponses: () => get<{ responses: CannedResponse[] }>('/v1/settings/canned-responses'),
+    createCannedResponse: (body: { shortcut: string; body: string; language?: Language | null }) =>
+      post<{ id: string }>('/v1/settings/canned-responses', body),
+    deleteCannedResponse: (id: string) => del<{ ok: true }>(`/v1/settings/canned-responses/${id}`),
   },
 
   auth: {

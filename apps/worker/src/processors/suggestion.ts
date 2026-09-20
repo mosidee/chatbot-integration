@@ -2,11 +2,14 @@ import { type AgentTurnInput, type EffectPorts, type Logger, runAgentTurn } from
 import { newId, schema } from '@ci/db'
 import type { Runtime, SuggestionJob } from '@ci/infra'
 import {
+  createTurnRetrieval,
   loadAiConfig,
   loadTurnContext,
   loadWorkspaceSettings,
   recordTrace,
+  resolveExternalRetrieval,
   usableSlot,
+  workspaceHasKnowledge,
 } from '@ci/infra'
 
 /**
@@ -37,7 +40,33 @@ export async function processSuggestion(
     return
   }
 
-  const { customer, notes, recentMessages } = context
+  const { conversation, customer, notes, recentMessages } = context
+
+  // The agent's draft is grounded in the same knowledge the AI would have used, so what a
+  // human sends and what the AI would have sent cannot quietly diverge.
+  const embedSlot = usableSlot(aiConfig, 'embed')
+  const retrieval = createTurnRetrieval(db, {
+    workspaceId: job.workspaceId,
+    customerId: conversation.customerId,
+    conversationId: job.conversationId,
+    language: customer.primaryLanguage ?? settings.defaultLanguage,
+    channelType: context.channel.type,
+    embedSlot,
+    rerankSlot: usableSlot(aiConfig, 'rerank'),
+    externalRetrieval: await resolveExternalRetrieval(
+      settings.externalRetrieval,
+      env.APP_SECRET_KEY,
+    ),
+    hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
+  })
+
+  const newestCustomerText = [...recentMessages]
+    .reverse()
+    .find((m) => m.senderType === 'customer')?.text
+  const prefetched =
+    retrieval.enabled.knowledge && newestCustomerText
+      ? await retrieval.prefetch(newestCustomerText).catch(() => [])
+      : []
 
   const input: AgentTurnInput = {
     workspace: { persona: settings.persona, defaultLanguage: settings.defaultLanguage },
@@ -60,7 +89,7 @@ export async function processSuggestion(
       at: m.createdAt,
     })),
     internalNotes: notes.map((n) => ({ body: n.body, at: n.createdAt })),
-    retrieved: [],
+    retrieved: prefetched,
     images: [],
   }
 
@@ -70,6 +99,10 @@ export async function processSuggestion(
     visionSlot: null,
     prices: aiConfig.prices,
     mode: 'suggest',
+    ...(retrieval.enabled.knowledge ? { searchKnowledge: retrieval.searchKnowledge } : {}),
+    ...(retrieval.enabled.pastConversations
+      ? { searchPastConversations: retrieval.searchPastConversations }
+      : {}),
   })
 
   const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)

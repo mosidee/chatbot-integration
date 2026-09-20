@@ -6,6 +6,7 @@ import {
   createRedis,
   createRuntime,
   type InboundJob,
+  type KnowledgeIngestJob,
   type OutboundJob,
   QUEUE_NAMES,
   type Runtime,
@@ -16,8 +17,10 @@ import { type Job, Worker } from 'bullmq'
 
 import { processAiTurn } from './processors/ai-turn'
 import { processInbound } from './processors/inbound'
+import { processKnowledgeIngest } from './processors/knowledge-ingest'
 import { processOutbound } from './processors/outbound'
 import { processSuggestion } from './processors/suggestion'
+import { processSummarize, type SummarizeJob } from './processors/summarize'
 import { processWaitingHumanTimeout } from './processors/waiting-human'
 
 /**
@@ -34,6 +37,9 @@ const CONCURRENCY = {
   suggestion: 5,
   outbound: 10,
   waiting_human: 5,
+  // Summaries are background work; they must never crowd out a customer waiting on a reply.
+  summarize: 2,
+  knowledge_ingest: 2,
 } as const
 
 function makeWorker<T>(
@@ -120,13 +126,61 @@ async function main() {
       CONCURRENCY.waiting_human,
       processWaitingHumanTimeout,
     ),
+    makeWorker<SummarizeJob>(
+      QUEUE_NAMES.summarize,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.summarize,
+      processSummarize,
+    ),
+    makeWorker<KnowledgeIngestJob>(
+      QUEUE_NAMES.knowledgeIngest,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.knowledge_ingest,
+      processKnowledgeIngest,
+    ),
   ]
 
-  logger.info('worker started', { queues: workers.length })
+  /**
+   * A health endpoint, not an API.
+   *
+   * The worker otherwise serves no HTTP, which leaves container orchestrators and test
+   * runners with no way to tell whether it is up. It reports the dependencies it actually
+   * needs rather than merely that the process is alive.
+   */
+  const health = Bun.serve({
+    port: env.WORKER_HEALTH_PORT,
+    async fetch(request) {
+      if (!new URL(request.url).pathname.startsWith('/healthz')) {
+        return new Response('not found', { status: 404 })
+      }
+      const [dbOk, redisOk] = await Promise.all([
+        runtime.db
+          .execute('select 1')
+          .then(() => true)
+          .catch(() => false),
+        runtime.redis
+          .ping()
+          .then(() => true)
+          .catch(() => false),
+      ])
+      const healthy = dbOk && redisOk
+      return Response.json(
+        { status: healthy ? 'ok' : 'degraded', db: dbOk, redis: redisOk, queues: workers.length },
+        { status: healthy ? 200 : 503 },
+      )
+    },
+  })
+
+  logger.info('worker started', { queues: workers.length, healthPort: health.port })
 
   const shutdown = async (signal: string) => {
     logger.info('shutting down', { signal })
     // Close workers first so in-flight jobs finish before their dependencies disappear.
+    health.stop(true)
     await Promise.allSettled(workers.map((w) => w.close()))
     await runtime.close()
     process.exit(0)

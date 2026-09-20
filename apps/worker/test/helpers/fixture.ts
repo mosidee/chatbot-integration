@@ -1,7 +1,9 @@
 import { loadEnv } from '@ci/config'
+import type { SlotConfig } from '@ci/core'
 import { encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import { createRuntime, type Runtime } from '@ci/infra'
+import type { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
 
 /**
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   waitingHumanFallbackMinutes: null,
   acknowledgementText: { th: 'รอสักครู่นะคะ', en: 'One moment please.' },
   modelPrices: {},
+  externalRetrieval: null,
 }
 
 export type Fixture = {
@@ -30,6 +33,8 @@ export type Fixture = {
   channelId: string
   userId: string
   providerId: string
+  /** The embed slot as core sees it, for indexing knowledge inside a test. */
+  embedSlot: () => SlotConfig
   cleanup: () => Promise<void>
 }
 
@@ -39,6 +44,8 @@ export async function createFixture(options: {
   settings?: Partial<WorkspaceSettings>
   chatModel?: string
   visionBaseUrl?: string
+  /** Configures the embed slot, which turns on knowledge retrieval and recall. */
+  embedBaseUrl?: string
 }): Promise<Fixture> {
   const env = loadEnv()
   const workspaceId = newId()
@@ -46,7 +53,7 @@ export async function createFixture(options: {
   // each other's jobs.
   const runtime = createRuntime('test', env, { queuePrefix: `{test-${workspaceId.slice(0, 8)}}` })
   const { db } = runtime
-  const slug = `test-${workspaceId.slice(0, 8)}`
+  const slug = `test-${workspaceId}`
 
   await db.insert(schema.organization).values({
     id: workspaceId,
@@ -123,6 +130,27 @@ export async function createFixture(options: {
     })
   }
 
+  if (options.embedBaseUrl) {
+    const embedProviderId = newId()
+    await db.insert(schema.providers).values({
+      id: embedProviderId,
+      workspaceId,
+      name: 'mock-embed',
+      baseUrl: options.embedBaseUrl,
+      apiKeyEncrypted: await encryptSecret('test-key', env.APP_SECRET_KEY),
+      supportsTools: false,
+      supportsVision: false,
+    })
+    await db.insert(schema.taskSlots).values({
+      id: newId(),
+      workspaceId,
+      task: 'embed',
+      primaryProviderId: embedProviderId,
+      primaryModel: 'mock-embed-model',
+      params: { maxRetries: 0 },
+    })
+  }
+
   if (options.visionBaseUrl) {
     const visionProviderId = newId()
     await db.insert(schema.providers).values({
@@ -144,12 +172,33 @@ export async function createFixture(options: {
     })
   }
 
+  const embedBaseUrl = options.embedBaseUrl
+
   return {
     runtime,
     workspaceId,
     channelId,
     userId,
     providerId,
+    embedSlot: (): SlotConfig => ({
+      task: 'embed',
+      primary: embedBaseUrl
+        ? {
+            provider: {
+              id: 'mock-embed',
+              name: 'mock-embed',
+              baseUrl: embedBaseUrl,
+              apiKey: 'test-key',
+              headers: {},
+              supportsTools: false,
+              supportsVision: false,
+            },
+            model: 'mock-embed-model',
+          }
+        : null,
+      fallback: null,
+      params: { maxRetries: 0 },
+    }),
     cleanup: async () => {
       // Drop this fixture's queues before the workspace, so no stray job outlives it.
       await Promise.allSettled(
@@ -163,12 +212,10 @@ export async function createFixture(options: {
   }
 }
 
-/** Drain a BullMQ queue's waiting jobs, returning their payloads. */
-export async function drainQueue<T>(queue: {
-  getJobs: (types: string[]) => Promise<{ data: T; remove: () => Promise<void> }[]>
-}): Promise<T[]> {
+/** Drain a BullMQ queue's pending jobs, returning their payloads. */
+export async function drainQueue<T>(queue: Queue): Promise<T[]> {
   const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized'])
-  const payloads = jobs.map((j) => j.data)
-  await Promise.all(jobs.map((j) => j.remove().catch(() => {})))
+  const payloads = jobs.map((job) => job.data as T)
+  await Promise.all(jobs.map((job) => job.remove().catch(() => {})))
   return payloads
 }

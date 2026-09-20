@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import type { NormalizedMessage } from '@ci/shared'
 import {
   DEFAULT_REDACTION,
   isLuhnValid,
   isThaiNationalId,
+  looksLikeCardNumber,
   redactMessage,
   redactText,
 } from '../src/redaction/redact'
@@ -22,6 +24,26 @@ describe('checksum helpers', () => {
 
   test('rejects a card-length number that fails Luhn', () => {
     expect(isLuhnValid('1111222233334445')).toBe(false)
+  })
+
+  test('recognises real issuer prefixes at their real lengths', () => {
+    expect(looksLikeCardNumber('4242424242424242')).toBe(true)
+    expect(looksLikeCardNumber('5555555555554444')).toBe(true)
+    expect(looksLikeCardNumber('378282246310005')).toBe(true)
+    expect(looksLikeCardNumber('3566002020360505')).toBe(true)
+    expect(looksLikeCardNumber('6200000000000005')).toBe(true)
+  })
+
+  test('rejects numbers that pass Luhn but look nothing like a card', () => {
+    // A millisecond timestamp. Roughly one in ten random digit strings passes Luhn, so
+    // without a prefix check these would be masked and order references would be lost.
+    expect(isLuhnValid('1789892273001')).toBe(true)
+    expect(looksLikeCardNumber('1789892273001')).toBe(false)
+  })
+
+  test('rejects a real prefix at a length that network never issues', () => {
+    expect(looksLikeCardNumber('4242424242424')).toBe(true)
+    expect(looksLikeCardNumber('42424242424242')).toBe(false)
   })
 
   test('rejects numbers outside card length', () => {
@@ -68,6 +90,13 @@ describe('redactText', () => {
 
   test('leaves order references alone even at card length', () => {
     const text = 'order 1111222233334445 please check'
+    expect(redactText(text).text).toBe(text)
+    expect(redactText(text).findings).toEqual([])
+  })
+
+  test('leaves a Luhn-valid number that is not card-shaped alone', () => {
+    // A timestamp that happens to satisfy Luhn. Masking it would lose an order reference.
+    const text = 'reference 1789892273001 for your records'
     expect(redactText(text).text).toBe(text)
     expect(redactText(text).findings).toEqual([])
   })
@@ -131,14 +160,14 @@ describe('redactMessage', () => {
   })
 
   test('passes stickers and events through unchanged', () => {
-    const sticker = {
+    const sticker: NormalizedMessage = {
       kind: 'sticker',
       packageId: '1',
       stickerId: '2',
       keywords: ['hello'],
-    } as const
+    }
     expect(redactMessage(sticker).message).toEqual(sticker)
-    const event = { kind: 'event', event: 'follow', data: {} } as const
+    const event: NormalizedMessage = { kind: 'event', event: 'follow', data: {} }
     expect(redactMessage(event).message).toEqual(event)
   })
 

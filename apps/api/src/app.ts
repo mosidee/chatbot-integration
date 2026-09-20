@@ -4,6 +4,7 @@ import Elysia from 'elysia'
 import { authHandler } from './auth-plugin'
 import type { ApiContext } from './context'
 import { conversationRoutes } from './routes/conversations'
+import { knowledgeRoutes } from './routes/knowledge'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
 import { traceRoutes } from './routes/traces'
@@ -62,6 +63,7 @@ export function createApp(ctx: ApiContext) {
           .use(conversationRoutes(ctx))
           .use(simulatorRoutes(ctx))
           .use(settingsRoutes(ctx))
+          .use(knowledgeRoutes(ctx))
           .use(traceRoutes(ctx))
           .use(uploadRoutes(ctx))
           .use(webhookRoutes(ctx)),

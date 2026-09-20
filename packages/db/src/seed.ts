@@ -40,6 +40,7 @@ const DEFAULT_SETTINGS: WorkspaceSettings = {
     en: 'One moment please, I am passing you to a colleague.',
   },
   modelPrices: {},
+  externalRetrieval: null,
 }
 
 async function main() {

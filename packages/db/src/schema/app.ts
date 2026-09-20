@@ -12,7 +12,6 @@ import type {
 } from '@ci/shared'
 import {
   boolean,
-  customType,
   index,
   integer,
   jsonb,
@@ -36,20 +35,6 @@ import { organization, user } from './auth'
  */
 
 const ts = (name: string) => timestamp(name, { withTimezone: true })
-
-/** pgvector column. Declared here so migrations create it; used from M2 onward. */
-export const vector = customType<{ data: number[]; driverData: string }>({
-  dataType(config) {
-    const dims = (config as { dimensions?: number } | undefined)?.dimensions ?? 1024
-    return `vector(${dims})`
-  },
-  toDriver(value) {
-    return JSON.stringify(value)
-  },
-  fromDriver(value) {
-    return JSON.parse(value) as number[]
-  },
-})
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -120,6 +105,22 @@ export type WorkspaceSettings = {
   acknowledgementText: Record<Language, string>
   /** Per-model price table for cost estimates, keyed `provider:model`. */
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
+  /**
+   * Point retrieval at an existing knowledge platform instead of ours. Null uses the
+   * built-in Postgres hybrid search.
+   */
+  externalRetrieval: {
+    kind: 'dify' | 'ragflow' | 'generic'
+    baseUrl: string
+    /**
+     * AES-256-GCM, like every other credential here. The settings endpoint reports
+     * `hasApiKey` and never returns this, because a viewer can read workspace settings.
+     */
+    apiKeyEncrypted: string | null
+    datasetId: string | null
+    topK?: number
+    scoreThreshold?: number
+  } | null
 }
 
 export const workspaces = pgTable('workspaces', {

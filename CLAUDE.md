@@ -53,6 +53,11 @@ Meta retry or disable endpoints that answer slowly.
 **Effects must be idempotent.** The queue retries jobs and `applyEffects` re-runs the whole
 list when it does.
 
+**Retrieval is scoped twice.** Knowledge is scoped by workspace. Recall over past
+conversations is scoped by workspace **and customer**, and the customer id comes from the
+caller, never from the model. One customer's history surfacing in another's conversation is
+the leak this product refuses to accept.
+
 **Zod, not TypeBox.** Elysia 1.4 accepts Zod through Standard Schema. If its OpenAPI
 generation ever misbehaves on a specific route, that one route may use TypeBox; record it in
 an ADR.
@@ -63,8 +68,11 @@ an ADR.
 bun run infra:up        # Postgres, Redis, MinIO in Docker
 bun run db:migrate      # apply migrations (creates extensions first)
 bun run db:seed         # workspace, admin user, test and web channels
+bun run db:reset        # DESTROYS ALL DATA, then migrates and seeds. Local only:
+                        # it refuses production and any non-local database
 bun run dev             # api + worker + web with hot reload
-bun test                # unit and integration (needs infra:up)
+bun run test            # unit and integration (needs infra:up)
+bun run test:e2e        # Playwright browser tests (starts the app itself)
 bun run typecheck       # server packages and the web app
 bun run lint            # Biome
 bun run auth:generate   # regenerate the Better Auth schema after changing auth config
@@ -93,6 +101,23 @@ without spending money.
 - Redis outlives a database reset. After `bun run db:seed` on a wiped database, old jobs can
   reference rows that no longer exist and the worker logs "message vanished" warnings. They
   are harmless; `bun run infra:reset` clears them.
+- BullMQ rejects a custom job id containing `:` unless it splits into exactly three parts.
+  Use `-` as the separator; a two-part `prefix:id` throws at enqueue time.
+- Better Auth needs `trustedOrigins`. In development the console runs on Vite's port and
+  proxies to the API on another, so without it every browser sign-in is `Forbidden`.
+- For trigram search use `word_similarity`, never `similarity`. The latter compares whole
+  strings, so a short query against a longer chunk always scores near zero and falls below
+  the default threshold. See ADR 0003.
+- `bun test` would pick up Playwright specs, so the root script scopes it to `apps packages`.
+  Browser tests run through `bun run test:e2e`.
+- Browser tests find controls by `data-testid`, not by visible text: the console defaults to
+  Thai, so label matchers would depend on the active language.
+- `DROP SCHEMA public CASCADE` leaves Drizzle's journal in its own `drizzle` schema, so the
+  next migrate is a no-op against an empty database that claims to be migrated. `bun run
+  db:reset` drops both, and refuses to run against production or a non-local host.
+- Card redaction requires an issuer prefix as well as a Luhn check. Roughly one in ten random
+  digit strings passes Luhn, so without the prefix a timestamp or a long order reference gets
+  masked, which contradicts deliberately preserving order references.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
