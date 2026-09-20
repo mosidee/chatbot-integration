@@ -1,4 +1,9 @@
 # The API image also serves the built web assets, so a single container fronts the product.
+#
+# Note on node_modules: Bun installs workspace dependencies into each workspace's own
+# node_modules, not only the root. Copying just /app/node_modules into the runtime stage
+# leaves every package unable to resolve its imports, so the runtime stage takes the whole
+# built tree instead.
 FROM oven/bun:1.4.2-slim AS deps
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
@@ -13,17 +18,17 @@ COPY packages/infra/package.json packages/infra/
 COPY packages/shared/package.json packages/shared/
 RUN bun install --frozen-lockfile
 
-FROM deps AS web-build
+FROM deps AS build
 COPY . .
-RUN bun --cwd apps/web run build
+# `bun --cwd <dir> run <script>` prints help instead of running it, which silently produced
+# no assets. A subshell does what was intended.
+RUN cd apps/web && bun run build
 
 FROM oven/bun:1.4.2-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-COPY --from=web-build /app/apps/web/dist ./apps/web/dist
+COPY --from=build /app ./
 EXPOSE 3000
 # Applying migrations at start keeps a single-VPS deployment to one command. Split this out
-# once more than one replica can start at the same time.
+# before running more than one API replica; see docs/DEPLOY.md.
 CMD ["sh", "-c", "bun run packages/db/src/migrate.ts && bun run apps/api/src/index.ts"]

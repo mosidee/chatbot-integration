@@ -123,6 +123,11 @@ without spending money.
   looks like a platform outage.
 - LINE reply tokens are single-use and expire in about a minute. They are stored on the
   conversation and cleared the moment they are spent.
+- `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,
+  or the stack silently runs the previous image.
+- Bun installs workspace dependencies into each workspace's own `node_modules`, not only the
+  root. A Docker runtime stage that copies `/app/node_modules` alone leaves every package
+  unable to resolve its imports; copy the whole built tree.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
