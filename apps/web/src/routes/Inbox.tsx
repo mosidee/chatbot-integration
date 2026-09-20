@@ -336,6 +336,24 @@ function ConversationPane({
   )
 }
 
+/** Attachments that made it into storage. Anything still uploading has no key yet. */
+function attachmentsOf(
+  message: Message,
+): { storageKey: string; mime: string; fileName: string | null }[] {
+  const content = message.content
+  if (
+    content.kind !== 'image' &&
+    content.kind !== 'file' &&
+    content.kind !== 'audio' &&
+    content.kind !== 'video'
+  ) {
+    return []
+  }
+  return content.attachments
+    .filter((a): a is typeof a & { storageKey: string } => Boolean(a.storageKey))
+    .map((a) => ({ storageKey: a.storageKey, mime: a.mime, fileName: a.fileName }))
+}
+
 function Bubble({ message }: { message: Message }) {
   const { i18n } = useTranslation()
   const isCustomer = message.senderType === 'customer'
@@ -353,6 +371,26 @@ function Bubble({ message }: { message: Message }) {
               : 'rounded-br-sm bg-emerald-600 text-white',
         )}
       >
+        {attachmentsOf(message).map((attachment) =>
+          attachment.mime.startsWith('image/') ? (
+            <img
+              key={attachment.storageKey}
+              src={api.uploads.urlFor(attachment.storageKey)}
+              alt={attachment.fileName ?? ''}
+              className="mb-1 max-h-64 rounded-lg object-contain"
+            />
+          ) : (
+            <a
+              key={attachment.storageKey}
+              href={api.uploads.urlFor(attachment.storageKey)}
+              target="_blank"
+              rel="noreferrer"
+              className="mb-1 block underline"
+            >
+              {attachment.fileName ?? attachment.mime}
+            </a>
+          ),
+        )}
         <p className="whitespace-pre-wrap break-words">{message.text}</p>
         <div
           className={cn(

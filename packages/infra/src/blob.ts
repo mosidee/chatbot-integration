@@ -43,13 +43,13 @@ export function createBlobStore(config: BlobConfig): BlobStore & { client: S3Cli
       const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
       const bytes = await response.Body?.transformToByteArray()
       if (!bytes) throw new Error(`object ${key} has no body`)
-      return {
-        data: new Uint8Array(bytes),
-        mime: response.ContentType ?? 'application/octet-stream',
-      }
+      // Copy into a plain ArrayBuffer so the result satisfies Response, Blob and Web Crypto.
+      const data = new Uint8Array(new ArrayBuffer(bytes.byteLength))
+      data.set(bytes)
+      return { data, mime: response.ContentType ?? 'application/octet-stream' }
     },
 
-    async put(key: string, data: Uint8Array, mime: string) {
+    async put(key: string, data: Uint8Array<ArrayBuffer>, mime: string) {
       await client.send(
         new PutObjectCommand({
           Bucket: config.bucket,

@@ -221,7 +221,41 @@ export type ConversationFilters = {
 // Endpoints
 // ---------------------------------------------------------------------------
 
+export type UploadResult = {
+  storageKey: string
+  url: string
+  mime: string
+  sizeBytes: number
+  fileName: string
+}
+
 export const api = {
+  uploads: {
+    /** Stores a file and returns its key; the key is what goes into a message. */
+    upload: async (file: File): Promise<UploadResult> => {
+      const form = new FormData()
+      form.append('file', file)
+      const response = await fetch('/api/v1/uploads', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      })
+      if (!response.ok) {
+        let message = response.statusText
+        try {
+          const body = (await response.json()) as { error?: string }
+          if (body.error) message = body.error
+        } catch {
+          // Keep the status text.
+        }
+        throw new ApiError(response.status, message)
+      }
+      return (await response.json()) as UploadResult
+    },
+    /** Same-origin URL the browser can render; access follows the session. */
+    urlFor: (storageKey: string) => `/api/v1/uploads/${storageKey}`,
+  },
+
   conversations: {
     list: (filters: ConversationFilters = {}) => {
       const params = new URLSearchParams()

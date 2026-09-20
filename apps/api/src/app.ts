@@ -7,6 +7,7 @@ import { conversationRoutes } from './routes/conversations'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
 import { traceRoutes } from './routes/traces'
+import { uploadRoutes } from './routes/uploads'
 import { webhookRoutes } from './routes/webhooks'
 import { createWsRoutes } from './ws'
 
@@ -62,6 +63,7 @@ export function createApp(ctx: ApiContext) {
           .use(simulatorRoutes(ctx))
           .use(settingsRoutes(ctx))
           .use(traceRoutes(ctx))
+          .use(uploadRoutes(ctx))
           .use(webhookRoutes(ctx)),
       )
 

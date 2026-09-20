@@ -1,8 +1,9 @@
 import { type Env, loadEnv } from '@ci/config'
-import type { Logger } from '@ci/core'
+import type { BlobStore, Logger } from '@ci/core'
 import { createDb, type Database } from '@ci/db'
 import type { Redis } from 'ioredis'
 import { createBlobStore } from './blob'
+import { createFilesystemBlobStore } from './blob-fs'
 import { createLogger } from './logger'
 import { createPublisher } from './publisher'
 import { createQueues, type Queues } from './queues'
@@ -23,7 +24,7 @@ export type Runtime = {
   /** Separate connection: a subscribed client cannot issue other commands. */
   subscriberFactory: () => Redis
   queues: Queues
-  blob: ReturnType<typeof createBlobStore>
+  blob: BlobStore
   publisher: ReturnType<typeof createPublisher>
   logger: Logger
   close: () => Promise<void>
@@ -45,15 +46,22 @@ export function createRuntime(
   const redis = createRedis(env.REDIS_URL, { forQueue: true })
   const queues = createQueues(redis, options.queuePrefix)
 
-  const blob = createBlobStore({
-    endpoint: env.S3_ENDPOINT,
-    region: env.S3_REGION,
-    bucket: env.S3_BUCKET,
-    accessKeyId: env.S3_ACCESS_KEY_ID,
-    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
-    forcePathStyle: env.S3_FORCE_PATH_STYLE,
-    publicUrl: env.S3_PUBLIC_URL,
-  })
+  // A file:// endpoint selects filesystem storage, which local development on macOS needs;
+  // see packages/infra/src/blob-fs.ts. Anything else is treated as S3-compatible.
+  const blob = env.S3_ENDPOINT.startsWith('file://')
+    ? createFilesystemBlobStore(
+        env.S3_ENDPOINT.slice('file://'.length),
+        env.S3_PUBLIC_URL ?? '/api/v1/uploads',
+      )
+    : createBlobStore({
+        endpoint: env.S3_ENDPOINT,
+        region: env.S3_REGION,
+        bucket: env.S3_BUCKET,
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+        forcePathStyle: env.S3_FORCE_PATH_STYLE,
+        publicUrl: env.S3_PUBLIC_URL,
+      })
 
   const publisher = createPublisher(redis)
 

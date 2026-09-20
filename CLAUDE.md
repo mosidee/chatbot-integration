@@ -87,6 +87,9 @@ without spending money.
 - The AI SDK's `image` content part is deprecated in v7. Use a `file` part with `mediaType`.
 - When adding a workspace package, run `bun install` **before** committing, or CI's
   `--frozen-lockfile` fails on a package.json the lockfile has never seen.
+- On macOS with Colima, a host process cannot reach MinIO: the port forwarder corrupts
+  SigV4 requests and every call fails with `InvalidAccessKeyId`, even though containers on
+  the same network work. Set `S3_ENDPOINT=file://./.data/media` locally; see ADR 0002.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.

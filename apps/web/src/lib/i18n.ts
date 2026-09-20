@@ -63,6 +63,7 @@ const th = {
     customerName: 'ชื่อลูกค้า',
     customerId: 'รหัสลูกค้า',
     send: 'ส่งข้อความ',
+    attachImage: 'แนบรูปภาพ',
     noChannel: 'ยังไม่มีช่องทางทดสอบ',
   },
   settings: {
@@ -160,6 +161,7 @@ const en: typeof th = {
     customerName: 'Customer name',
     customerId: 'Customer id',
     send: 'Send message',
+    attachImage: 'Attach image',
     noChannel: 'No test channel configured',
   },
   settings: {

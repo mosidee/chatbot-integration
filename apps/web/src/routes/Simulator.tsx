@@ -1,8 +1,18 @@
+import type { NormalizedMessage } from '@ci/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, EmptyState, Input, Label, Spinner, Textarea } from '../components/ui'
-import { api } from '../lib/api'
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorNote,
+  Input,
+  Label,
+  Spinner,
+  Textarea,
+} from '../components/ui'
+import { api, type UploadResult } from '../lib/api'
 
 /**
  * Act as a customer without a platform account.
@@ -16,6 +26,9 @@ export function Simulator() {
   const [displayName, setDisplayName] = useState('Nok')
   const [text, setText] = useState('')
   const [sentCount, setSentCount] = useState(0)
+  const [attachment, setAttachment] = useState<UploadResult | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
 
   const channels = useQuery({
     queryKey: ['simulator-channels'],
@@ -24,17 +37,45 @@ export function Simulator() {
 
   const channelId = channels.data?.channels[0]?.id
 
+  const upload = useMutation({
+    mutationFn: (file: File) => api.uploads.upload(file),
+    onSuccess: (result) => {
+      setAttachment(result)
+      setUploadError(null)
+    },
+    onError: (caught) => setUploadError(caught instanceof Error ? caught.message : String(caught)),
+  })
+
   const send = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async (body: string) => {
       if (!channelId) throw new Error('no test channel')
-      return api.simulator.send(channelId, {
-        externalId,
-        displayName,
-        message: { kind: 'text', text: message },
-      })
+
+      // An attachment makes it an image message, which is what exercises the vision slot.
+      const message: NormalizedMessage = attachment
+        ? {
+            kind: 'image',
+            text: body || null,
+            attachments: [
+              {
+                storageKey: attachment.storageKey,
+                sourceUrl: null,
+                mime: attachment.mime,
+                sizeBytes: attachment.sizeBytes,
+                fileName: attachment.fileName,
+                width: null,
+                height: null,
+                durationMs: null,
+              },
+            ],
+          }
+        : { kind: 'text', text: body }
+
+      return api.simulator.send(channelId, { externalId, displayName, message })
     },
     onSuccess: () => {
       setText('')
+      setAttachment(null)
+      if (fileInput.current) fileInput.current.value = ''
       setSentCount((n) => n + 1)
     },
   })
@@ -85,13 +126,45 @@ export function Simulator() {
           />
         </div>
 
+        {attachment ? (
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] p-2">
+            <img
+              src={api.uploads.urlFor(attachment.storageKey)}
+              alt={attachment.fileName}
+              className="size-12 rounded object-cover"
+            />
+            <span className="min-w-0 flex-1 truncate text-[13px]">{attachment.fileName}</span>
+            <Button size="sm" variant="ghost" onClick={() => setAttachment(null)}>
+              ✕
+            </Button>
+          </div>
+        ) : null}
+        {uploadError ? <ErrorNote message={uploadError} /> : null}
+
         <div className="flex items-center gap-3">
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) upload.mutate(file)
+            }}
+          />
           <Button
             variant="primary"
-            disabled={!text.trim() || send.isPending}
+            disabled={(!text.trim() && !attachment) || send.isPending}
             onClick={() => send.mutate(text.trim())}
           >
             {t('simulator.send')}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={upload.isPending}
+            onClick={() => fileInput.current?.click()}
+          >
+            {upload.isPending ? t('common.loading') : t('simulator.attachImage')}
           </Button>
           {sentCount > 0 ? (
             <span className="text-sm text-[var(--text-muted)]">{sentCount}</span>

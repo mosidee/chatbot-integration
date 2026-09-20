@@ -60,7 +60,7 @@ export type ConversationTurn = {
  * loopback hosts as an SSRF precaution. The worker reads the object and passes the bytes.
  */
 export type ImageInput = {
-  data: Uint8Array
+  data: Uint8Array<ArrayBuffer>
   mime: string
 }
 

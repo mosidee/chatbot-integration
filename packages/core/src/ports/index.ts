@@ -33,8 +33,12 @@ export type EffectPorts = {
 
 /** Object storage, used to read media before handing it to a vision model. */
 export type BlobStore = {
-  get(key: string): Promise<{ data: Uint8Array; mime: string }>
-  put(key: string, data: Uint8Array, mime: string): Promise<void>
+  /**
+   * Bytes are typed as ArrayBuffer-backed rather than the wider ArrayBufferLike, because
+   * Response, Blob and Web Crypto all reject a possibly-shared buffer.
+   */
+  get(key: string): Promise<{ data: Uint8Array<ArrayBuffer>; mime: string }>
+  put(key: string, data: Uint8Array<ArrayBuffer>, mime: string): Promise<void>
   /** A URL an agent's browser can open. Not given to model providers; see ADR 0001. */
   urlFor(key: string): string
 }
