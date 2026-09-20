@@ -41,8 +41,9 @@ export default defineConfig({
     },
     {
       command: 'bun run apps/worker/src/index.ts',
-      // The worker serves no HTTP, so readiness is judged by the API being up.
-      url: 'http://localhost:3000/healthz',
+      // The worker's own health endpoint. Pointing this at the API's URL made Playwright
+      // think the same server was declared twice and refuse to start.
+      url: 'http://localhost:3001/healthz',
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
     },

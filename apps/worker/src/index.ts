@@ -144,11 +144,43 @@ async function main() {
     ),
   ]
 
-  logger.info('worker started', { queues: workers.length })
+  /**
+   * A health endpoint, not an API.
+   *
+   * The worker otherwise serves no HTTP, which leaves container orchestrators and test
+   * runners with no way to tell whether it is up. It reports the dependencies it actually
+   * needs rather than merely that the process is alive.
+   */
+  const health = Bun.serve({
+    port: env.WORKER_HEALTH_PORT,
+    async fetch(request) {
+      if (!new URL(request.url).pathname.startsWith('/healthz')) {
+        return new Response('not found', { status: 404 })
+      }
+      const [dbOk, redisOk] = await Promise.all([
+        runtime.db
+          .execute('select 1')
+          .then(() => true)
+          .catch(() => false),
+        runtime.redis
+          .ping()
+          .then(() => true)
+          .catch(() => false),
+      ])
+      const healthy = dbOk && redisOk
+      return Response.json(
+        { status: healthy ? 'ok' : 'degraded', db: dbOk, redis: redisOk, queues: workers.length },
+        { status: healthy ? 200 : 503 },
+      )
+    },
+  })
+
+  logger.info('worker started', { queues: workers.length, healthPort: health.port })
 
   const shutdown = async (signal: string) => {
     logger.info('shutting down', { signal })
     // Close workers first so in-flight jobs finish before their dependencies disappear.
+    health.stop(true)
     await Promise.allSettled(workers.map((w) => w.close()))
     await runtime.close()
     process.exit(0)
