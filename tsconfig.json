@@ -1,6 +1,16 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": { "baseUrl": "." },
-  "include": ["packages/*/src/**/*.ts", "apps/api/src/**/*.ts", "apps/worker/src/**/*.ts"],
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "apps/api/src/**/*.ts",
+    "apps/api/test/**/*.ts",
+    "apps/worker/src/**/*.ts",
+    "apps/worker/test/**/*.ts",
+    "e2e/**/*.ts",
+    "scripts/**/*.ts",
+    "playwright.config.ts"
+  ],
   "exclude": ["node_modules", "**/dist", "apps/web", "apps/widget"]
 }

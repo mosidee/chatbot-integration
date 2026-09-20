@@ -2,6 +2,7 @@ import type { RetrievedChunk, SlotConfig } from '@ci/core'
 import type { Database } from '@ci/db'
 import type { ChannelType, Language } from '@ci/shared'
 import { createPostgresRetriever, searchPastConversations } from './retrieval'
+import { createExternalRetriever, type ExternalRetrievalConfig } from './retrieval-external'
 
 /**
  * The retrieval a single AI turn is allowed to do.
@@ -30,10 +31,18 @@ export function createTurnRetrieval(
     language: Language | null
     channelType: ChannelType | null
     embedSlot: SlotConfig | null
+    rerankSlot?: SlotConfig | null
     hasKnowledge: boolean
+    /** When set, knowledge comes from that platform instead of our Postgres. */
+    externalRetrieval?: ExternalRetrievalConfig | null
   },
 ): TurnRetrieval {
-  const retriever = createPostgresRetriever(db, { embedSlot: input.embedSlot })
+  const retriever = input.externalRetrieval
+    ? createExternalRetriever(input.externalRetrieval)
+    : createPostgresRetriever(db, {
+        embedSlot: input.embedSlot,
+        rerankSlot: input.rerankSlot ?? null,
+      })
 
   const search = async (query: string, limit: number): Promise<RetrievedChunk[]> => {
     const result = await retriever.retrieve({
@@ -65,7 +74,8 @@ export function createTurnRetrieval(
       return hits.map((h) => ({ conversationId: h.conversationId, text: h.text, at: h.createdAt }))
     },
     enabled: {
-      knowledge: input.hasKnowledge,
+      // An external platform has its own corpus, so the local chunk count says nothing.
+      knowledge: input.externalRetrieval ? true : input.hasKnowledge,
       // Recall needs embeddings; without a provider there is nothing to compare.
       pastConversations: input.embedSlot !== null,
     },

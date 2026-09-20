@@ -1,6 +1,7 @@
 import { newId, schema } from '@ci/db'
 import {
   createEntry,
+  createExternalRetriever,
   createPostgresRetriever,
   createSource,
   loadAiConfig,
@@ -294,9 +295,13 @@ export function knowledgeRoutes(ctx: ApiContext) {
             env.APP_SECRET_KEY,
             settings.modelPrices,
           )
-          const retriever = createPostgresRetriever(db, {
-            embedSlot: usableSlot(aiConfig, 'embed'),
-          })
+          // The same source a real turn would use, so the box tests what customers get.
+          const retriever = settings.externalRetrieval
+            ? createExternalRetriever(settings.externalRetrieval)
+            : createPostgresRetriever(db, {
+                embedSlot: usableSlot(aiConfig, 'embed'),
+                rerankSlot: usableSlot(aiConfig, 'rerank'),
+              })
 
           const result = await retriever.retrieve({
             workspaceId,

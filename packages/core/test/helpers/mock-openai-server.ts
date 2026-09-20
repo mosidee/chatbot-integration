@@ -1,5 +1,3 @@
-import type { Server } from 'bun'
-
 /**
  * A minimal OpenAI-compatible chat-completions server.
  *
@@ -63,7 +61,7 @@ export function startMockOpenAI(replies: MockReply[]): MockServer {
   const requests: unknown[] = []
   let index = 0
 
-  const server: Server = Bun.serve({
+  const server = Bun.serve({
     port: 0,
     async fetch(request) {
       const url = new URL(request.url)

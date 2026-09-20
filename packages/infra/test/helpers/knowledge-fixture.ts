@@ -43,6 +43,7 @@ export async function createKnowledgeFixture(): Promise<KnowledgeFixture> {
       waitingHumanFallbackMinutes: null,
       acknowledgementText: { th: 'รอสักครู่', en: 'One moment' },
       modelPrices: {},
+      externalRetrieval: null,
     },
   })
 

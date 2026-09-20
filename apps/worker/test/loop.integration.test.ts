@@ -175,11 +175,11 @@ describe('the AI and human loop', () => {
     expect(messages[0]?.senderType).toBe('customer')
     expect(messages[0]?.text).toBe('ราคาเท่าไหร่คะ')
     expect(messages[1]?.senderType).toBe('ai')
-    expect(messages[1]?.text).toBe('แพ็กเกจเริ่มต้น 990 บาทต่อเดือนค่ะ')
+    expect(messages[1]?.text ?? '').toBe('แพ็กเกจเริ่มต้น 990 บาทต่อเดือนค่ะ')
 
     // The reply was queued for delivery rather than sent inline.
     const outbound = await drainQueue<{ messageId: string }>(f.runtime.queues.outbound)
-    expect(outbound.map((j) => j.messageId)).toContain(messages[1]?.id)
+    expect(outbound.map((j) => j.messageId)).toContain(messages[1]?.id ?? '')
   })
 
   test('an AI reply records a trace with model, tokens and outcome', async () => {

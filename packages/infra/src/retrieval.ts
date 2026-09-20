@@ -7,6 +7,7 @@ import {
   type RetrieveOptions,
   type RetrieveResult,
   type Retriever,
+  rerankCandidates,
   type ScoredChunk,
   type SlotConfig,
 } from '@ci/core'
@@ -33,6 +34,8 @@ import { sql } from 'drizzle-orm'
 export type PostgresRetrieverOptions = {
   /** Null when no embedding provider is configured; retrieval is then keyword-only. */
   embedSlot: SlotConfig | null
+  /** Optional cross-encoder that reorders the fused candidates. */
+  rerankSlot?: SlotConfig | null
   fusion?: Partial<FusionOptions>
   dimensions?: number
 }
@@ -104,22 +107,41 @@ export function createPostgresRetriever(
       })
 
       const minFused = input.minFusedScore ?? 0
-      const chunks = fused
-        .filter((f) => f.fusedScore >= minFused)
-        .slice(0, limit)
-        .flatMap((f) => {
+      const survivors = fused.filter((f) => f.fusedScore >= minFused)
+
+      // Rerank a few more than are needed, so the cross-encoder can promote something the
+      // cheap fusion ranked just below the cut.
+      const forRerank = survivors.slice(0, Math.max(limit * 3, limit))
+      const reranked = await rerankCandidates(
+        options.rerankSlot ?? null,
+        query,
+        forRerank.flatMap((f) => {
           const row = byId.get(f.id)
-          if (!row) return []
-          const chunk = toChunk(row, f.denseScore, f.keywordScore)
-          // Report the fused score as the headline number; the halves stay visible.
-          return [{ ...chunk, score: f.fusedScore }]
-        })
+          return row ? [{ id: f.id, text: row.text }] : []
+        }),
+        { topN: limit },
+      )
+
+      const ordered = reranked
+        ? reranked.items.flatMap((item) => {
+            const fusedEntry = forRerank.find((f) => f.id === item.id)
+            return fusedEntry ? [{ ...fusedEntry, fusedScore: item.score }] : []
+          })
+        : survivors
+
+      const chunks = ordered.slice(0, limit).flatMap((f) => {
+        const row = byId.get(f.id)
+        if (!row) return []
+        const chunk = toChunk(row, f.denseScore, f.keywordScore)
+        // Report the ranking score as the headline number; the halves stay visible.
+        return [{ ...chunk, score: f.fusedScore }]
+      })
 
       return {
         chunks,
         dense: dense.map((r) => toChunk(r, r.score, null)),
         keyword: keyword.map((r) => toChunk(r, null, r.score)),
-        usedRerank: false,
+        usedRerank: reranked !== null,
         embeddingModel,
       }
     },

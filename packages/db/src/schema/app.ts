@@ -105,6 +105,18 @@ export type WorkspaceSettings = {
   acknowledgementText: Record<Language, string>
   /** Per-model price table for cost estimates, keyed `provider:model`. */
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
+  /**
+   * Point retrieval at an existing knowledge platform instead of ours. Null uses the
+   * built-in Postgres hybrid search.
+   */
+  externalRetrieval: {
+    kind: 'dify' | 'ragflow' | 'generic'
+    baseUrl: string
+    apiKey: string | null
+    datasetId: string | null
+    topK?: number
+    scoreThreshold?: number
+  } | null
 }
 
 export const workspaces = pgTable('workspaces', {

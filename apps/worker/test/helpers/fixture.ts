@@ -3,6 +3,7 @@ import type { SlotConfig } from '@ci/core'
 import { encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import { createRuntime, type Runtime } from '@ci/infra'
+import type { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
 
 /**
@@ -23,6 +24,7 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   waitingHumanFallbackMinutes: null,
   acknowledgementText: { th: 'รอสักครู่นะคะ', en: 'One moment please.' },
   modelPrices: {},
+  externalRetrieval: null,
 }
 
 export type Fixture = {
@@ -210,12 +212,10 @@ export async function createFixture(options: {
   }
 }
 
-/** Drain a BullMQ queue's waiting jobs, returning their payloads. */
-export async function drainQueue<T>(queue: {
-  getJobs: (types: string[]) => Promise<{ data: T; remove: () => Promise<void> }[]>
-}): Promise<T[]> {
+/** Drain a BullMQ queue's pending jobs, returning their payloads. */
+export async function drainQueue<T>(queue: Queue): Promise<T[]> {
   const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized'])
-  const payloads = jobs.map((j) => j.data)
-  await Promise.all(jobs.map((j) => j.remove().catch(() => {})))
+  const payloads = jobs.map((job) => job.data as T)
+  await Promise.all(jobs.map((job) => job.remove().catch(() => {})))
   return payloads
 }

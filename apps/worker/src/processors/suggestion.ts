@@ -51,6 +51,8 @@ export async function processSuggestion(
     language: customer.primaryLanguage ?? settings.defaultLanguage,
     channelType: context.channel.type,
     embedSlot,
+    rerankSlot: usableSlot(aiConfig, 'rerank'),
+    externalRetrieval: settings.externalRetrieval,
     hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
   })
 

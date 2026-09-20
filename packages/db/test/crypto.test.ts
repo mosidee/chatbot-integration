@@ -37,7 +37,8 @@ describe('secret encryption', () => {
   test('rejects a tampered ciphertext', async () => {
     const packed = await encryptSecret('secret', key)
     const bytes = Uint8Array.from(atob(packed), (c) => c.charCodeAt(0))
-    bytes[bytes.length - 1] ^= 0xff
+    const last = bytes.length - 1
+    bytes[last] = (bytes[last] ?? 0) ^ 0xff
     let tampered = ''
     for (const b of bytes) tampered += String.fromCharCode(b)
     await expect(decryptSecret(btoa(tampered), key)).rejects.toThrow()

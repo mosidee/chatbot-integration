@@ -309,7 +309,7 @@ function ConversationPane({
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" data-testid="message-thread">
           {data.messages.length === 0 ? (
             <EmptyState title={t('conversation.noMessages')} />
           ) : (

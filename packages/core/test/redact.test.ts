@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { NormalizedMessage } from '@ci/shared'
 import {
   DEFAULT_REDACTION,
   isLuhnValid,
@@ -131,14 +132,14 @@ describe('redactMessage', () => {
   })
 
   test('passes stickers and events through unchanged', () => {
-    const sticker = {
+    const sticker: NormalizedMessage = {
       kind: 'sticker',
       packageId: '1',
       stickerId: '2',
       keywords: ['hello'],
-    } as const
+    }
     expect(redactMessage(sticker).message).toEqual(sticker)
-    const event = { kind: 'event', event: 'follow', data: {} } as const
+    const event: NormalizedMessage = { kind: 'event', event: 'follow', data: {} }
     expect(redactMessage(event).message).toEqual(event)
   })
 
