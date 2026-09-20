@@ -4,6 +4,7 @@ import Elysia from 'elysia'
 import { authHandler } from './auth-plugin'
 import type { ApiContext } from './context'
 import { conversationRoutes } from './routes/conversations'
+import { dashboardRoutes } from './routes/dashboard'
 import { knowledgeRoutes } from './routes/knowledge'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
@@ -67,6 +68,7 @@ export function createApp(ctx: ApiContext) {
       .group('/api/v1', (app) =>
         app
           .use(conversationRoutes(ctx))
+          .use(dashboardRoutes(ctx))
           .use(simulatorRoutes(ctx))
           .use(settingsRoutes(ctx))
           .use(knowledgeRoutes(ctx))

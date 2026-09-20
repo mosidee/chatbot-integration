@@ -470,3 +470,35 @@ test('setting the allowed origins keeps the rest of the channel config', async (
     data: { config: { allowedOrigins: [] } },
   })
 })
+
+test('the dashboard reports what the pilot is doing', async ({ page, request }) => {
+  // Real traffic first, so the figures are computed from the same tables everything else
+  // writes to rather than from a fixture.
+  const channelId = await findTestChannelId(request)
+  const customer = uniqueCustomer('dash')
+  await customerSays(request, channelId, customer, 'สวัสดีค่ะ ราคาเท่าไหร่')
+
+  await signIn(page)
+  await page.goto('/dashboard')
+
+  await expect(page.getByTestId('figure-conversations')).toBeVisible({ timeout: 20_000 })
+
+  // Every day in the window has a bar, including the quiet ones: a gap would read as
+  // missing data rather than as nothing having happened.
+  await expect(page.locator('[data-testid="volume-chart"] > div')).toHaveCount(14)
+
+  // The window is selectable, and the chart follows it.
+  await page.getByTestId('window-7').click()
+  await expect(page.locator('[data-testid="volume-chart"] > div')).toHaveCount(7)
+
+  // The conversation just created is counted. Read as a number rather than matched as
+  // text: the panel also carries a hint, and "0" appears inside plenty of larger figures.
+  const counted = await page.getByTestId('figure-conversations').locator('div').nth(1).innerText()
+  expect(Number(counted.replace(/[^0-9]/g, ''))).toBeGreaterThan(0)
+  await expect(page.getByTestId('channel-breakdown')).toContainText('test', { timeout: 20_000 })
+
+  // And the figures an operator acts on are present rather than blank panels.
+  await expect(page.getByTestId('figure-answered')).toBeVisible()
+  await expect(page.getByTestId('figure-first-response')).toBeVisible()
+  await expect(page.getByTestId('figure-cost')).toBeVisible()
+})

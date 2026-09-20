@@ -1,5 +1,6 @@
 export * from './blob'
 export * from './blob-fs'
+export * from './dashboard'
 export * from './effect-ports'
 export * from './ingest'
 export * from './knowledge'
