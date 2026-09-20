@@ -70,9 +70,17 @@ export type Queues = {
   [K in QueueName]: Queue
 }
 
-export function createQueues(connection: Redis): Queues {
+/**
+ * `prefix` namespaces every key in Redis. Production leaves it at the default; tests set a
+ * unique one so parallel fixtures sharing a Redis instance cannot drain each other's jobs.
+ */
+export function createQueues(connection: Redis, prefix?: string): Queues {
   const make = (name: QueueName) =>
-    new Queue(name, { connection, defaultJobOptions: DEFAULT_JOB_OPTIONS })
+    new Queue(name, {
+      connection,
+      defaultJobOptions: DEFAULT_JOB_OPTIONS,
+      ...(prefix ? { prefix } : {}),
+    })
 
   return {
     inbound: make(QUEUE_NAMES.inbound),

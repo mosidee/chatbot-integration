@@ -1,8 +1,13 @@
 import { type AgentTurnInput, type EffectPorts, type Logger, runAgentTurn } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import type { Runtime, SuggestionJob } from '@ci/infra'
-import { loadTurnContext, loadWorkspaceSettings, recordTrace } from '../repo'
-import { loadAiConfig, usableSlot } from '../slots'
+import {
+  loadAiConfig,
+  loadTurnContext,
+  loadWorkspaceSettings,
+  recordTrace,
+  usableSlot,
+} from '@ci/infra'
 
 /**
  * Draft a reply for the human sidebar.

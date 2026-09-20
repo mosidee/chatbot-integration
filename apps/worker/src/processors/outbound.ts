@@ -2,9 +2,9 @@ import { splitText } from '@ci/channels'
 import type { EffectPorts, Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
+import { loadChannel } from '@ci/infra'
 import type { NormalizedMessage } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
-import { loadChannel } from '../ports'
 
 /**
  * Deliver a stored outbound message through its channel.

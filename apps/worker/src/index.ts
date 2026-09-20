@@ -2,6 +2,7 @@ import { loadEnv } from '@ci/config'
 import type { EffectPorts, Logger } from '@ci/core'
 import {
   type AiTurnJob,
+  createEffectPorts,
   createRedis,
   createRuntime,
   type InboundJob,
@@ -12,7 +13,7 @@ import {
   type WaitingHumanTimeoutJob,
 } from '@ci/infra'
 import { type Job, Worker } from 'bullmq'
-import { createEffectPorts } from './ports'
+
 import { processAiTurn } from './processors/ai-turn'
 import { processInbound } from './processors/inbound'
 import { processOutbound } from './processors/outbound'
@@ -55,6 +56,8 @@ function makeWorker<T>(
       // queue client.
       connection: createRedis(runtime.env.REDIS_URL, { forQueue: true }),
       concurrency,
+      // Must match the queue namespace, or the worker listens to the wrong keys.
+      ...(runtime.queuePrefix ? { prefix: runtime.queuePrefix } : {}),
     },
   )
 

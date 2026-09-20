@@ -16,6 +16,8 @@ import { createRedis } from './redis'
  */
 export type Runtime = {
   env: Env
+  /** Set when queues are namespaced; workers must use the same prefix. */
+  queuePrefix?: string | undefined
   db: Database
   redis: Redis
   /** Separate connection: a subscribed client cannot issue other commands. */
@@ -27,12 +29,21 @@ export type Runtime = {
   close: () => Promise<void>
 }
 
-export function createRuntime(service: string, env: Env = loadEnv()): Runtime {
+export type RuntimeOptions = {
+  /** Namespaces all queue keys in Redis. Tests use it to isolate fixtures. */
+  queuePrefix?: string
+}
+
+export function createRuntime(
+  service: string,
+  env: Env = loadEnv(),
+  options: RuntimeOptions = {},
+): Runtime {
   const logger = createLogger(service, env.NODE_ENV === 'production' ? 'info' : 'debug')
 
   const { db, close: closeDb } = createDb(env.DATABASE_URL)
   const redis = createRedis(env.REDIS_URL, { forQueue: true })
-  const queues = createQueues(redis)
+  const queues = createQueues(redis, options.queuePrefix)
 
   const blob = createBlobStore({
     endpoint: env.S3_ENDPOINT,
@@ -48,6 +59,7 @@ export function createRuntime(service: string, env: Env = loadEnv()): Runtime {
 
   return {
     env,
+    queuePrefix: options.queuePrefix,
     db,
     redis,
     subscriberFactory: () => createRedis(env.REDIS_URL),

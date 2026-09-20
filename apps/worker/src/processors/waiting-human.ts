@@ -1,8 +1,8 @@
 import { applyEffects, type EffectPorts, type Logger, transition } from '@ci/core'
 import { schema } from '@ci/db'
 import type { Runtime, WaitingHumanTimeoutJob } from '@ci/infra'
+import { loadWorkspaceSettings } from '@ci/infra'
 import { and, eq } from 'drizzle-orm'
-import { loadWorkspaceSettings } from '../repo'
 
 /**
  * Nobody picked up a handed-off conversation in time.

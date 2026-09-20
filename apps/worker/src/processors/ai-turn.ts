@@ -11,19 +11,20 @@ import {
 } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import type { AiTurnJob, Runtime } from '@ci/infra'
-import type { HandoffReason } from '@ci/shared'
-import { eq } from 'drizzle-orm'
 import {
   addConversationTags,
   addInternalNote,
+  loadAiConfig,
   loadTurnContext,
   loadWorkspaceSettings,
   mergeCustomerFields,
   recordTrace,
   storeMessage,
   updateConversation,
-} from '../repo'
-import { loadAiConfig, usableSlot } from '../slots'
+  usableSlot,
+} from '@ci/infra'
+import type { HandoffReason } from '@ci/shared'
+import { eq } from 'drizzle-orm'
 
 /**
  * Run one AI turn and deliver the outcome.

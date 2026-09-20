@@ -1,11 +1,11 @@
 import { getAdapter } from '@ci/channels'
 import type { EffectContext, EffectPorts, Logger } from '@ci/core'
 import { type Database, decryptJson, schema } from '@ci/db'
-import type { Runtime } from '@ci/infra'
-import { waitingHumanJobId } from '@ci/infra'
 import type { Language } from '@ci/shared'
 import { eq } from 'drizzle-orm'
+import { waitingHumanJobId } from './queues'
 import { loadWorkspaceSettings, storeMessage } from './repo'
+import type { Runtime } from './runtime'
 
 /**
  * Port implementations backed by the queue, the database and Redis.

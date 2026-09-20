@@ -3,10 +3,9 @@ import type { EffectPorts, Logger } from '@ci/core'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { type Database, schema } from '@ci/db'
 import type { InboundJob, Runtime } from '@ci/infra'
+import { loadChannel, loadWorkspaceSettings, resolveConversation, storeMessage } from '@ci/infra'
 import { hasImages } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
-import { loadChannel } from '../ports'
-import { loadWorkspaceSettings, resolveConversation, storeMessage } from '../repo'
 
 /**
  * Turn a stored webhook payload into conversation state.
