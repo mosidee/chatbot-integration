@@ -8,19 +8,17 @@ function request(body: unknown): WebhookRequest {
 }
 
 describe('adapter registry', () => {
-  test('resolves the registered adapters', () => {
-    expect(getAdapter('test').type).toBe('test')
-    expect(getAdapter('web').type).toBe('web')
+  test('resolves every channel type the product declares', () => {
+    for (const type of ['test', 'web', 'line', 'messenger'] as const) {
+      expect(getAdapter(type).type).toBe(type)
+      expect(hasAdapter(type)).toBe(true)
+    }
   })
 
-  test('reports which channel types are implemented', () => {
-    expect(hasAdapter('test')).toBe(true)
-    expect(hasAdapter('line')).toBe(false)
-    expect(hasAdapter('messenger')).toBe(false)
-  })
-
-  test('throws for a channel type with no adapter yet', () => {
-    expect(() => getAdapter('line')).toThrow(/No adapter registered/)
+  test('throws rather than returning nothing for an unknown channel type', () => {
+    // Guards against a channel type being added to the schema without an adapter.
+    expect(() => getAdapter('telegram' as 'line')).toThrow(/No adapter registered/)
+    expect(hasAdapter('telegram' as 'line')).toBe(false)
   })
 })
 

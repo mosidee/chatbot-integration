@@ -15,6 +15,13 @@
       "when": 1789890559862,
       "tag": "0001_neat_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789895138840,
+      "tag": "0002_yielding_anita_blake",
+      "breakpoints": true
     }
   ]
 }

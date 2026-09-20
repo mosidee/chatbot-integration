@@ -1,4 +1,5 @@
-import { encryptJson, encryptSecret, newId, schema } from '@ci/db'
+import { getAdapter } from '@ci/channels'
+import { decryptJson, encryptJson, encryptSecret, newId, schema } from '@ci/db'
 import { aiTaskSchema, channelTypeSchema, conversationModeSchema, languageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -13,6 +14,21 @@ import type { ApiContext } from '../context'
  * responses carry `hasKey` so the GUI can show that one is configured without ever
  * holding it.
  */
+/** What an operator has to paste for each platform, shown beside the form. */
+const REQUIRED_FIELDS: Record<string, { key: string; label: string; secret: boolean }[]> = {
+  line: [
+    { key: 'channelSecret', label: 'Channel secret', secret: true },
+    { key: 'channelAccessToken', label: 'Channel access token', secret: true },
+  ],
+  messenger: [
+    { key: 'appSecret', label: 'App secret', secret: true },
+    { key: 'pageId', label: 'Page ID', secret: false },
+    { key: 'pageAccessToken', label: 'Page access token', secret: true },
+  ],
+  test: [],
+  web: [{ key: 'visitorTokenSecret', label: 'Visitor token secret', secret: true }],
+}
+
 export function settingsRoutes(ctx: ApiContext) {
   const { db, env, runtime } = ctx
 
@@ -364,6 +380,9 @@ export function settingsRoutes(ctx: ApiContext) {
               enabled: c.enabled,
               defaultMode: c.defaultMode,
               hasConfig: Boolean(c.configEncrypted),
+              // Meta asks for this when subscribing a page; the operator pastes it back.
+              verifyToken: c.type === 'messenger' ? c.webhookSecret : null,
+              requiredFields: REQUIRED_FIELDS[c.type] ?? [],
               webhookUrl: `${env.WEBHOOK_BASE_URL.replace(/\/$/, '')}/api/v1/webhooks/${c.id}`,
             })),
           }
@@ -399,6 +418,50 @@ export function settingsRoutes(ctx: ApiContext) {
         },
       )
 
+      /**
+       * Ask the platform whether the stored credentials work.
+       *
+       * Pasting a token and learning it was wrong when a customer's first message goes
+       * unanswered is a bad way to find out.
+       */
+      .post(
+        '/channels/:id/check',
+        async ({ workspaceId, params, status }) => {
+          const rows = await db
+            .select()
+            .from(schema.channels)
+            .where(
+              and(eq(schema.channels.id, params.id), eq(schema.channels.workspaceId, workspaceId)),
+            )
+            .limit(1)
+
+          const channel = rows[0]
+          if (!channel) return status(404, { error: 'Channel not found' })
+
+          const adapter = getAdapter(channel.type)
+          if (!adapter.checkCredentials) {
+            return { ok: true, detail: 'This channel needs no credentials.' }
+          }
+          if (!channel.configEncrypted) {
+            return { ok: false, detail: 'No credentials have been saved yet.' }
+          }
+
+          try {
+            const config = adapter.parseConfig(
+              await decryptJson<unknown>(channel.configEncrypted, env.APP_SECRET_KEY),
+            )
+            return await adapter.checkCredentials(config)
+          } catch (error) {
+            return {
+              ok: false,
+              detail: `The saved settings are incomplete: ${
+                error instanceof Error ? error.message : String(error)
+              }`.slice(0, 300),
+            }
+          }
+        },
+        { auth: 'admin', params: z.object({ id: z.string() }) },
+      )
       .patch(
         '/channels/:id',
         async ({ workspaceId, params, body }) => {

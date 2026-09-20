@@ -237,6 +237,14 @@ export const conversations = pgTable(
      * message (WhatsApp 24h, Messenger policy windows). Null means no window applies.
      */
     messagingWindowExpiresAt: ts('messaging_window_expires_at'),
+    /**
+     * LINE hands out a token with each webhook event that lets us answer for free. It is
+     * single-use and expires about a minute later, and our pipeline is asynchronous, so the
+     * token is carried here and used only while still fresh. Everything else is a push,
+     * which counts against the account's monthly quota.
+     */
+    replyToken: text('reply_token'),
+    replyTokenExpiresAt: ts('reply_token_expires_at'),
     lastMessageAt: ts('last_message_at'),
     lastCustomerMessageAt: ts('last_customer_message_at'),
     waitingHumanSince: ts('waiting_human_since'),

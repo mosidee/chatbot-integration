@@ -54,13 +54,34 @@ export async function processOutbound(
 
   const { adapter, config } = await loadChannel(db, conversation.channelId, env.APP_SECRET_KEY)
 
+  // A reply token is free but single-use and short-lived. Use it only while fresh, and only
+  // for the first part of a split message; the rest go out as pushes.
+  const replyTokenIsFresh =
+    conversation.replyToken !== null &&
+    conversation.replyTokenExpiresAt !== null &&
+    conversation.replyTokenExpiresAt.getTime() > Date.now()
+
+  const replyToken = replyTokenIsFresh ? conversation.replyToken : null
+
+  // Cleared before the attempt, not after it. A reply token is single-use whatever the
+  // outcome, so clearing it on success only would leave a spent token behind for the retry
+  // to present again, and LINE would reject it again.
+  if (replyToken) {
+    await db
+      .update(schema.conversations)
+      .set({ replyToken: null, replyTokenExpiresAt: null })
+      .where(eq(schema.conversations.id, conversation.id))
+  }
+
   try {
     const parts = toSendableParts(message.content, adapter.capabilities.maxTextLength)
     let lastPlatformId: string | null = null
 
-    for (const part of parts) {
+    for (const [index, part] of parts.entries()) {
       const result = await adapter.send(identity.externalId, part, config, {
         messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
+        // Only the first part can use the token; the rest are pushes.
+        ...(index === 0 && replyToken ? { replyToken } : {}),
       })
       lastPlatformId = result.platformMessageId
     }

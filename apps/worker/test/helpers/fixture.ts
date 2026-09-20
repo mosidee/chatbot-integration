@@ -1,6 +1,6 @@
 import { loadEnv } from '@ci/config'
 import type { SlotConfig } from '@ci/core'
-import { encryptSecret, newId, schema } from '@ci/db'
+import { encryptJson, encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import { createRuntime, type Runtime } from '@ci/infra'
 import type { Queue } from 'bullmq'
@@ -33,6 +33,8 @@ export type Fixture = {
   channelId: string
   userId: string
   providerId: string
+  /** Present when the fixture was asked for a LINE channel. */
+  lineChannelId: string | null
   /** The embed slot as core sees it, for indexing knowledge inside a test. */
   embedSlot: () => SlotConfig
   cleanup: () => Promise<void>
@@ -46,6 +48,8 @@ export async function createFixture(options: {
   visionBaseUrl?: string
   /** Configures the embed slot, which turns on knowledge retrieval and recall. */
   embedBaseUrl?: string
+  /** Also create a LINE channel, for exercising the real adapter path. */
+  lineChannel?: { channelSecret: string; channelAccessToken: string }
 }): Promise<Fixture> {
   const env = loadEnv()
   const workspaceId = newId()
@@ -89,6 +93,19 @@ export async function createFixture(options: {
     name: 'Simulator',
     webhookSecret: newId(),
   })
+
+  let lineChannelId: string | null = null
+  if (options.lineChannel) {
+    lineChannelId = newId()
+    await db.insert(schema.channels).values({
+      id: lineChannelId,
+      workspaceId,
+      type: 'line',
+      name: 'LINE OA',
+      webhookSecret: newId(),
+      configEncrypted: await encryptJson(options.lineChannel, env.APP_SECRET_KEY),
+    })
+  }
 
   const providerId = newId()
   await db.insert(schema.providers).values({
@@ -180,6 +197,7 @@ export async function createFixture(options: {
     channelId,
     userId,
     providerId,
+    lineChannelId,
     embedSlot: (): SlotConfig => ({
       task: 'embed',
       primary: embedBaseUrl

@@ -1,4 +1,5 @@
-import type { InboundEvent } from '@ci/channels'
+import type { ChannelAdapter, InboundEvent } from '@ci/channels'
+import type { Logger } from '@ci/core'
 import { type RedactionOptions, redactMessage } from '@ci/core'
 import { type Database, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
@@ -10,7 +11,7 @@ import type {
   SenderType,
 } from '@ci/shared'
 import { messageToText } from '@ci/shared'
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
 
 /**
  * Database operations the processors need.
@@ -387,6 +388,65 @@ export async function applyHandoff(
     handoffReason: reason,
     waitingHumanSince: at,
   })
+}
+
+/**
+ * Fill in a customer's name and avatar from the platform.
+ *
+ * Messenger's webhook carries only a page-scoped id, so without this every conversation shows
+ * an opaque number in the inbox. LINE includes no profile either. The lookup runs once, when
+ * the identity is new or still nameless, and a failure is not worth interrupting anyone over:
+ * a customer who has blocked the account has no readable profile at all.
+ */
+export async function enrichIdentityProfile(
+  db: Database,
+  input: {
+    workspaceId: string
+    identityId: string
+    externalId: string
+    adapter: Pick<ChannelAdapter<never>, 'fetchProfile'>
+    config: unknown
+    logger: Logger
+  },
+): Promise<void> {
+  const fetchProfile = input.adapter.fetchProfile
+  if (!fetchProfile) return
+
+  const rows = await db
+    .select()
+    .from(schema.channelIdentities)
+    .where(eq(schema.channelIdentities.id, input.identityId))
+    .limit(1)
+  const identity = rows[0]
+  if (!identity || identity.displayName) return
+
+  try {
+    const profile = await fetchProfile(input.externalId, input.config as never)
+    if (!profile?.displayName) return
+
+    await db
+      .update(schema.channelIdentities)
+      .set({
+        displayName: profile.displayName,
+        avatarUrl: profile.avatarUrl,
+        profile: profile.raw,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.channelIdentities.id, identity.id))
+
+    // The customer record carries the name agents actually see in the inbox.
+    await db
+      .update(schema.customers)
+      .set({ displayName: profile.displayName, updatedAt: new Date() })
+      .where(
+        and(eq(schema.customers.id, identity.customerId), isNull(schema.customers.displayName)),
+      )
+  } catch (error) {
+    input.logger.warn('could not read the customer profile', {
+      externalId: input.externalId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 export async function mergeCustomerFields(

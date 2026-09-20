@@ -3,7 +3,14 @@ import type { EffectPorts, Logger } from '@ci/core'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { type Database, schema } from '@ci/db'
 import type { InboundJob, Runtime } from '@ci/infra'
-import { loadChannel, loadWorkspaceSettings, resolveConversation, storeMessage } from '@ci/infra'
+import {
+  enrichIdentityProfile,
+  loadChannel,
+  loadWorkspaceSettings,
+  resolveConversation,
+  resolveInboundMedia,
+  storeMessage,
+} from '@ci/infra'
 import { hasImages } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 
@@ -13,6 +20,12 @@ import { and, eq } from 'drizzle-orm'
  * The HTTP handler only persisted the raw request and returned 200, because LINE and Meta
  * retry or disable endpoints that respond slowly. Everything meaningful happens here.
  */
+/**
+ * How long a LINE reply token stays usable. LINE documents about a minute and does not
+ * guarantee anything beyond it, so this is deliberately conservative.
+ */
+const REPLY_TOKEN_TTL_MS = 55_000
+
 export async function processInbound(
   runtime: Runtime,
   ports: EffectPorts,
@@ -59,12 +72,43 @@ export async function processInbound(
         messagingWindowHours: adapter.capabilities.messagingWindowHours,
       })
 
+      // A new identity has no name yet. Messenger's webhook carries only a page-scoped id,
+      // so without this every conversation shows an opaque number in the inbox.
+      if (resolved.isNew) {
+        await enrichIdentityProfile(db, {
+          workspaceId: job.workspaceId,
+          identityId: resolved.channelIdentityId,
+          externalId: event.externalId,
+          adapter,
+          config,
+          logger,
+        })
+      }
+
+      // Pull media into our own storage before the AI turn runs. A platform reference is
+      // worthless later: LINE needs its blob endpoint and Messenger's CDN links expire.
+      const media = await resolveInboundMedia(event.message, {
+        workspaceId: job.workspaceId,
+        channelType: channel.type,
+        adapter,
+        config,
+        blob: runtime.blob,
+        logger,
+      })
+      if (media.downloaded > 0 || media.failed > 0) {
+        logger.info('inbound media resolved', {
+          conversationId: resolved.conversationId,
+          downloaded: media.downloaded,
+          failed: media.failed,
+        })
+      }
+
       const stored = await storeMessage(db, {
         workspaceId: job.workspaceId,
         conversationId: resolved.conversationId,
         direction: 'inbound',
         senderType: 'customer',
-        message: event.message,
+        message: media.message,
         platformMessageId: event.platformEventId,
         redaction: settings.redaction,
       })
@@ -82,6 +126,18 @@ export async function processInbound(
         conversationId: resolved.conversationId,
         messageId: stored.id,
       })
+
+      // A reply token lets us answer for free, but only once and only for about a minute.
+      // It is carried on the conversation so the outbound step can use it while still fresh.
+      if (event.replyToken) {
+        await db
+          .update(schema.conversations)
+          .set({
+            replyToken: event.replyToken,
+            replyTokenExpiresAt: new Date(event.timestamp.getTime() + REPLY_TOKEN_TTL_MS),
+          })
+          .where(eq(schema.conversations.id, resolved.conversationId))
+      }
 
       // Channel events (follow, read receipts) update state but are not questions to answer.
       if (event.message.kind === 'event') continue

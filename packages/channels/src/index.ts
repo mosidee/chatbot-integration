@@ -1,21 +1,28 @@
+export * from './adapters/line'
+export * from './adapters/messenger'
 export * from './adapters/test-channel'
 export * from './adapters/web-channel'
 export * from './jwt'
+export * from './signature'
 export * from './text'
 export * from './types'
 
 import type { ChannelType } from '@ci/shared'
+import { lineChannelAdapter } from './adapters/line'
+import { messengerChannelAdapter } from './adapters/messenger'
 import { testChannelAdapter } from './adapters/test-channel'
 import { webChannelAdapter } from './adapters/web-channel'
 import type { ChannelAdapter } from './types'
 
 /**
- * Adapter lookup. LINE and Messenger register here in M3; nothing outside this file
- * changes when they do.
+ * Adapter lookup. Registering a channel here is the only wiring a new platform needs;
+ * the webhook route, worker and console are already channel-neutral.
  */
 const adapters: Partial<Record<ChannelType, ChannelAdapter<never>>> = {
   test: testChannelAdapter as ChannelAdapter<never>,
   web: webChannelAdapter as ChannelAdapter<never>,
+  line: lineChannelAdapter as unknown as ChannelAdapter<never>,
+  messenger: messengerChannelAdapter as unknown as ChannelAdapter<never>,
 }
 
 export function getAdapter(type: ChannelType): ChannelAdapter<never> {

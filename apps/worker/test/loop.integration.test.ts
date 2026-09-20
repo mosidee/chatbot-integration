@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { signBodyBase64 } from '@ci/channels'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { schema } from '@ci/db'
 import {
@@ -20,6 +21,7 @@ import {
 } from '../../../packages/core/test/helpers/mock-openai-server'
 import { processAiTurn } from '../src/processors/ai-turn'
 import { processInbound } from '../src/processors/inbound'
+import { processOutbound } from '../src/processors/outbound'
 import { processSuggestion } from '../src/processors/suggestion'
 import { processSummarize } from '../src/processors/summarize'
 import { processWaitingHumanTimeout } from '../src/processors/waiting-human'
@@ -809,5 +811,184 @@ describe('the waiting-human fallback timer', () => {
     const messages = await messagesOf(f, conversation.id)
     const ack = messages.find((m) => m.senderType === 'system')
     expect(ack?.text).toBe('รอสักครู่นะคะ')
+  })
+})
+
+describe('LINE reply tokens', () => {
+  const LINE_SECRET = 'line-channel-secret'
+  const LINE_USER = 'U0123456789abcdef0123456789abcdef'
+
+  /** Deliver a signed LINE webhook the way the platform would. */
+  async function lineSays(f: Fixture, text: string, replyToken: string) {
+    const body = JSON.stringify({
+      destination: 'U99999999999999999999999999999999',
+      events: [
+        {
+          type: 'message',
+          mode: 'active',
+          timestamp: Date.now(),
+          webhookEventId: `01TEST${crypto.randomUUID()}`,
+          deliveryContext: { isRedelivery: false },
+          source: { type: 'user', userId: LINE_USER },
+          replyToken,
+          message: { type: 'text', id: String(Date.now()), text, quoteToken: 'q' },
+        },
+      ],
+    })
+
+    const outcome = await ingestWebhook(f.runtime, f.runtime.db, f.lineChannelId as string, {
+      rawBody: body,
+      headers: { 'x-line-signature': await signBodyBase64(body, LINE_SECRET) },
+      query: {},
+    })
+    if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
+
+    await drainQueue(f.runtime.queues.inbound)
+    await processInbound(
+      f.runtime,
+      createEffectPorts(f.runtime, f.runtime.logger),
+      f.runtime.logger,
+      {
+        workspaceId: f.workspaceId,
+        channelId: f.lineChannelId as string,
+        inboundEventId: outcome.inboundEventId,
+      },
+    )
+  }
+
+  async function lineConversation(f: Fixture) {
+    const rows = await f.runtime.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.channelId, f.lineChannelId as string))
+      .limit(1)
+    const row = rows[0]
+    if (!row) throw new Error('no LINE conversation')
+    return row
+  }
+
+  test('a signed webhook creates a conversation and stores the reply token', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
+    })
+
+    await lineSays(f, 'ราคาเท่าไหร่คะ', 'reply-token-fresh')
+
+    const conversation = await lineConversation(f)
+    expect(conversation.replyToken).toBe('reply-token-fresh')
+    expect(conversation.replyTokenExpiresAt).not.toBeNull()
+    // Stored with a conservative expiry, well under LINE's stated minute.
+    const ttl = (conversation.replyTokenExpiresAt as Date).getTime() - Date.now()
+    expect(ttl).toBeGreaterThan(0)
+    expect(ttl).toBeLessThanOrEqual(60_000)
+
+    const messages = await messagesOf(f, conversation.id)
+    expect(messages[0]?.text).toBe('ราคาเท่าไหร่คะ')
+  })
+
+  test('a rejected webhook signature creates nothing at all', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
+    })
+
+    const body = JSON.stringify({ destination: 'U9', events: [] })
+    const outcome = await ingestWebhook(f.runtime, f.runtime.db, f.lineChannelId as string, {
+      rawBody: body,
+      headers: { 'x-line-signature': await signBodyBase64(body, 'the-wrong-secret') },
+      query: {},
+    })
+
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.reason).toBe('invalid_signature')
+
+    const events = await f.runtime.db
+      .select()
+      .from(schema.inboundEvents)
+      .where(eq(schema.inboundEvents.workspaceId, f.workspaceId))
+    expect(events).toHaveLength(0)
+  })
+
+  test('the token is cleared even when the send fails, so a retry cannot reuse it', async () => {
+    // This is the bug the clearing order guards against: a reply token is spent the moment
+    // it is presented, so clearing it only on success would leave the retry to present a
+    // token LINE has already rejected.
+    const provider = mock([{ kind: 'text', text: 'แพ็กเกจเริ่มต้น 990 บาทค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
+    })
+
+    await lineSays(f, 'ราคาเท่าไหร่คะ', 'reply-token-doomed')
+    const conversation = await lineConversation(f)
+    expect(conversation.replyToken).toBe('reply-token-doomed')
+
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    for (const job of await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      deliver: 'send' | 'draft'
+    }>(f.runtime.queues.ai_turn)) {
+      await processAiTurn(f.runtime, ports, f.runtime.logger, job)
+    }
+
+    // The send will fail: the access token is not a real one.
+    for (const job of await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      messageId: string
+    }>(f.runtime.queues.outbound)) {
+      await processOutbound(f.runtime, ports, f.runtime.logger, job).catch(() => {})
+    }
+
+    const after = await lineConversation(f)
+    expect(after.replyToken).toBeNull()
+    expect(after.replyTokenExpiresAt).toBeNull()
+
+    // And the failure is recorded on the message rather than lost.
+    const messages = await messagesOf(f, conversation.id)
+    const aiMessage = messages.find((m) => m.senderType === 'ai')
+    expect(aiMessage?.status).toBe('failed')
+    expect(aiMessage?.error).toBeTruthy()
+  })
+
+  test('an expired token is not presented at all', async () => {
+    const provider = mock([{ kind: 'text', text: 'ตอบกลับค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
+    })
+
+    await lineSays(f, 'คำถามค่ะ', 'reply-token-stale')
+    const conversation = await lineConversation(f)
+
+    // Age the token past its expiry, as a slow queue would.
+    await f.runtime.db
+      .update(schema.conversations)
+      .set({ replyTokenExpiresAt: new Date(Date.now() - 1000) })
+      .where(eq(schema.conversations.id, conversation.id))
+
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    for (const job of await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      deliver: 'send' | 'draft'
+    }>(f.runtime.queues.ai_turn)) {
+      await processAiTurn(f.runtime, ports, f.runtime.logger, job)
+    }
+    for (const job of await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      messageId: string
+    }>(f.runtime.queues.outbound)) {
+      await processOutbound(f.runtime, ports, f.runtime.logger, job).catch(() => {})
+    }
+
+    // Left in place rather than cleared: it was never presented, and it is already useless.
+    const after = await lineConversation(f)
+    expect(after.replyToken).toBe('reply-token-stale')
   })
 })

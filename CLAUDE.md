@@ -118,6 +118,16 @@ without spending money.
 - Card redaction requires an issuer prefix as well as a Luhn check. Roughly one in ten random
   digit strings passes Luhn, so without the prefix a timestamp or a long order reference gets
   masked, which contradicts deliberately preserving order references.
+- Webhook signatures must be computed over the exact bytes received. Never parse and
+  re-serialise the body before verifying: it passes for ASCII and fails for Thai, so the bug
+  looks like a platform outage.
+- LINE reply tokens are single-use and expire in about a minute. They are stored on the
+  conversation and cleared the moment they are spent.
+- `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,
+  or the stack silently runs the previous image.
+- Bun installs workspace dependencies into each workspace's own `node_modules`, not only the
+  root. A Docker runtime stage that copies `/app/node_modules` alone leaves every package
+  unable to resolve its imports; copy the whole built tree.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
@@ -125,8 +135,12 @@ without spending money.
 ## Adding things
 
 **A channel:** implement `ChannelAdapter` in `packages/channels/src/adapters/`, register it in
-that package's `index.ts`, and add fixture tests replaying real captured payloads. Nothing
-else changes: the webhook route, worker and console are already channel-neutral.
+that package's `index.ts`, and add fixture tests. Nothing else changes: the webhook route,
+worker and console are already channel-neutral. Where the platform publishes typed webhook
+definitions, type the fixtures with them, so a payload the platform would not send fails to
+compile. Where it does not, say so in the test file rather than letting composed fixtures read
+as authoritative. Implement `fetchMedia` if the platform sends references rather than bytes,
+and `checkCredentials` so settings can verify a token without waiting for a customer.
 
 **An AI tool:** add it to `createInternalTools` in `packages/core/src/ai/tools.ts`. Tools
 record intent on the scratchpad and never write to the database, so a failed turn leaves no
