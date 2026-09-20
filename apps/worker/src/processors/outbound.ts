@@ -54,15 +54,33 @@ export async function processOutbound(
 
   const { adapter, config } = await loadChannel(db, conversation.channelId, env.APP_SECRET_KEY)
 
+  // A reply token is free but single-use and short-lived. Use it only while fresh, and only
+  // for the first part of a split message; the rest go out as pushes.
+  const replyTokenIsFresh =
+    conversation.replyToken !== null &&
+    conversation.replyTokenExpiresAt !== null &&
+    conversation.replyTokenExpiresAt.getTime() > Date.now()
+
   try {
     const parts = toSendableParts(message.content, adapter.capabilities.maxTextLength)
     let lastPlatformId: string | null = null
+    let replyToken = replyTokenIsFresh ? conversation.replyToken : null
 
     for (const part of parts) {
       const result = await adapter.send(identity.externalId, part, config, {
         messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
+        ...(replyToken ? { replyToken } : {}),
       })
       lastPlatformId = result.platformMessageId
+
+      if (replyToken) {
+        // Consumed, whether or not the platform accepted it: a reply token is single-use.
+        replyToken = null
+        await db
+          .update(schema.conversations)
+          .set({ replyToken: null, replyTokenExpiresAt: null })
+          .where(eq(schema.conversations.id, conversation.id))
+      }
     }
 
     await db
