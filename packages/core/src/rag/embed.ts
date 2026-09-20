@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { embed, embedMany } from 'ai'
+import { createCompatibleFetch } from '../ai/compat'
 import type { SlotConfig, SlotTarget } from '../ai/types'
 import { NoSlotConfiguredError } from '../ai/types'
 
@@ -29,6 +30,8 @@ function providerFor(target: SlotTarget) {
       baseURL: target.provider.baseUrl,
       apiKey: target.provider.apiKey ?? undefined,
       headers: target.provider.headers,
+      // Repairs gateways that frame a non-streaming answer as an event stream.
+      fetch: createCompatibleFetch(),
     })
     cache.set(key, provider)
   }

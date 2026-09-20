@@ -1,4 +1,5 @@
 export * from './ai/agent'
+export * from './ai/compat'
 export * from './ai/cost'
 export * from './ai/prompt'
 export * from './ai/registry'

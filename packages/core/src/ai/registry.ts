@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel } from 'ai'
+import { createCompatibleFetch } from './compat'
 import { NoSlotConfiguredError, type SlotConfig, type SlotTarget } from './types'
 
 /**
@@ -25,6 +26,8 @@ export function resolveModel(target: SlotTarget): LanguageModel {
     baseURL: target.provider.baseUrl,
     apiKey: target.provider.apiKey ?? undefined,
     headers: target.provider.headers,
+    // Repairs gateways that frame a non-streaming answer as an event stream.
+    fetch: createCompatibleFetch(),
   })
 
   const model = provider.chatModel(target.model)
