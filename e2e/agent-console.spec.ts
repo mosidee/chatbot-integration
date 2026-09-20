@@ -231,3 +231,35 @@ test('the embedding slot can stop sending the dimensions field, and remembers it
 
   await resetEmbedSlot(request)
 })
+
+test('a model can be tested from settings before a customer finds out', async ({
+  page,
+  request,
+}) => {
+  // A gateway's catalogue lists what it is configured to offer, not what it will serve.
+  await resetEmbedSlot(request)
+  await signIn(page)
+  await page.goto('/settings')
+
+  const verify = page.getByTestId('slot-agent_chat-primary-model-verify')
+  await expect(verify).toBeEnabled({ timeout: 20_000 })
+  await verify.click()
+
+  const result = page.getByTestId('slot-agent_chat-primary-model-verify-result')
+  await expect(result).toBeVisible({ timeout: 20_000 })
+  await expect(result).toContainText('ใช้งานได้')
+
+  // A model the provider will not serve reports the provider's own words, not ours.
+  await page.getByTestId('slot-agent_chat-primary-model').selectOption({ index: 4 })
+  const typed = page.getByTestId('slot-agent_chat-primary-model')
+  await typed.fill('no/such-model')
+  await typed.blur()
+  await page.getByTestId('slot-agent_chat-primary-model-verify').click()
+  await expect(page.getByTestId('slot-agent_chat-primary-model-verify-result')).toContainText(
+    'ใช้ไม่ได้',
+    { timeout: 20_000 },
+  )
+
+  // Nothing to test until a model is chosen, so no button appears at all.
+  await expect(page.getByTestId('slot-summarize-primary-model-verify')).toHaveCount(0)
+})

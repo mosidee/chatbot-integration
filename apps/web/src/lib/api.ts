@@ -187,6 +187,9 @@ export type Provider = {
   enabled: boolean
 }
 
+/** The outcome of calling one model once, from the settings page. */
+export type VerifyResult = { ok: true; detail: string } | { ok: false; error: string }
+
 export type TaskSlot = {
   id: string
   task: string
@@ -432,6 +435,8 @@ export const api = {
     deleteProvider: (id: string) => del<{ ok: true }>(`/v1/settings/providers/${id}`),
     providerModels: (id: string) =>
       post<{ models: string[]; error?: string }>(`/v1/settings/providers/${id}/models`),
+    verifyModel: (id: string, body: { model: string; task: string; sendDimensions?: boolean }) =>
+      post<VerifyResult>(`/v1/settings/providers/${id}/verify-model`, body),
     taskSlots: () => get<{ slots: TaskSlot[] }>('/v1/settings/task-slots'),
     setTaskSlot: (task: string, body: Record<string, unknown>) =>
       put<{ ok: true }>(`/v1/settings/task-slots/${task}`, body),

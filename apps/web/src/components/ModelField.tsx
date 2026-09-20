@@ -1,9 +1,9 @@
 import type { QueryClient } from '@tanstack/react-query'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../lib/api'
-import { Button, Input } from './ui'
+import { api, type VerifyResult } from '../lib/api'
+import { Button, cn, Input } from './ui'
 
 /**
  * Choosing a model, once a provider is chosen.
@@ -105,26 +105,29 @@ export function ModelField({
   // Either the provider serves no list, or the operator asked to type an id by hand.
   if (typing || (!models.isPending && known.length === 0)) {
     return (
-      <div className="flex min-w-0 flex-1 gap-1">
-        <Input
-          className="h-8 min-w-0 flex-1 text-[13px]"
-          data-testid={testId}
-          placeholder={t('settings.model')}
-          defaultValue={value ?? ''}
-          autoFocus={typing}
-          onBlur={(e) => commit(e.target.value)}
-        />
-        {known.length > 0 ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="px-1.5"
-            data-testid={`${testId}-back-to-list`}
-            onClick={() => setTyping(false)}
-          >
-            {t('settings.backToList')}
-          </Button>
-        ) : null}
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 gap-1">
+          <Input
+            className="h-8 w-full min-w-0 flex-1 text-[13px]"
+            data-testid={testId}
+            title={value ?? undefined}
+            placeholder={t('settings.model')}
+            defaultValue={value ?? ''}
+            autoFocus={typing}
+            onBlur={(e) => commit(e.target.value)}
+          />
+          {known.length > 0 ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="shrink-0 px-1.5"
+              data-testid={`${testId}-back-to-list`}
+              onClick={() => setTyping(false)}
+            >
+              {t('settings.backToList')}
+            </Button>
+          ) : null}
+        </div>
       </div>
     )
   }
@@ -132,42 +135,111 @@ export function ModelField({
   const unlisted = value && !known.includes(value) ? value : null
 
   return (
-    <select
-      className={CONTROL_CLASS}
-      data-testid={testId}
-      disabled={models.isPending}
-      value={value ?? ''}
-      onChange={(e) => {
-        if (e.target.value === TYPE_IT_IN) setTyping(true)
-        else commit(e.target.value)
-      }}
-    >
-      <option value="">
-        {models.isPending ? t('settings.loadingModels') : t('settings.none')}
-      </option>
-      {unlisted ? (
-        <option value={unlisted}>
-          {unlisted} ({t('settings.unlisted')})
-        </option>
-      ) : null}
-      {groupByVendor(known).map((group) =>
-        group.vendor === null ? (
-          group.models.map((model) => (
-            <option key={model} value={model}>
-              {model}
+    <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 gap-1">
+        <select
+          className={CONTROL_CLASS}
+          data-testid={testId}
+          disabled={models.isPending}
+          value={value ?? ''}
+          onChange={(e) => {
+            if (e.target.value === TYPE_IT_IN) setTyping(true)
+            else commit(e.target.value)
+          }}
+        >
+          <option value="">
+            {models.isPending ? t('settings.loadingModels') : t('settings.none')}
+          </option>
+          {unlisted ? (
+            <option value={unlisted}>
+              {unlisted} ({t('settings.unlisted')})
             </option>
-          ))
-        ) : (
-          <optgroup key={group.vendor} label={group.vendor}>
-            {group.models.map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </optgroup>
-        ),
-      )}
-      <option value={TYPE_IT_IN}>{t('settings.typeModelIn')}</option>
-    </select>
+          ) : null}
+          {groupByVendor(known).map((group) =>
+            group.vendor === null ? (
+              group.models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))
+            ) : (
+              <optgroup key={group.vendor} label={group.vendor}>
+                {group.models.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </optgroup>
+            ),
+          )}
+          <option value={TYPE_IT_IN}>{t('settings.typeModelIn')}</option>
+        </select>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Calling one model once, to find out whether the gateway will actually serve it.
+ *
+ * Rendered across the whole slot row rather than beside the model, because a provider's
+ * refusal is a sentence, not a word, and the fix depends on reading it: an unmapped model
+ * id, an entitlement the account lacks and a credential of the wrong kind all look the
+ * same until you see what the provider said.
+ */
+export function ModelVerify({
+  providerId,
+  model,
+  task,
+  label,
+  sendDimensions,
+  testId,
+}: {
+  providerId: string | null
+  model: string | null
+  task: string
+  label: string
+  sendDimensions?: boolean
+  testId: string
+}) {
+  const { t } = useTranslation()
+  // Not cached: what the gateway serves can change without anything here changing.
+  const verify = useMutation({
+    mutationFn: (): Promise<VerifyResult> =>
+      api.settings.verifyModel(providerId as string, {
+        model: model as string,
+        task,
+        sendDimensions,
+      }),
+  })
+
+  if (!providerId || !model) return null
+
+  return (
+    <div className="mt-1.5 flex items-start gap-2">
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-6 shrink-0 px-1.5 text-[11px]"
+        data-testid={`${testId}-verify`}
+        disabled={verify.isPending}
+        onClick={() => verify.mutate()}
+      >
+        {verify.isPending ? t('settings.verifying') : `${t('settings.verify')} ${label}`}
+      </Button>
+      {verify.data ? (
+        <p
+          className={cn(
+            'min-w-0 break-words pt-0.5 text-[11px]',
+            verify.data.ok ? 'text-emerald-600' : 'text-red-600',
+          )}
+          data-testid={`${testId}-verify-result`}
+        >
+          {verify.data.ok
+            ? `${t('settings.verifyOk')} (${verify.data.detail})`
+            : `${t('settings.verifyFailed')}: ${verify.data.error}`}
+        </p>
+      ) : null}
+    </div>
   )
 }

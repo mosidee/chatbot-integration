@@ -142,6 +142,10 @@ without spending money.
   root. A Docker runtime stage that copies `/app/node_modules` alone leaves every package
   unable to resolve its imports; copy the whole built tree.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
+- A gateway's `/models` catalogue lists what it is configured to offer, not what it will
+  serve. On the pilot gateway 8 of 39 entries are refused when called, for three unrelated
+  reasons. Settings has a per-model test button for this; it calls the model through the
+  same path a real turn uses, so the compatibility shim is exercised too.
 - A `<datalist>` is not a picker. Browsers filter its options by whatever the input already
   contains, so a field holding a saved value offers only the entries resembling it and the
   rest cannot be reached. Its arrow is also hidden until hover. Where every option must be

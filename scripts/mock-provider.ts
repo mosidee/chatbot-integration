@@ -69,6 +69,21 @@ const server = Bun.serve({
       })
     }
 
+    // An unknown model is refused the way a real gateway refuses one, so the console can be
+    // tested against a failure as well as a success.
+    const probe = (await request.clone().json()) as { model?: string }
+    if (probe.model && !probe.model.startsWith('mock')) {
+      return Response.json(
+        {
+          error: {
+            message: `The supported API model names are mock-model, mock-model-vision, but you passed ${probe.model}.`,
+            type: 'invalid_request_error',
+          },
+        },
+        { status: 400 },
+      )
+    }
+
     const body = (await request.json()) as {
       messages?: { role: string; content: string | { type: string }[] }[]
     }
