@@ -2,11 +2,13 @@ import { expect, test } from '@playwright/test'
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
+  API_URL,
   apiSignIn,
   configureMockProvider,
   customerSays,
   customerSendsImage,
   findTestChannelId,
+  findWebChannelId,
   resetEmbedSlot,
   signIn,
   uniqueCustomer,
@@ -340,4 +342,58 @@ test('an admin erases a customer, and it takes two clicks', async ({ page, reque
   await expect(page.getByTestId('conversation-row').filter({ hasText: customer })).toHaveCount(0, {
     timeout: 25_000,
   })
+})
+
+test('a visitor chats through the embedded widget and the AI answers', async ({
+  page,
+  request,
+  context,
+}) => {
+  // The widget is what salon-saas will embed, so this drives the real thing: the public
+  // widget API, a session token, the queue, the AI, and the poll that brings the reply back.
+  const channelId = await findWebChannelId(request)
+
+  // Against the API's own origin, which is what serves the widget. In production the
+  // console and the widget share an origin; in development the console is on Vite.
+  await page.goto(`${API_URL}/widget/index.html?channel=${channelId}&colour=%232563eb`)
+
+  const input = page.locator('#text')
+  await expect(input).toBeVisible({ timeout: 20_000 })
+  await input.fill('สวัสดีค่ะ ราคาเท่าไหร่')
+  await page.locator('#send').click()
+
+  // The visitor's own message appears at once, before the round trip, and exactly once:
+  // the poll brings back the stored copy with a different id, which must adopt the bubble
+  // already on screen rather than drawing a second one.
+  await expect(page.locator('.bubble.you')).toContainText('ราคาเท่าไหร่')
+
+  // And the answer arrives on a poll, with no socket involved.
+  await expect(page.locator('.bubble.support').first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.bubble.you')).toHaveCount(1)
+
+  // A second visitor is a different conversation. One widget session must never show
+  // another person's messages, which is the whole reason the session carries the identity.
+  const other = await context.newPage()
+  await other.addInitScript(() => {
+    try {
+      localStorage.setItem('chat-widget:visitor', 'someone-else')
+    } catch {
+      // Storage is blocked; the widget falls back to a per-load id, which suits this test.
+    }
+  })
+  await other.goto(`${API_URL}/widget/index.html?channel=${channelId}`)
+  await expect(other.locator('#text')).toBeVisible({ timeout: 20_000 })
+  await other.waitForTimeout(1500)
+  await expect(other.locator('.bubble')).toHaveCount(0)
+  await other.close()
+})
+
+test('the loader script is served for a host page to embed', async ({ request }) => {
+  const response = await request.get(`${API_URL}/widget/loader.js`)
+
+  expect(response.status()).toBe(200)
+  const body = await response.text()
+  // The contract with salon-saas: a script tag carrying data-channel, and nothing else.
+  expect(body).toContain('data-channel')
+  expect(body).toContain('/widget/index.html')
 })

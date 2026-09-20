@@ -68,6 +68,7 @@ jobs:
       # The console must be built before the tests: the routing contract asserts that the
       # API serves it, which it cannot do without the assets.
       - run: bun run build:web
+      - run: bun run build:widget
       - run: bun run test
 
   e2e:
@@ -119,6 +120,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run db:migrate
       - run: bun run db:seed
+      # The browser tests embed the widget, which the API serves from disk.
+      - run: bun run build:widget
       - run: bunx playwright install chromium --with-deps
       - run: bun run test:e2e
       - uses: actions/upload-artifact@v4

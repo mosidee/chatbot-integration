@@ -52,6 +52,14 @@
         "vite": "8.3.0",
       },
     },
+    "apps/widget": {
+      "name": "@ci/widget",
+      "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "5.9.3",
+        "vite": "8.3.0",
+      },
+    },
     "apps/worker": {
       "name": "@ci/worker",
       "version": "0.0.0",
@@ -239,6 +247,8 @@
     "@ci/shared": ["@ci/shared@workspace:packages/shared"],
 
     "@ci/web": ["@ci/web@workspace:apps/web"],
+
+    "@ci/widget": ["@ci/widget@workspace:apps/widget"],
 
     "@ci/worker": ["@ci/worker@workspace:apps/worker"],
 

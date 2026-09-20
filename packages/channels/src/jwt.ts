@@ -54,6 +54,21 @@ export async function verifyVisitorToken(
   secret: string,
   now: Date = new Date(),
 ): Promise<VisitorClaims> {
+  const rawClaims = await verifyEnvelope(token, secret)
+
+  const parsed = visitorClaimsSchema.safeParse(rawClaims)
+  if (!parsed.success) throw new VisitorTokenError('payload is missing required claims')
+
+  const claims = parsed.data
+  if (claims.exp !== undefined && claims.exp * 1000 <= now.getTime()) {
+    throw new VisitorTokenError('token has expired')
+  }
+
+  return claims
+}
+
+/** Signature and structure only. What the payload must contain is the caller's business. */
+async function verifyEnvelope(token: string, secret: string): Promise<unknown> {
   const parts = token.split('.')
   if (parts.length !== 3) throw new VisitorTokenError('token must have three segments')
   const [headerPart, payloadPart, signaturePart] = parts as [string, string, string]
@@ -92,19 +107,43 @@ export async function verifyVisitorToken(
     throw new VisitorTokenError('payload is not valid JSON')
   }
 
-  const parsed = visitorClaimsSchema.safeParse(rawClaims)
-  if (!parsed.success) throw new VisitorTokenError('payload is missing required claims')
+  return rawClaims
+}
 
-  const claims = parsed.data
-  if (claims.exp !== undefined && claims.exp * 1000 <= now.getTime()) {
+/**
+ * The same envelope, with the caller deciding what the payload must look like.
+ *
+ * The widget's own session token is not a visitor token from a host application: it is
+ * ours, minted after we have decided who the visitor is, and it carries the conversation
+ * they are allowed to see. Sharing the signing and verification keeps one HMAC
+ * implementation rather than two.
+ */
+export async function verifySignedPayload<T>(
+  token: string,
+  secret: string,
+  schema: { safeParse: (value: unknown) => { success: boolean; data?: T } },
+  now: Date = new Date(),
+): Promise<T> {
+  const raw = await verifyEnvelope(token, secret)
+  const parsed = schema.safeParse(raw)
+  if (!parsed.success || parsed.data === undefined) {
+    throw new VisitorTokenError('payload is missing required claims')
+  }
+
+  const expiry = (raw as { exp?: unknown }).exp
+  if (typeof expiry === 'number' && expiry * 1000 <= now.getTime()) {
     throw new VisitorTokenError('token has expired')
   }
 
-  return claims
+  return parsed.data
 }
 
 /** Sign a token. Used by tests and by the documentation example for host applications. */
 export async function signVisitorToken(claims: VisitorClaims, secret: string): Promise<string> {
+  return signPayload(claims, secret)
+}
+
+export async function signPayload(claims: unknown, secret: string): Promise<string> {
   const encode = (value: unknown): string =>
     btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 

@@ -16,6 +16,7 @@ COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 COPY packages/infra/package.json packages/infra/
 COPY packages/shared/package.json packages/shared/
+COPY apps/widget/package.json apps/widget/
 RUN bun install --frozen-lockfile
 
 FROM deps AS build
@@ -23,6 +24,8 @@ COPY . .
 # `bun --cwd <dir> run <script>` prints help instead of running it, which silently produced
 # no assets. A subshell does what was intended.
 RUN cd apps/web && bun run build
+# The API serves the widget too, so it is part of this image rather than its own.
+RUN cd apps/widget && bun run build
 
 FROM oven/bun:1.4.2-slim AS runtime
 WORKDIR /app
