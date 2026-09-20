@@ -11,7 +11,6 @@ import { traceRoutes } from './routes/traces'
 import { uploadRoutes } from './routes/uploads'
 import { webhookRoutes } from './routes/webhooks'
 import { widgetRoutes } from './routes/widget'
-import { widgetDemoRoutes } from './routes/widget-demo'
 import { createWsRoutes } from './ws'
 
 /**
@@ -64,10 +63,6 @@ export function createApp(ctx: ApiContext) {
       // browsers rather than with the console, and versioning them together would tie a
       // customer's page to our internal changes.
       .group('/api/widget', (app) => app.use(widgetRoutes(ctx)))
-
-      // A host page for trying the widget, on our own domain. Outside the console because
-      // the point is to look at it the way a customer will, without signing in.
-      .use(widgetDemoRoutes(ctx))
 
       .group('/api/v1', (app) =>
         app

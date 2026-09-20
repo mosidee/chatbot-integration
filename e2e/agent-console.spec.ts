@@ -398,24 +398,75 @@ test('the loader script is served for a host page to embed', async ({ request })
   expect(body).toContain('/widget/index.html')
 })
 
-test('the demo page embeds the widget the way a host site would', async ({ page }) => {
-  // A stand-in for salon-saas, so the widget can be seen before that site embeds it.
-  await page.goto(`${API_URL}/widget-demo`)
+test('the widget is set up and previewed from settings', async ({ page }) => {
+  // Everything needed to put the widget on a website, where an operator configures it.
+  await signIn(page)
+  await page.goto('/settings')
 
-  // The launcher is injected by the loader, into the page, exactly as it will be elsewhere.
-  const launcher = page.getByRole('button', { name: 'แชทกับเรา' })
-  await expect(launcher).toBeVisible({ timeout: 20_000 })
+  // The web channel's own configure panel.
+  const configure = page
+    .locator('div', { hasText: /^Web widget/ })
+    .getByRole('button', { name: 'ตั้งค่า' })
+    .first()
+  await expect(configure).toBeVisible({ timeout: 20_000 })
+  await configure.click()
 
-  // Closed until asked for: nothing of the conversation loads before a click.
-  const frame = page.locator('iframe')
-  await expect(frame).toBeHidden()
+  // The snippet carries the real channel id, which is the one thing nobody can be expected
+  // to remember and which fails silently on somebody else's page if it is wrong.
+  const snippet = page.getByTestId('widget-snippet')
+  await expect(snippet).toBeVisible()
+  await expect(snippet).toContainText('data-channel=')
+  await expect(snippet).toContainText('/widget/loader.js')
 
-  await launcher.click()
-  await expect(frame).toBeVisible()
+  // Unrestricted until somebody says otherwise, and it says so.
+  await expect(page.getByTestId('allowed-origins')).toHaveValue('')
 
-  const chat = page.frameLocator('iframe')
-  await expect(chat.locator('#text')).toBeVisible({ timeout: 20_000 })
+  // The preview runs the real widget against the same channel.
+  await page.getByTestId('toggle-widget-preview').click()
+  const preview = page.getByTestId('widget-preview')
+  await expect(preview).toBeVisible()
+  await expect(page.frameLocator('[data-testid="widget-preview"]').locator('#text')).toBeVisible({
+    timeout: 20_000,
+  })
+})
 
-  // And the page shows the snippet to copy, with the real channel id in it.
-  await expect(page.locator('pre')).toContainText('data-channel=')
+test('setting the allowed origins keeps the rest of the channel config', async ({
+  page,
+  request,
+}) => {
+  // The console can only send what somebody edited, because it may not read a secret back.
+  // Replacing the whole config meant saving the origins erased the visitor token secret.
+  const channels = await request.get(`${API_URL}/api/v1/settings/channels`)
+  const before = (await channels.json()) as { channels: { id: string; type: string }[] }
+  const web = before.channels.find((c) => c.type === 'web')
+  if (!web) throw new Error('no web channel')
+
+  await request.patch(`${API_URL}/api/v1/settings/channels/${web.id}`, {
+    data: { config: { visitorTokenSecret: 'a-secret-long-enough-to-pass' } },
+  })
+  await request.patch(`${API_URL}/api/v1/settings/channels/${web.id}`, {
+    data: { config: { allowedOrigins: ['https://app.example.com'] } },
+  })
+
+  await signIn(page)
+  await page.goto('/settings')
+  const configure = page
+    .locator('div', { hasText: /^Web widget/ })
+    .getByRole('button', { name: 'ตั้งค่า' })
+    .first()
+  await configure.click()
+
+  await expect(page.getByTestId('allowed-origins')).toHaveValue('https://app.example.com', {
+    timeout: 20_000,
+  })
+
+  // The secret survived, so the widget can still identify a logged-in visitor.
+  const after = await request.get(`${API_URL}/api/v1/settings/channels`)
+  const web2 = ((await after.json()) as { channels: { id: string; hasConfig: boolean }[] }).channels
+  expect(web2.find((c) => c.id === web.id)?.hasConfig).toBe(true)
+
+  // Put it back, so a later run starts unrestricted like the seed leaves it.
+  await request.patch(`${API_URL}/api/v1/settings/channels/${web.id}`, {
+    data: { config: { allowedOrigins: [] } },
+  })
 })

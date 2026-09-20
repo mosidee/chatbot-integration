@@ -213,6 +213,9 @@ export type Channel = {
   /** Meta asks for this when subscribing a page. Null for other platforms. */
   verifyToken: string | null
   requiredFields: ChannelField[]
+  /** Widget channels only: where it may be embedded, and the script to embed. */
+  allowedOrigins?: string[]
+  embedUrl?: string
 }
 
 export type CredentialCheck = {

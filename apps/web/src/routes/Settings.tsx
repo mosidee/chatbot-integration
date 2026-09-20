@@ -11,6 +11,7 @@ import {
   VerifyMessage,
 } from '../components/ModelField'
 import { Button, Card, cn, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
+import { WidgetPanel } from '../components/WidgetPanel'
 import { api, type Channel, type CredentialCheck, type Provider, type TaskSlot } from '../lib/api'
 
 const TASKS = [
@@ -676,6 +677,8 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
               </code>
             </div>
           ) : null}
+
+          {channel.type === 'web' ? <WidgetPanel channel={channel} onChange={onChange} /> : null}
 
           {channel.requiredFields.map((field) => (
             <div key={field.key}>

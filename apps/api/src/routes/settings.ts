@@ -41,6 +41,24 @@ const REQUIRED_FIELDS: Record<string, { key: string; label: string; secret: bool
 export function settingsRoutes(ctx: ApiContext) {
   const { db, env, runtime } = ctx
 
+  /**
+   * The widget's allowed origins, read back for the console to edit.
+   *
+   * Decryption can fail after a key rotation, and a settings page that will not load is a
+   * worse outcome than one that shows an empty list, so this never throws.
+   */
+  const allowedOriginsOf = async (encrypted: string | null): Promise<string[]> => {
+    if (!encrypted) return []
+    try {
+      const config = await decryptJson<{ allowedOrigins?: unknown }>(encrypted, env.APP_SECRET_KEY)
+      return Array.isArray(config.allowedOrigins)
+        ? config.allowedOrigins.filter((value): value is string => typeof value === 'string')
+        : []
+    } catch {
+      return []
+    }
+  }
+
   return (
     new Elysia({ prefix: '/settings' })
       .use(authPlugin(ctx))
@@ -469,18 +487,29 @@ export function settingsRoutes(ctx: ApiContext) {
             .from(schema.channels)
             .where(eq(schema.channels.workspaceId, workspaceId))
           return {
-            channels: rows.map((c) => ({
-              id: c.id,
-              type: c.type,
-              name: c.name,
-              enabled: c.enabled,
-              defaultMode: c.defaultMode,
-              hasConfig: Boolean(c.configEncrypted),
-              // Meta asks for this when subscribing a page; the operator pastes it back.
-              verifyToken: c.type === 'messenger' ? c.webhookSecret : null,
-              requiredFields: REQUIRED_FIELDS[c.type] ?? [],
-              webhookUrl: `${env.WEBHOOK_BASE_URL.replace(/\/$/, '')}/api/v1/webhooks/${c.id}`,
-            })),
+            channels: await Promise.all(
+              rows.map(async (c) => ({
+                id: c.id,
+                type: c.type,
+                name: c.name,
+                enabled: c.enabled,
+                defaultMode: c.defaultMode,
+                hasConfig: Boolean(c.configEncrypted),
+                // Meta asks for this when subscribing a page; the operator pastes it back.
+                verifyToken: c.type === 'messenger' ? c.webhookSecret : null,
+                requiredFields: REQUIRED_FIELDS[c.type] ?? [],
+                webhookUrl: `${env.WEBHOOK_BASE_URL.replace(/\/$/, '')}/api/v1/webhooks/${c.id}`,
+                // Only the widget needs these, and neither is a secret: the origins are a
+                // restriction rather than a credential, and the embed URL is public by
+                // definition since it ends up in somebody's page source.
+                ...(c.type === 'web'
+                  ? {
+                      allowedOrigins: await allowedOriginsOf(c.configEncrypted),
+                      embedUrl: `${env.PUBLIC_API_URL.replace(/\/$/, '')}/widget/loader.js`,
+                    }
+                  : {}),
+              })),
+            ),
           }
         },
         { auth: 'agent' },
@@ -566,7 +595,41 @@ export function settingsRoutes(ctx: ApiContext) {
           if (body.enabled !== undefined) patch.enabled = body.enabled
           if (body.defaultMode !== undefined) patch.defaultMode = body.defaultMode
           if (body.config !== undefined) {
-            patch.configEncrypted = await encryptJson(body.config, env.APP_SECRET_KEY)
+            /**
+             * Merged, not replaced.
+             *
+             * The console sends only the fields somebody edited, because a secret it may
+             * not read cannot be sent back. Replacing the whole config meant that setting
+             * the widget's allowed origins silently erased its visitor token secret, and
+             * the other way round. A blank value is treated as "leave it alone", which is
+             * what the form's own "unchanged" placeholder promises.
+             */
+            const rows = await db
+              .select({ configEncrypted: schema.channels.configEncrypted })
+              .from(schema.channels)
+              .where(
+                and(
+                  eq(schema.channels.id, params.id),
+                  eq(schema.channels.workspaceId, workspaceId),
+                ),
+              )
+              .limit(1)
+
+            const existing = rows[0]?.configEncrypted
+              ? await decryptJson<Record<string, unknown>>(
+                  rows[0].configEncrypted,
+                  env.APP_SECRET_KEY,
+                )
+              : {}
+
+            const incoming = Object.fromEntries(
+              Object.entries(body.config).filter(([, value]) => value !== ''),
+            )
+
+            patch.configEncrypted = await encryptJson(
+              { ...existing, ...incoming },
+              env.APP_SECRET_KEY,
+            )
           }
           await db
             .update(schema.channels)
