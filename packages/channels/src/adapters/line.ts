@@ -326,6 +326,28 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
     }
   },
 
+  async checkCredentials(config: LineConfig) {
+    try {
+      const quota = await clientFor(config).getMessageQuota()
+      return {
+        ok: true,
+        detail: 'The access token works.',
+        info: {
+          quotaType: quota.type ?? 'unknown',
+          ...(quota.value !== undefined ? { monthlyLimit: quota.value } : {}),
+        },
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        ok: false,
+        // The channel secret cannot be checked here: it is only exercised when LINE signs
+        // a real webhook, so a wrong secret shows up as rejected deliveries instead.
+        detail: `LINE rejected the access token: ${message.slice(0, 200)}`,
+      }
+    }
+  },
+
   async fetchMedia(reference: string, config: LineConfig) {
     const messageId = reference.startsWith('line:') ? reference.slice('line:'.length) : reference
     const blob = await blobClientFor(config).getMessageContent(messageId)

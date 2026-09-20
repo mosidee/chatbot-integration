@@ -97,6 +97,21 @@ export type ChannelAdapter<TConfig = unknown> = {
     reference: string,
     config: TConfig,
   ): Promise<{ data: Uint8Array<ArrayBuffer>; mime: string }>
+  /**
+   * Ask the platform whether these credentials work.
+   *
+   * Pasting a token and finding out it was wrong when a customer's first message goes
+   * unanswered is a bad way to learn. This gives the settings screen something to check.
+   */
+  checkCredentials?(config: TConfig): Promise<CredentialCheck>
+}
+
+export type CredentialCheck = {
+  ok: boolean
+  /** One sentence an operator can act on, not an error code. */
+  detail: string
+  /** Anything worth showing, such as the page or account name the token belongs to. */
+  info?: Record<string, string | number>
 }
 
 export class ChannelConfigError extends Error {

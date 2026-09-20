@@ -190,6 +190,8 @@ export type TaskSlot = {
   params: Record<string, unknown>
 }
 
+export type ChannelField = { key: string; label: string; secret: boolean }
+
 export type Channel = {
   id: string
   type: 'test' | 'web' | 'line' | 'messenger'
@@ -198,6 +200,15 @@ export type Channel = {
   defaultMode: ConversationMode | null
   hasConfig: boolean
   webhookUrl: string
+  /** Meta asks for this when subscribing a page. Null for other platforms. */
+  verifyToken: string | null
+  requiredFields: ChannelField[]
+}
+
+export type CredentialCheck = {
+  ok: boolean
+  detail: string
+  info?: Record<string, string | number>
 }
 
 export type CannedResponse = {
@@ -418,6 +429,14 @@ export const api = {
     setTaskSlot: (task: string, body: Record<string, unknown>) =>
       put<{ ok: true }>(`/v1/settings/task-slots/${task}`, body),
     channels: () => get<{ channels: Channel[] }>('/v1/settings/channels'),
+    createChannel: (body: {
+      type: Channel['type']
+      name: string
+      config?: Record<string, unknown>
+    }) => post<{ id: string }>('/v1/settings/channels', body),
+    updateChannel: (id: string, body: Record<string, unknown>) =>
+      patch<{ ok: true }>(`/v1/settings/channels/${id}`, body),
+    checkChannel: (id: string) => post<CredentialCheck>(`/v1/settings/channels/${id}/check`),
     members: () => get<{ members: Member[] }>('/v1/settings/members'),
     cannedResponses: () => get<{ responses: CannedResponse[] }>('/v1/settings/canned-responses'),
     createCannedResponse: (body: { shortcut: string; body: string; language?: Language | null }) =>

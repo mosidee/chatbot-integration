@@ -357,6 +357,40 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
     }
   },
 
+  async checkCredentials(config: MessengerConfig) {
+    try {
+      const response = await fetch(
+        `${graphUrl(config, config.pageId)}?fields=name,category&access_token=${encodeURIComponent(config.pageAccessToken)}`,
+      )
+      const body = (await response.json()) as {
+        name?: string
+        category?: string
+        error?: { message?: string }
+      }
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          detail: `Meta rejected the page token: ${body.error?.message ?? response.statusText}`,
+        }
+      }
+
+      return {
+        ok: true,
+        detail: `Connected to the page "${body.name ?? config.pageId}".`,
+        info: {
+          page: body.name ?? config.pageId,
+          ...(body.category ? { category: body.category } : {}),
+        },
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `Could not reach Meta: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  },
+
   async fetchMedia(reference: string) {
     // The webhook hands over a signed CDN URL; no token is needed, and it expires.
     const response = await fetch(reference)

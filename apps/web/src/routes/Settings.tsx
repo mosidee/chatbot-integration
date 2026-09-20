@@ -2,8 +2,8 @@ import type { ConversationMode, Language } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
-import { api, type Provider, type TaskSlot } from '../lib/api'
+import { Button, Card, cn, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
+import { api, type Channel, type CredentialCheck, type Provider, type TaskSlot } from '../lib/api'
 
 const TASKS = [
   'agent_chat',
@@ -161,25 +161,13 @@ export function Settings() {
 
       <CannedResponsesCard />
 
-      <Card className="space-y-2">
-        <h2 className="text-sm font-semibold">{t('settings.channels')}</h2>
-        {(channels.data?.channels ?? []).map((channel) => (
-          <div key={channel.id} className="rounded-lg border border-[var(--border)] p-2.5 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{channel.name}</span>
-              <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] uppercase text-[var(--text-muted)]">
-                {channel.type}
-              </span>
-            </div>
-            <div className="mt-1">
-              <Label>{t('settings.webhookUrl')}</Label>
-              <code className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]">
-                {channel.webhookUrl}
-              </code>
-            </div>
-          </div>
-        ))}
-      </Card>
+      <ChannelsCard
+        channels={channels.data?.channels ?? []}
+        onChange={() => {
+          void queryClient.invalidateQueries({ queryKey: ['channels'] })
+          flash()
+        }}
+      />
     </div>
   )
 }
@@ -459,5 +447,214 @@ function CannedResponsesCard() {
         {t('settings.addCanned')}
       </Button>
     </Card>
+  )
+}
+
+/**
+ * Channel credentials.
+ *
+ * Connecting LINE or Messenger is a two-way paste: the platform's secrets come in here, and
+ * the webhook URL, plus Meta's verify token, goes back there. Both sides are shown together
+ * so an operator is not hunting between browser tabs, and a check button asks the platform
+ * whether the credentials work rather than waiting for a customer's first message to reveal
+ * that they do not.
+ */
+function ChannelsCard({ channels, onChange }: { channels: Channel[]; onChange: () => void }) {
+  const { t } = useTranslation()
+  const [addingType, setAddingType] = useState<Channel['type'] | null>(null)
+
+  return (
+    <Card className="space-y-3">
+      <h2 className="text-sm font-semibold">{t('settings.channels')}</h2>
+
+      {channels.map((channel) => (
+        <ChannelRow key={channel.id} channel={channel} onChange={onChange} />
+      ))}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {(['line', 'messenger'] as const)
+          .filter((type) => !channels.some((c) => c.type === type))
+          .map((type) => (
+            <Button key={type} size="sm" onClick={() => setAddingType(type)}>
+              {type === 'line' ? t('settings.connectLine') : t('settings.connectMessenger')}
+            </Button>
+          ))}
+      </div>
+
+      {addingType ? (
+        <AddChannel
+          type={addingType}
+          onClose={() => setAddingType(null)}
+          onDone={() => {
+            setAddingType(null)
+            onChange()
+          }}
+        />
+      ) : null}
+    </Card>
+  )
+}
+
+function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => void }) {
+  const { t } = useTranslation()
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [check, setCheck] = useState<CredentialCheck | null>(null)
+  const [expanded, setExpanded] = useState(false)
+
+  const save = useMutation({
+    mutationFn: () => api.settings.updateChannel(channel.id, { config: values }),
+    onSuccess: () => {
+      setValues({})
+      onChange()
+    },
+  })
+
+  const runCheck = useMutation({
+    mutationFn: () => api.settings.checkChannel(channel.id),
+    onSuccess: setCheck,
+  })
+
+  const needsCredentials = channel.requiredFields.length > 0
+
+  return (
+    <div className="rounded-lg border border-[var(--border)] p-2.5 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{channel.name}</span>
+        <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] uppercase text-[var(--text-muted)]">
+          {channel.type}
+        </span>
+        {needsCredentials ? (
+          <span
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[11px] font-medium',
+              channel.hasConfig
+                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+                : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
+            )}
+          >
+            {channel.hasConfig ? t('settings.credentialsSet') : t('settings.credentialsMissing')}
+          </span>
+        ) : null}
+        <div className="ml-auto flex gap-1.5">
+          {needsCredentials && channel.hasConfig ? (
+            <Button size="sm" variant="ghost" onClick={() => runCheck.mutate()}>
+              {runCheck.isPending ? t('common.loading') : t('settings.checkConnection')}
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? t('common.close') : t('settings.configure')}
+          </Button>
+        </div>
+      </div>
+
+      {check ? (
+        <p
+          className={cn(
+            'mt-2 rounded-lg px-2 py-1.5 text-[13px]',
+            check.ok
+              ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+              : 'bg-rose-50 text-rose-800 dark:bg-rose-950 dark:text-rose-200',
+          )}
+        >
+          {check.detail}
+        </p>
+      ) : null}
+
+      {expanded ? (
+        <div className="mt-2 space-y-2 border-t border-[var(--border)] pt-2">
+          <div>
+            <Label>{t('settings.webhookUrl')}</Label>
+            <code className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]">
+              {channel.webhookUrl}
+            </code>
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">{t('settings.webhookHint')}</p>
+          </div>
+
+          {channel.verifyToken ? (
+            <div>
+              <Label>{t('settings.verifyToken')}</Label>
+              <code className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]">
+                {channel.verifyToken}
+              </code>
+            </div>
+          ) : null}
+
+          {channel.requiredFields.map((field) => (
+            <div key={field.key}>
+              <Label htmlFor={`${channel.id}-${field.key}`}>{field.label}</Label>
+              <Input
+                id={`${channel.id}-${field.key}`}
+                type={field.secret ? 'password' : 'text'}
+                placeholder={channel.hasConfig ? t('settings.unchanged') : ''}
+                value={values[field.key] ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, [field.key]: e.target.value }))}
+              />
+            </div>
+          ))}
+
+          {needsCredentials ? (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={Object.keys(values).length === 0 || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {t('settings.save')}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function AddChannel({
+  type,
+  onClose,
+  onDone,
+}: {
+  type: Channel['type']
+  onClose: () => void
+  onDone: () => void
+}) {
+  const { t } = useTranslation()
+  const [name, setName] = useState(type === 'line' ? 'LINE Official Account' : 'Facebook Page')
+  const [error, setError] = useState<string | null>(null)
+
+  const create = useMutation({
+    // Created without credentials on purpose: the webhook URL has to exist before the
+    // platform will accept it, and the secrets are pasted afterwards.
+    mutationFn: () => api.settings.createChannel({ type, name }),
+    onSuccess: onDone,
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  })
+
+  return (
+    <div className="rounded-lg border border-dashed border-[var(--border)] p-2.5">
+      <p className="mb-2 text-[13px] text-[var(--text-muted)]">{t('settings.connectHint')}</p>
+      <div className="flex flex-wrap gap-2">
+        <Input
+          className="max-w-xs"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t('settings.name')}
+        />
+        <Button
+          variant="primary"
+          disabled={!name.trim() || create.isPending}
+          onClick={() => create.mutate()}
+        >
+          {t('settings.save')}
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          {t('common.cancel')}
+        </Button>
+      </div>
+      {error ? (
+        <div className="mt-2">
+          <ErrorNote message={error} />
+        </div>
+      ) : null}
+    </div>
   )
 }
