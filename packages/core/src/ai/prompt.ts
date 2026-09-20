@@ -88,12 +88,22 @@ function describeKnowledge(chunks: RetrievedChunk[]): string {
   ].join('\n')
 }
 
+/**
+ * How many recent turns reach the model.
+ *
+ * Capped here rather than in the worker's query so the bound is part of the domain: an
+ * uncapped window grows the prompt until the provider rejects it, and older context is
+ * carried by the customer summary instead.
+ */
+export const MAX_PROMPT_TURNS = 30
+
 /** The conversation, oldest first, as model messages. */
 export function buildMessages(
   turns: ConversationTurn[],
   visionSummary: string | null,
+  maxTurns: number = MAX_PROMPT_TURNS,
 ): { role: 'user' | 'assistant'; content: string }[] {
-  const messages = turns.map((turn) => ({
+  const messages = turns.slice(-maxTurns).map((turn) => ({
     role: turn.role === 'customer' ? ('user' as const) : ('assistant' as const),
     content:
       turn.role === 'human'
