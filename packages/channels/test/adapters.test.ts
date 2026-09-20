@@ -11,16 +11,17 @@ describe('adapter registry', () => {
   test('resolves the registered adapters', () => {
     expect(getAdapter('test').type).toBe('test')
     expect(getAdapter('web').type).toBe('web')
+    expect(getAdapter('line').type).toBe('line')
   })
 
   test('reports which channel types are implemented', () => {
     expect(hasAdapter('test')).toBe(true)
-    expect(hasAdapter('line')).toBe(false)
-    expect(hasAdapter('messenger')).toBe(false)
+    expect(hasAdapter('web')).toBe(true)
+    expect(hasAdapter('line')).toBe(true)
   })
 
   test('throws for a channel type with no adapter yet', () => {
-    expect(() => getAdapter('line')).toThrow(/No adapter registered/)
+    expect(() => getAdapter('messenger')).toThrow(/No adapter registered/)
   })
 })
 

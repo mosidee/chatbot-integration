@@ -85,6 +85,18 @@ export type ChannelAdapter<TConfig = unknown> = {
     context: SendContext,
   ): Promise<SendResult>
   fetchProfile?(externalId: string, config: TConfig): Promise<ChannelProfile | null>
+  /**
+   * Exchange a platform media reference for bytes.
+   *
+   * Neither LINE nor Messenger sends media in the webhook: LINE gives a message id to fetch
+   * from its blob endpoint, and Messenger gives a CDN URL that expires. The worker resolves
+   * these before the AI turn runs, so a vision model has something to look at and an agent
+   * sees the image after the platform's link has died.
+   */
+  fetchMedia?(
+    reference: string,
+    config: TConfig,
+  ): Promise<{ data: Uint8Array<ArrayBuffer>; mime: string }>
 }
 
 export class ChannelConfigError extends Error {

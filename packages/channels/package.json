@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ci/shared": "workspace:*",
+    "@line/bot-sdk": "11.2.0",
     "zod": "4.6.5"
   }
 }
