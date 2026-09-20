@@ -24,6 +24,14 @@ const app = createApp(ctx)
 const get = (path: string, init?: RequestInit) =>
   app.handle(new Request(`http://localhost${path}`, init))
 
+/** These assertions need the built console; say so rather than failing cryptically. */
+const consoleBuilt = await Bun.file(`${process.cwd()}/apps/web/dist/index.html`).exists()
+if (!consoleBuilt) {
+  throw new Error(
+    'apps/web/dist is missing. Run `bun run build:web` first: these tests assert that the API serves the built console.',
+  )
+}
+
 afterAll(async () => {
   await ctx.runtime.close()
 })
