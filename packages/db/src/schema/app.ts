@@ -12,7 +12,6 @@ import type {
 } from '@ci/shared'
 import {
   boolean,
-  customType,
   index,
   integer,
   jsonb,

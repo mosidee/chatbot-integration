@@ -655,9 +655,9 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
               <p className="text-[var(--text-muted)]">{t('knowledge.noHits')}</p>
             ) : (
               <ul className="space-y-1">
-                {retrieved.map((chunk, i) => (
+                {retrieved.map((chunk) => (
                   <li
-                    key={`${chunk.sourceTitle}-${i}`}
+                    key={`${chunk.sourceTitle}-${(chunk.text ?? '').slice(0, 40)}`}
                     className="rounded border border-[var(--border)] p-1.5"
                   >
                     <span className="text-[11px] font-medium">{chunk.sourceTitle}</span>
@@ -671,8 +671,11 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
           {toolCalls.length > 0 ? (
             <TraceSection title={t('trace.tools')}>
               <ul className="space-y-1">
-                {toolCalls.map((call, i) => (
-                  <li key={`${call.toolName}-${i}`} className="font-mono text-[11px]">
+                {toolCalls.map((call) => (
+                  <li
+                    key={`${call.toolName}-${JSON.stringify(call.input)}`}
+                    className="font-mono text-[11px]"
+                  >
                     {call.toolName}({JSON.stringify(call.input)})
                   </li>
                 ))}
@@ -688,8 +691,8 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
 
           <TraceSection title={t('trace.messages')}>
             <ul className="space-y-1">
-              {(prompt?.messages ?? []).map((m, i) => (
-                <li key={`${m.role}-${i}`}>
+              {(prompt?.messages ?? []).map((m) => (
+                <li key={`${m.role}-${String(m.content).slice(0, 60)}`}>
                   <span className="text-[11px] font-medium text-[var(--text-muted)]">{m.role}</span>
                   <p className="whitespace-pre-wrap break-words">{String(m.content)}</p>
                 </li>
