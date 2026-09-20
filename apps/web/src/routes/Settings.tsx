@@ -2,12 +2,7 @@ import type { ConversationMode, Language } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  ModelField,
-  ProviderModelList,
-  refreshProviderModels,
-  useProviderModels,
-} from '../components/ModelField'
+import { ModelField, refreshProviderModels, useProviderModels } from '../components/ModelField'
 import { Button, Card, cn, ErrorNote, Input, Label, Spinner, Textarea } from '../components/ui'
 import { api, type Channel, type CredentialCheck, type Provider, type TaskSlot } from '../lib/api'
 
@@ -312,9 +307,6 @@ function TaskSlotsCard({
         {t('settings.primary')} / {t('settings.fallback')}
       </p>
 
-      {usedProviderIds.map((id) => (
-        <ProviderModelList key={id} providerId={id} />
-      ))}
       {usedProviderIds.map((id) => (
         <ModelListNote key={id} providerId={id} providers={providers} />
       ))}
