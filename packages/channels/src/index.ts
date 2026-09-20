@@ -1,4 +1,5 @@
 export * from './adapters/line'
+export * from './adapters/messenger'
 export * from './adapters/test-channel'
 export * from './adapters/web-channel'
 export * from './jwt'
@@ -8,6 +9,7 @@ export * from './types'
 
 import type { ChannelType } from '@ci/shared'
 import { lineChannelAdapter } from './adapters/line'
+import { messengerChannelAdapter } from './adapters/messenger'
 import { testChannelAdapter } from './adapters/test-channel'
 import { webChannelAdapter } from './adapters/web-channel'
 import type { ChannelAdapter } from './types'
@@ -20,6 +22,7 @@ const adapters: Partial<Record<ChannelType, ChannelAdapter<never>>> = {
   test: testChannelAdapter as ChannelAdapter<never>,
   web: webChannelAdapter as ChannelAdapter<never>,
   line: lineChannelAdapter as unknown as ChannelAdapter<never>,
+  messenger: messengerChannelAdapter as unknown as ChannelAdapter<never>,
 }
 
 export function getAdapter(type: ChannelType): ChannelAdapter<never> {
