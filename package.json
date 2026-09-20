@@ -17,7 +17,7 @@
     "db:generate": "bun --cwd packages/db run generate",
     "db:migrate": "bun --cwd packages/db run migrate",
     "db:seed": "bun --cwd packages/db run seed",
-    "auth:generate": "bunx @better-auth/cli@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts",
+    "auth:generate": "bunx auth@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts --yes",
     "test": "bun test",
     "typecheck": "tsc -p tsconfig.json && bun --cwd apps/web run typecheck",
     "lint": "biome check .",
