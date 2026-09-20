@@ -85,7 +85,10 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
         tools,
         stopWhen: stepCountIs(options.maxSteps ?? 4),
         temperature: chatSlot.params.temperature ?? 0.3,
-        maxOutputTokens: chatSlot.params.maxOutputTokens ?? 800,
+        // Reasoning models count their thinking against this budget, so a cap sized for a
+        // short answer can be exhausted before a single visible word is produced. Observed
+        // on a live conversation: 800 tokens spent, nothing returned.
+        maxOutputTokens: chatSlot.params.maxOutputTokens ?? 2048,
         maxRetries: options.maxRetries ?? chatSlot.params.maxRetries ?? 1,
       })
     })
@@ -116,8 +119,14 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       tokensOut,
       latencyMs: Date.now() - startedAt,
       costEstimate: chatCost === null && visionCost === 0 ? null : (chatCost ?? 0) + visionCost,
-      outcome: handoff ? 'handoff' : mode === 'suggest' ? 'draft' : 'sent',
-      error: null,
+      // An empty answer is recorded as an error, not as a send. A reasoning model can
+      // spend its whole output budget thinking and emit nothing, and a trace claiming
+      // "sent" for a turn the customer never saw makes that impossible to find.
+      outcome: handoff ? 'handoff' : text === '' ? 'error' : mode === 'suggest' ? 'draft' : 'sent',
+      error:
+        text === '' && !handoff
+          ? `The model returned no text. It used ${tokensOut ?? 0} output tokens and stopped because of "${result.finishReason}".`
+          : null,
     }
 
     return {

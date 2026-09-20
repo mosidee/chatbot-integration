@@ -29,6 +29,12 @@ packages/config    Environment parsing.
 
 ## Rules that matter
 
+**The AI never goes silent.** Every path out of an AI turn ends in a message to the
+customer or a handoff to a person. An empty answer is a handoff, not a quiet return: a
+reasoning model can spend its whole output budget thinking and emit nothing, and the
+customer is left waiting for a reply that no colleague knows is owed. Reasoning tokens
+count against `maxOutputTokens`, which is why its default is not sized for a short reply.
+
 **The AI never sends while the mode is `human`.** The state machine enforces it, an
 exhaustive test sweeps it, and the AI-turn processor re-reads the mode before sending
 because a human may have taken over since the job was queued. Do not add a path around this.
