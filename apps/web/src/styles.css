@@ -49,3 +49,22 @@ body {
 :lang(th) {
   line-height: 1.7;
 }
+
+/*
+ * An input backed by a datalist looks exactly like a plain text box in WebKit and Blink:
+ * the arrow that opens the list only fades in on hover, so nothing tells you the field
+ * offers a choice. Keeping it visible is what makes the model field read as a picker.
+ */
+input[list]::-webkit-calendar-picker-indicator {
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+input[list]:hover::-webkit-calendar-picker-indicator,
+input[list]:focus::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
+input[list]:disabled::-webkit-calendar-picker-indicator {
+  display: none;
+}
