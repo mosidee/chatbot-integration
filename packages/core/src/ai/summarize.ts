@@ -40,13 +40,37 @@ export type SummarizeResult = {
   trace: TraceRecord
 }
 
+/**
+ * The shape is spelled out in the prompt, not left to the provider.
+ *
+ * An OpenAI-compatible provider carries structured output as
+ * `response_format: {type: 'json_object'}` and drops the schema, which only travels when a
+ * provider advertises structured outputs. The model was therefore asked for "an object"
+ * with no statement of which fields, and whatever it invented then failed validation here.
+ *
+ * DeepSeek adds a second requirement: it refuses `json_object` outright unless the word
+ * "json" appears in the prompt, with "Prompt must contain the word 'json' in some form to
+ * use 'response_format' of type 'json_object'." Every summary against a DeepSeek model
+ * failed on that alone.
+ *
+ * Both are answered by putting the schema itself in the system prompt. It is derived from
+ * the Zod schema rather than written out again, so the instruction cannot drift from what
+ * the reply is validated against.
+ */
+const SUMMARY_JSON_SCHEMA = JSON.stringify(z.toJSONSchema(summarySchema))
+
 const SYSTEM = [
   'You maintain a short running summary of a customer for a support team.',
   'Rewrite the previous summary in light of the new messages. Keep what still matters and',
   'drop what has been resolved. Write plainly, in the language the customer uses.',
   'Record only what a colleague would need to know. Never record payment card numbers or',
   'national ID numbers, and do not speculate about the customer.',
+  'Reply with one JSON object and nothing else, matching this JSON schema:',
+  SUMMARY_JSON_SCHEMA,
 ].join(' ')
+
+/** Exported so a test can assert the prompt still carries the schema and the word JSON. */
+export const SUMMARY_SYSTEM_PROMPT = SYSTEM
 
 export async function summarizeCustomer(options: {
   slot: SlotConfig

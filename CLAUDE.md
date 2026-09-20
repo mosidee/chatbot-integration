@@ -93,6 +93,15 @@ without spending money.
 - The AI SDK refuses to download images from loopback and private hosts. Vision receives
   **bytes**, not URLs; see ADR 0001.
 - The AI SDK's `image` content part is deprecated in v7. Use a `file` part with `mediaType`.
+- A gateway may answer a non-streaming request with an event stream anyway, and in more than
+  one shape: a complete JSON body with the terminator glued on, or genuine
+  `chat.completion.chunk` deltas holding no complete answer at all. `createCompatibleFetch`
+  repairs both, assembling deltas including tool calls, whose arguments arrive as string
+  fragments. Which shape a gateway uses can differ per upstream model, so test each one.
+- Structured output through an OpenAI-compatible provider is sent as
+  `response_format: {type: 'json_object'}` and the schema is dropped. Put the schema in the
+  prompt yourself, derived from the Zod schema so it cannot drift. DeepSeek additionally
+  refuses `json_object` unless the prompt contains the word "json".
 - When adding a workspace package, run `bun install` **before** committing, or CI's
   `--frozen-lockfile` fails on a package.json the lockfile has never seen.
 - On macOS with Colima, a host process cannot reach MinIO: the port forwarder corrupts
