@@ -18,6 +18,7 @@ export const QUEUE_NAMES = {
   summarize: 'summarize',
   knowledgeIngest: 'knowledge_ingest',
   retention: 'retention',
+  customerErasure: 'customer_erasure',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
@@ -50,6 +51,20 @@ export type WaitingHumanTimeoutJob = {
   conversationId: string
 }
 
+/** Omit the workspace to sweep every one of them. */
+export type RetentionJob = { workspaceId?: string | null }
+
+/**
+ * Erasing one customer on request, which Thailand's PDPA gives them a right to. Kept as a
+ * job rather than done in the request because it deletes stored media as well as rows, and
+ * a half-finished erasure is worse than a slow one.
+ */
+export type CustomerErasureJob = {
+  workspaceId: string
+  customerId: string
+  requestedByUserId: string | null
+}
+
 export type JobPayloads = {
   inbound: InboundJob
   ai_turn: AiTurnJob
@@ -58,7 +73,8 @@ export type JobPayloads = {
   waiting_human: WaitingHumanTimeoutJob
   summarize: { workspaceId: string; customerId: string; conversationId?: string | null }
   knowledge_ingest: KnowledgeIngestJob
-  retention: { workspaceId: string }
+  retention: RetentionJob
+  customer_erasure: CustomerErasureJob
 }
 
 export type KnowledgeIngestJob = {
@@ -98,6 +114,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     knowledge_ingest: make(QUEUE_NAMES.knowledgeIngest),
     summarize: make(QUEUE_NAMES.summarize),
     retention: make(QUEUE_NAMES.retention),
+    customer_erasure: make(QUEUE_NAMES.customerErasure),
   }
 }
 

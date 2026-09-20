@@ -393,6 +393,43 @@ export function conversationRoutes(ctx: ApiContext) {
         },
       )
 
+      /**
+       * Erase the customer behind this conversation, and everything of theirs.
+       *
+       * Thailand's PDPA gives a person the right to have their data deleted, and an agent
+       * reading the request is the person who will act on it, so the control belongs here
+       * rather than in a settings screen nobody opens. Admin only, and irreversible: it
+       * takes every conversation with that customer, not only this one.
+       */
+      .post(
+        '/:id/erase-customer',
+        async ({ workspaceId, params, user, status }) => {
+          const rows = await db
+            .select({ customerId: schema.conversations.customerId })
+            .from(schema.conversations)
+            .where(
+              and(
+                eq(schema.conversations.id, params.id),
+                eq(schema.conversations.workspaceId, workspaceId),
+              ),
+            )
+            .limit(1)
+          const customerId = rows[0]?.customerId
+          if (!customerId) return status(404, { error: 'Conversation not found' })
+
+          // Queued rather than done here: it deletes stored media as well as rows, and the
+          // request should not hang on object storage.
+          await runtime.queues.customer_erasure.add('erase', {
+            workspaceId,
+            customerId,
+            requestedByUserId: user.id,
+          })
+
+          return { queued: true, customerId }
+        },
+        { auth: 'admin', params: z.object({ id: z.string() }) },
+      )
+
       .post(
         '/:id/suggestions/:suggestionId/discard',
         async ({ workspaceId, params }) => {

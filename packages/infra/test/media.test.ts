@@ -18,6 +18,9 @@ function memoryBlobStore() {
       if (!found) throw new Error(`missing ${key}`)
       return found
     },
+    async remove(key) {
+      objects.delete(key)
+    },
     async put(key, data, mime) {
       objects.set(key, { data, mime })
     },

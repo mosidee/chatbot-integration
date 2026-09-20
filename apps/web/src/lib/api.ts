@@ -349,6 +349,8 @@ export const api = {
       post<{ status: ConversationStatus }>(`/v1/conversations/${id}/status`, { status }),
     assign: (id: string, userId: string | null) =>
       post<{ assigneeUserId: string | null }>(`/v1/conversations/${id}/assign`, { userId }),
+    eraseCustomer: (id: string) =>
+      post<{ queued: true; customerId: string }>(`/v1/conversations/${id}/erase-customer`),
     addNote: (id: string, body: string) =>
       post<{ noteId: string }>(`/v1/conversations/${id}/notes`, { body }),
     discardSuggestion: (id: string, suggestionId: string) =>
@@ -420,6 +422,7 @@ export const api = {
 
   settings: {
     workspace: () => get<{ settings: WorkspaceSettings }>('/v1/settings/workspace'),
+    me: () => get<{ userId: string; role: string }>('/v1/settings/me'),
     updateWorkspace: (patchBody: Partial<WorkspaceSettings>) =>
       patch<{ settings: WorkspaceSettings }>('/v1/settings/workspace', patchBody),
     providers: () => get<{ providers: Provider[] }>('/v1/settings/providers'),

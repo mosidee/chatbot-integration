@@ -306,3 +306,38 @@ test('an agent opens a customer photo full size', async ({ page, request }) => {
   await page.getByTestId('lightbox-close').click()
   await expect(page.getByTestId('lightbox')).toHaveCount(0)
 })
+
+test('an admin erases a customer, and it takes two clicks', async ({ page, request }) => {
+  // Thailand's PDPA gives a person the right to be erased, and the agent reading the
+  // request is who acts on it, so the control sits beside the conversation.
+  const channelId = await findTestChannelId(request)
+  const customer = uniqueCustomer('erase')
+
+  await signIn(page)
+  await customerSays(request, channelId, customer, 'ขอให้ลบข้อมูลของฉันด้วยค่ะ')
+
+  const row = page.getByTestId('conversation-row').filter({ hasText: customer })
+  await expect(row).toBeVisible({ timeout: 25_000 })
+  await row.click()
+
+  const erase = page.getByTestId('erase-customer')
+  await expect(erase).toBeVisible({ timeout: 20_000 })
+
+  // One click arms it and deletes nothing. Irreversible work does not happen on a stray
+  // click, and no browser dialog is used, which nobody reads anyway.
+  await erase.click()
+  await expect(erase).toContainText('ยืนยัน')
+  await expect(page.getByTestId('conversation-row').filter({ hasText: customer })).toBeVisible()
+
+  // The second click queues it. The work itself happens in the worker, because it deletes
+  // stored images as well as rows.
+  await erase.click()
+  await expect(page.getByText('ส่งคำสั่งลบแล้ว', { exact: false })).toBeVisible({
+    timeout: 20_000,
+  })
+
+  // The conversation goes with the customer, so the inbox no longer lists them.
+  await expect(page.getByTestId('conversation-row').filter({ hasText: customer })).toHaveCount(0, {
+    timeout: 25_000,
+  })
+})

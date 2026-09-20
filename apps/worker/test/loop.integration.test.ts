@@ -8,9 +8,11 @@ import {
   createEffectPorts,
   createEntry,
   createSource,
+  eraseCustomer,
   indexEntry,
   ingestWebhook,
   loadWorkspaceSettings,
+  runRetention,
   storeMessage,
   toWebhookRequest,
   updateConversation,
@@ -604,6 +606,151 @@ describe('the AI and human loop', () => {
       watermark: Date.now() + 60_000,
     })
     expect(touched).toBeGreaterThan(0)
+  })
+
+  test('retention deletes what is past the period and keeps what is not', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'old', { externalId: 'sim-old' })
+    await customerSays(f, 'recent', { externalId: 'sim-recent' })
+    await runQueuedWork(f)
+
+    const all = await f.runtime.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    expect(all).toHaveLength(2)
+
+    // Age one of them by moving its last message into the past, which is what retention
+    // measures: a long conversation is kept until it goes quiet, not from when it began.
+    const old = all[0]
+    if (!old) throw new Error('expected a conversation')
+    const longAgo = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000)
+    await f.runtime.db
+      .update(schema.conversations)
+      .set({ lastMessageAt: longAgo })
+      .where(eq(schema.conversations.id, old.id))
+
+    const result = await runRetention(f.runtime.db, f.runtime.blob, {
+      workspaceId: f.workspaceId,
+      retentionDays: 365,
+    })
+
+    expect(result.conversations).toBe(1)
+    const left = await f.runtime.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    expect(left).toHaveLength(1)
+    expect(left[0]?.id).not.toBe(old.id)
+
+    // The messages went with it, rather than being left pointing at nothing.
+    const orphans = await messagesOf(f, old.id)
+    expect(orphans).toHaveLength(0)
+  })
+
+  test('erasing a customer removes their conversations, identity and media', async () => {
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'hello', { externalId: 'sim-erase-me' })
+    await customerSays(f, 'hello', { externalId: 'sim-keep-me' })
+    await runQueuedWork(f)
+
+    // Give one message a stored attachment, so the media path is exercised rather than
+    // assumed. Deleting rows is easy; the object store is where an erasure leaks.
+    const key = `${f.workspaceId}/inbound/erase-test.png`
+    await f.runtime.blob.put(key, new Uint8Array(new ArrayBuffer(4)), 'image/png')
+
+    const [identity] = await f.runtime.db
+      .select()
+      .from(schema.channelIdentities)
+      .where(eq(schema.channelIdentities.externalId, 'sim-erase-me'))
+      .limit(1)
+    if (!identity) throw new Error('expected an identity')
+
+    const [conversation] = await f.runtime.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.channelIdentityId, identity.id))
+      .limit(1)
+    if (!conversation) throw new Error('expected a conversation')
+
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'inbound',
+      senderType: 'customer',
+      message: {
+        kind: 'image',
+        text: null,
+        attachments: [
+          {
+            storageKey: key,
+            sourceUrl: null,
+            mime: 'image/png',
+            sizeBytes: 4,
+            fileName: 'erase-test.png',
+            width: null,
+            height: null,
+            durationMs: null,
+          },
+        ],
+      },
+      redaction: { cardNumbers: true, thaiNationalId: true },
+    })
+
+    const result = await eraseCustomer(f.runtime.db, f.runtime.blob, {
+      workspaceId: f.workspaceId,
+      customerId: identity.customerId as string,
+      requestedByUserId: null,
+    })
+
+    expect(result.erased).toBe(true)
+    expect(result.media).toBe(1)
+    await expect(f.runtime.blob.get(key)).rejects.toThrow()
+
+    // The identity goes too, or the next message from them would rebuild the customer.
+    const identities = await f.runtime.db
+      .select()
+      .from(schema.channelIdentities)
+      .where(eq(schema.channelIdentities.externalId, 'sim-erase-me'))
+    expect(identities).toHaveLength(0)
+
+    // And the other customer is untouched.
+    const survivors = await f.runtime.db
+      .select()
+      .from(schema.channelIdentities)
+      .where(eq(schema.channelIdentities.externalId, 'sim-keep-me'))
+    expect(survivors).toHaveLength(1)
+  })
+
+  test('an erasure leaves an audit entry carrying no personal data', async () => {
+    // The record that the request was honoured has to outlive the person, which is only
+    // useful if it holds nothing you were asked to delete.
+    const provider = mock([{ kind: 'text', text: 'ok' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'สวัสดีค่ะ ฉันชื่อนก')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    await eraseCustomer(f.runtime.db, f.runtime.blob, {
+      workspaceId: f.workspaceId,
+      customerId: conversation.customerId,
+      requestedByUserId: null,
+    })
+
+    const entries = await f.runtime.db
+      .select()
+      .from(schema.auditLog)
+      .where(eq(schema.auditLog.workspaceId, f.workspaceId))
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.action).toBe('customer.erased')
+    expect(entries[0]?.targetId).toBe(conversation.customerId)
+    expect(JSON.stringify(entries[0]?.meta)).not.toContain('นก')
   })
 
   test('a retried webhook does not produce a second customer message', async () => {

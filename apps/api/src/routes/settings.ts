@@ -79,6 +79,21 @@ export function settingsRoutes(ctx: ApiContext) {
         { auth: 'viewer' },
       )
 
+      /**
+       * Who the caller is in this workspace.
+       *
+       * The console needs it to decide whether to offer controls only an admin may use.
+       * Hiding one is a courtesy, not the guard: every such route checks the role itself.
+       */
+      .get(
+        '/me',
+        ({ user, membership }) => ({
+          userId: user.id,
+          role: membership.role,
+        }),
+        { auth: 'viewer' },
+      )
+
       .patch(
         '/workspace',
         async ({ workspaceId, body, status }) => {

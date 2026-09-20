@@ -57,6 +57,11 @@ const th = {
     selectPrompt: 'เลือกบทสนทนาเพื่อเริ่ม',
   },
   sidebar: {
+    erase: 'ลบข้อมูลลูกค้ารายนี้',
+    eraseConfirm: 'ยืนยันการลบถาวร',
+    erasing: 'กำลังลบ...',
+    eraseQueued: 'ส่งคำสั่งลบแล้ว ข้อมูลจะถูกลบทั้งหมด',
+    eraseHint: 'ลบทุกบทสนทนา รูปภาพ และข้อมูลของลูกค้ารายนี้ ย้อนกลับไม่ได้',
     suggestion: 'ข้อความที่ AI แนะนำ',
     insert: 'ใส่ในช่องพิมพ์',
     insertAndSend: 'ใส่และส่ง',
@@ -238,6 +243,11 @@ const en: typeof th = {
     selectPrompt: 'Choose a conversation to start',
   },
   sidebar: {
+    erase: 'Delete this customer',
+    eraseConfirm: 'Confirm permanent deletion',
+    erasing: 'Deleting...',
+    eraseQueued: 'Deletion queued. Everything of theirs will be removed.',
+    eraseHint: 'Removes every conversation, image and detail for this customer. Cannot be undone.',
     suggestion: 'Suggested reply',
     insert: 'Insert',
     insertAndSend: 'Insert and send',

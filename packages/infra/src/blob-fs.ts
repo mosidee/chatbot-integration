@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { BlobStore } from '@ci/core'
 
@@ -44,6 +44,10 @@ export function createFilesystemBlobStore(root: string, publicUrl: string): Blob
       await writeFile(file, data)
       // The media type is kept beside the object; the filesystem has nowhere else to put it.
       await writeFile(`${file}.mime`, mime, 'utf8')
+    },
+
+    async remove(key: string) {
+      await rm(pathFor(key), { force: true })
     },
 
     urlFor(key: string) {
