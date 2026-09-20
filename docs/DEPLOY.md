@@ -76,6 +76,34 @@ Add a proxy host:
 - **Enable "Websockets Support"** — without it the console never updates live
 - Request a Let's Encrypt certificate and force SSL
 
+### Keeping the app off the public internet
+
+Forwarding to the host on port 3000 means the app is also reachable directly on that port,
+without TLS, unless a firewall stops it. If Nginx Proxy Manager runs in Docker on the same
+host, a better arrangement is to put the API on the proxy's own network and bind its port to
+loopback. Create `docker-compose.override.yml` beside the compose file, which stays out of
+the repository because it describes one host's topology:
+
+```yaml
+services:
+  api:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+    networks:
+      - default
+      - nginx_default   # the network Nginx Proxy Manager is on
+
+networks:
+  nginx_default:
+    external: true
+```
+
+Find the proxy's network with
+`docker inspect <proxy-container> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'`.
+
+The proxy host then forwards to the **container name** and port 3000, for example
+`chatbot-integration-api-1`, rather than to the host address. Nothing else reaches the app.
+
 Webhook URLs then take the form `https://chat.example.com/api/v1/webhooks/<channel-id>`, which
 the settings screen shows per channel.
 
