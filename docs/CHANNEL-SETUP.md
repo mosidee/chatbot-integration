@@ -113,7 +113,10 @@ Page to these fields:
 - **Page ID**: shown on the Page, or from the Messenger settings.
 - **Page access token**: from step 2.
 
-Save, then **Check connection**. It asks Meta for the page name using the token.
+Save, then **Check connection**. It asks Meta whether the token may send as the page,
+which is the `pages_messaging` permission and the only one this product needs. It also
+tries to read the page name, which needs `pages_read_engagement`; if that is missing the
+check still passes and says so, because a token that can send is a working token.
 
 ### 6. Development mode
 
