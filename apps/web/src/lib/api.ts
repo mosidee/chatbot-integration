@@ -5,10 +5,13 @@ import type {
   FeedbackReason,
   FeedbackTargetType,
   HandoffReason,
+  HttpToolConfig,
+  IdentityProof,
   Language,
   MergeMatchKey,
   NormalizedMessage,
   SenderType,
+  ToolSummary,
 } from '@ci/shared'
 
 /**
@@ -180,7 +183,16 @@ export type ConversationDetail = {
     externalId: string
     displayName: string | null
     avatarUrl: string | null
+    /** An account a proof carried, as opposed to an identifier the customer typed. */
+    verifiedSubject: string | null
+    verifiedAttributes: Record<string, string>
+    verifiedVia: IdentityProof | null
+    verifiedAt: string | null
+    /** Whether that proof is still one this workspace accepts. */
+    verified: boolean
   } | null
+  /** Whether the workspace has a verification link to offer, for the sidebar button. */
+  canSendVerificationLink: boolean
   messages: Message[]
   notes: InternalNote[]
   suggestions: Suggestion[]
@@ -215,10 +227,22 @@ export type AiTrace = {
   createdAt: string
 }
 
+export type IdentitySettings = {
+  widgetToken: { enabled: boolean }
+  verificationLink: {
+    enabled: boolean
+    url: string | null
+    ttlMinutes: number
+    /** The secret itself is never returned, only whether one is stored. */
+    hasSecret: boolean
+  }
+}
+
 export type WorkspaceSettings = {
   defaultLanguage: Language
   defaultMode: ConversationMode
   persona: string
+  identity: IdentitySettings
   retentionDays: number
   waitingHumanFallbackMinutes: number | null
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
@@ -229,6 +253,10 @@ export type WorkspaceSettings = {
     days: Record<string, { open: string; close: string } | undefined>
   }
 }
+
+export type ToolTestResult =
+  | { ok: true; status: number; durationMs: number; body: unknown }
+  | { ok: false; durationMs: number; error: string }
 
 export type Provider = {
   id: string
@@ -449,6 +477,8 @@ export const api = {
       post<{ ok: true }>(`/v1/conversations/${id}/suggestions/${suggestionId}/discard`),
     reviewCount: () => get<{ count: number }>('/v1/conversations/review-count'),
     markReviewed: (id: string) => post<{ reviewedAt: string }>(`/v1/conversations/${id}/review`),
+    sendVerificationLink: (id: string) =>
+      post<{ ok: true; messageId: string }>(`/v1/conversations/${id}/verification-link`),
     giveFeedback: (
       id: string,
       input: {
@@ -574,6 +604,20 @@ export const api = {
     createCannedResponse: (body: { shortcut: string; body: string; language?: Language | null }) =>
       post<{ id: string }>('/v1/settings/canned-responses', body),
     deleteCannedResponse: (id: string) => del<{ ok: true }>(`/v1/settings/canned-responses/${id}`),
+
+    tools: () => get<{ tools: ToolSummary[] }>('/v1/settings/tools'),
+    createTool: (body: {
+      name: string
+      description: string
+      config: HttpToolConfig
+      credential?: string
+      enabled?: boolean
+    }) => post<{ id: string }>('/v1/settings/tools', body),
+    updateTool: (id: string, body: Record<string, unknown>) =>
+      patch<{ ok: true }>(`/v1/settings/tools/${id}`, body),
+    deleteTool: (id: string) => del<{ ok: true }>(`/v1/settings/tools/${id}`),
+    testTool: (id: string, body: { args?: Record<string, unknown>; subject?: string }) =>
+      post<ToolTestResult>(`/v1/settings/tools/${id}/test`, body),
   },
 
   auth: {

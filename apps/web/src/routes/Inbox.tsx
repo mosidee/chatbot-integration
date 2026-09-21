@@ -780,6 +780,11 @@ function AiSidebar({
         <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           {t('sidebar.customer')}
         </h3>
+
+        {/* Whether this person was proved, not merely recognised. A tool that reads an
+            account is only offered once this says yes, so it is worth showing plainly. */}
+        <IdentityBadge detail={detail} canWrite={canWrite} />
+
         <dl className="space-y-1 text-[13px]">
           {Object.entries(detail.customer?.fields ?? {}).map(([key, value]) => (
             <div key={key} className="flex gap-2">
@@ -881,7 +886,11 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
     messages?: { role: string; content: string }[]
   } | null
   const retrieved = (trace.retrieved ?? []) as { sourceTitle?: string; text?: string }[]
-  const toolCalls = (trace.toolCalls ?? []) as { toolName?: string; input?: unknown }[]
+  const toolCalls = (trace.toolCalls ?? []) as {
+    toolName?: string
+    input?: unknown
+    output?: unknown
+  }[]
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
@@ -946,7 +955,17 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
                     key={`${call.toolName}-${JSON.stringify(call.input)}`}
                     className="font-mono text-[11px]"
                   >
-                    {call.toolName}({JSON.stringify(call.input)})
+                    <div>
+                      {call.toolName}({JSON.stringify(call.input)})
+                    </div>
+                    {/* What it answered, not only that it was asked. For a tenant's own
+                        endpoint this is the difference between a usable trace and a list
+                        of names. */}
+                    {call.output === undefined || call.output === null ? null : (
+                      <div className="truncate pl-3 text-[var(--text-muted)]">
+                        ↳ {t('trace.toolOutput')} {JSON.stringify(call.output)}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -1053,6 +1072,72 @@ function PromoteToKnowledge({ message, onClose }: { message: Message; onClose: (
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Whether this customer was proved, and a way to ask them to prove it.
+ *
+ * `fields` in the sidebar above is what somebody typed into a chat window. This is what a
+ * proof carried, which is the only half a tool may be bound to, so the two are shown
+ * separately rather than merged into one list of "what we know".
+ */
+function IdentityBadge({ detail, canWrite }: { detail: ConversationDetail; canWrite: boolean }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [sent, setSent] = useState(false)
+
+  const sendLink = useMutation({
+    mutationFn: () => api.conversations.sendVerificationLink(detail.conversation.id),
+    onSuccess: () => {
+      setSent(true)
+      void queryClient.invalidateQueries({ queryKey: ['conversation', detail.conversation.id] })
+    },
+  })
+
+  const identity = detail.identity
+  const verified = identity?.verified ?? false
+
+  return (
+    <div className="mb-2 space-y-1.5">
+      {verified && identity ? (
+        <div data-testid="identity-verified" className="space-y-1">
+          <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+            {t('sidebar.identityVerified')}
+            {identity.verifiedVia ? ` · ${t(`sidebar.identityVia.${identity.verifiedVia}`)}` : ''}
+          </span>
+          <div className="truncate font-mono text-[11px] text-[var(--text-muted)]">
+            {identity.verifiedSubject}
+          </div>
+          {Object.entries(identity.verifiedAttributes).length > 0 ? (
+            <dl className="space-y-0.5 text-[12px]">
+              {Object.entries(identity.verifiedAttributes).map(([key, value]) => (
+                <div key={key} className="flex gap-2">
+                  <dt className="text-[var(--text-muted)]">{key}</dt>
+                  <dd className="truncate">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
+      ) : (
+        <span className="inline-block rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] text-[var(--text-muted)]">
+          {t('sidebar.identityUnverified')}
+        </span>
+      )}
+
+      {!verified && canWrite && detail.canSendVerificationLink ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid="send-verification-link"
+          disabled={sendLink.isPending || sent}
+          onClick={() => sendLink.mutate()}
+        >
+          {sent ? t('sidebar.verificationLinkSent') : t('sidebar.sendVerificationLink')}
+        </Button>
+      ) : null}
     </div>
   )
 }
