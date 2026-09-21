@@ -71,6 +71,23 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
       })
     },
 
+    async recordHandoff(ctx, reason, at) {
+      // The instant comes from the state machine, so a replayed effect list collides with
+      // the row it already wrote instead of counting one handoff twice.
+      await db
+        .insert(schema.handoffEvents)
+        .values({
+          id: crypto.randomUUID(),
+          workspaceId: ctx.workspaceId,
+          conversationId: ctx.conversationId,
+          reason,
+          occurredAt: at,
+        })
+        .onConflictDoNothing({
+          target: [schema.handoffEvents.conversationId, schema.handoffEvents.occurredAt],
+        })
+    },
+
     async notifyAgents(ctx, reason) {
       await publisher.publish(ctx.workspaceId, {
         type: 'conversation.updated',

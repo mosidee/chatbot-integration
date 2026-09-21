@@ -90,7 +90,10 @@ describe('handoff', () => {
     expect(patch.mode).toBe('waiting_human')
     expect(patch.handoffReason).toBe('low_confidence')
     expect(patch.waitingHumanSince).toBe(AT)
-    expect(types(effects)).toEqual(['add_internal_note', 'notify_agents'])
+    // The handoff is recorded before the note, because reporting must not depend on a note
+    // an agent could later delete.
+    expect(types(effects)).toEqual(['record_handoff', 'add_internal_note', 'notify_agents'])
+    expect(effects).toContainEqual({ type: 'record_handoff', reason: 'low_confidence', at: AT })
   })
 
   test('schedules the fallback timer when configured', () => {
@@ -120,9 +123,23 @@ describe('handoff', () => {
       reason: 'customer_requested',
       note: 'Customer asked for a human about refund #882.',
     })
-    expect(effects[0]).toEqual({
+    expect(effects).toContainEqual({
       type: 'add_internal_note',
       body: 'Customer asked for a human about refund #882.',
+    })
+  })
+
+  test('media the AI cannot read is recorded as a handoff like any other', () => {
+    // It never runs a turn, so nothing else would ever record that the AI gave up here.
+    const { effects } = transition(state({ mode: 'ai' }), {
+      type: 'customer_message',
+      at: AT,
+      isMedia: true,
+    })
+    expect(effects).toContainEqual({
+      type: 'record_handoff',
+      reason: 'unsupported_media',
+      at: AT,
     })
   })
 })

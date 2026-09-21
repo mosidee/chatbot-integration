@@ -31,6 +31,8 @@ export type EffectPorts = {
   cancelWaitingHumanTimeout(ctx: EffectContext): Promise<void>
   /** Queue a summary rewrite. The implementation resolves the customer from the conversation. */
   enqueueSummary(ctx: EffectContext): Promise<void>
+  /** Record that the AI handed off, for reporting. Must ignore a repeat of the same instant. */
+  recordHandoff(ctx: EffectContext, reason: HandoffReason, at: Date): Promise<void>
 }
 
 /** Object storage, used to read media before handing it to a vision model. */

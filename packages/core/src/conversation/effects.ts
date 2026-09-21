@@ -33,6 +33,10 @@ export async function applyEffects(
         await ports.sendAcknowledgement(ctx, effect.language)
         break
 
+      case 'record_handoff':
+        await ports.recordHandoff(ctx, effect.reason, effect.at)
+        break
+
       case 'add_internal_note':
         await ports.addInternalNote(ctx, effect.body)
         break

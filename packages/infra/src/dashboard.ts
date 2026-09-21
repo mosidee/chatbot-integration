@@ -79,6 +79,7 @@ export async function loadDashboard(
     messagesPerDay,
     tracesPerDay,
     firstResponse,
+    handoffsPerDay,
     reasons,
     channels,
     ratings,
@@ -134,12 +135,25 @@ export async function loadDashboard(
         FROM bounds
         WHERE asked IS NOT NULL AND answered IS NOT NULL AND answered >= asked
       `),
+    db.execute<{ day: string; count: number }>(sql`
+        SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
+        FROM ${schema.handoffEvents}
+        WHERE workspace_id = ${workspaceId} AND occurred_at >= ${sinceIso}::timestamptz
+        GROUP BY 1
+      `),
+    /**
+     * Handoffs that happened in the window, read from the event log rather than from the
+     * conversation's current state. `conversations.handoff_reason` is cleared the moment a
+     * person hands the conversation back, so reading it emptied this list as agents worked
+     * through their queue — the one list whose whole job is to say what the AI could not
+     * handle. Counted by when the handoff happened, so a conversation opened months ago
+     * that gave up yesterday is counted yesterday.
+     */
     db.execute<{ reason: string; count: number }>(sql`
-        SELECT handoff_reason::text AS reason, count(*)::int AS count
-        FROM ${schema.conversations}
+        SELECT reason::text AS reason, count(*)::int AS count
+        FROM ${schema.handoffEvents}
         WHERE workspace_id = ${workspaceId}
-          AND created_at >= ${sinceIso}::timestamptz
-          AND handoff_reason IS NOT NULL
+          AND occurred_at >= ${sinceIso}::timestamptz
         GROUP BY 1
         ORDER BY 2 DESC
       `),
@@ -198,9 +212,10 @@ export async function loadDashboard(
       answered: traces
         .filter((row) => row.outcome === 'sent')
         .reduce((sum, row) => sum + row.count, 0),
-      handoffs: traces
-        .filter((row) => row.outcome === 'handoff')
-        .reduce((sum, row) => sum + row.count, 0),
+      // From the event log, not from traces: a handoff triggered by media the AI cannot
+      // read never ran a turn, so it has no trace and would otherwise be invisible here
+      // while still appearing in the reasons beside it.
+      handoffs: [...handoffsPerDay].find((row) => row.day === day)?.count ?? 0,
       cost: traces.reduce((sum, row) => sum + Number(row.cost ?? 0), 0),
     })
   }
@@ -216,7 +231,7 @@ export async function loadDashboard(
       conversations: days.reduce((sum, day) => sum + day.conversations, 0),
       customerMessages: days.reduce((sum, day) => sum + day.customerMessages, 0),
       answered: totalFor('sent'),
-      handoffs: totalFor('handoff'),
+      handoffs: days.reduce((sum, day) => sum + day.handoffs, 0),
       errors: totalFor('error'),
       cost: allTraces.reduce((sum, row) => sum + Number(row.cost ?? 0), 0),
       tokensIn: allTraces.reduce((sum, row) => sum + (row.tokens_in ?? 0), 0),
