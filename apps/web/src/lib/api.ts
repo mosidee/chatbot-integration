@@ -6,6 +6,7 @@ import type {
   FeedbackTargetType,
   HandoffReason,
   Language,
+  MergeMatchKey,
   NormalizedMessage,
   SenderType,
 } from '@ci/shared'
@@ -121,6 +122,28 @@ export type Suggestion = {
   createdAt: string
 }
 
+/** One side of a proposed merge, with enough detail to judge it without leaving the page. */
+export type MergeParty = {
+  id: string
+  displayName: string | null
+  fields: Record<string, string>
+  summary: string | null
+  identities: { externalId: string; displayName: string | null }[]
+  conversations: number
+  lastMessageAt: string | null
+}
+
+export type MergeSuggestion = {
+  id: string
+  matchKey: MergeMatchKey
+  matchValue: string
+  createdAt: string
+  /** Keeps its id if a person accepts. */
+  survivor: MergeParty | null
+  /** Absorbed into the survivor, and then gone. */
+  absorbed: MergeParty | null
+}
+
 /** What one person thought of one thing the AI wrote. */
 export type Feedback = {
   id: string
@@ -164,6 +187,13 @@ export type ConversationDetail = {
   feedback: Feedback[]
   /** Whether this conversation is still waiting to be reviewed. Drives the sidebar button. */
   inReviewQueue: boolean
+  /** Every channel this customer is known on, not only the one they are writing from. */
+  identities: {
+    id: string
+    channelId: string
+    externalId: string
+    displayName: string | null
+  }[]
 }
 
 export type AiTrace = {
@@ -431,6 +461,17 @@ export const api = {
     ) => post<{ feedback: Feedback }>(`/v1/conversations/${id}/feedback`, input),
     removeFeedback: (id: string, feedbackId: string) =>
       del<{ ok: true }>(`/v1/conversations/${id}/feedback/${feedbackId}`),
+  },
+
+  customers: {
+    mergeSuggestions: (customerId: string) =>
+      get<{ suggestions: MergeSuggestion[] }>(`/v1/customers/${customerId}/merge-suggestions`),
+    acceptMerge: (customerId: string, suggestionId: string) =>
+      post<{ merged: { survivorId: string; absorbedId: string; conversations: number } }>(
+        `/v1/customers/${customerId}/merge-suggestions/${suggestionId}/accept`,
+      ),
+    rejectMerge: (customerId: string, suggestionId: string) =>
+      post<{ ok: true }>(`/v1/customers/${customerId}/merge-suggestions/${suggestionId}/reject`),
   },
 
   simulator: {

@@ -184,7 +184,7 @@ screen rather than a deploy.
 Verified against a locally signed LINE webhook end to end. Real delivery needs accounts that
 do not exist yet.
 
-**M4 is in progress.** Delivered so far:
+**M4 is complete.** What it delivered:
 
 - Retention. A nightly sweep, scheduled by the worker rather than a host cron so it exists
   wherever the worker runs, deletes conversations whose last message is older than the
@@ -232,7 +232,42 @@ do not exist yet.
   untouched or edited first. Comparing the two texts is the implicit correction signal the
   requirements ask for, and it costs no extra clicks from the agent.
 
-Still to come in M4: customer merge suggestions.
+- Customer merge suggestions. Every channel identity gets its own customer record on
+  arrival, because guessing who a stranger is at the moment they first write is how one
+  person's history ends up in front of another. The cost is duplicates, and this clears
+  them up: when an identifier the AI extracted matches another record in the same
+  workspace, the pair is put to a person, who accepts or rejects it.
+
+  Only `phone`, `email` and `account_id` propose a merge. `order_id` and `company` name
+  something other than a person, an owner and their staff share both, and merging those two
+  is precisely the mistake the decision table forbids. A phone is compared in a normalised
+  form, so the same Thai mobile written `081-234-5678`, `+66 81 234 5678` and `0066…` is one
+  number; the value the customer typed is never rewritten.
+
+  Nothing merges itself. A rejection is permanent for that pair, so the panel cannot ask
+  twice. Accepting repoints the absorbed record's identities, conversations, recall
+  embeddings and summaries onto the older record and then deletes it, in one transaction,
+  in that order: every one of those tables cascades on delete, so deleting first would
+  destroy the history instead of moving it. The audit entry naming both ids outlives the
+  record and the proposal.
+
+  The `propose_merge` AI tool listed in §3.3 is deliberately not built. A model is given one
+  customer and never sees another, which is what stops recall leaking across people, so it
+  has no way to name the other half of a merge. Deterministic matching on extracted
+  identifiers does the same job without that access.
+
+**M4's own list is done.** Two internal tools named in §3.3 are still outstanding, and
+neither belongs to a milestone that has closed:
+
+- `schedule_follow_up` has never been built. Nothing else depends on it and no pilot
+  conversation has needed it yet, but it is listed as v1 and is not there.
+- `propose_merge` is deliberately not built, and should be struck from §3.3 rather than
+  scheduled. See the merge suggestions entry above: a model is handed one customer and
+  never sees another, which is exactly what stops recall leaking between people, so it has
+  no way to name the other half of a merge.
+
+M5 adds the salon-saas tools: account lookup, subscription status and ticket creation,
+through the `http_tool` type and an MCP client.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)

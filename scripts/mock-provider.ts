@@ -86,6 +86,7 @@ const server = Bun.serve({
 
     const body = (await request.json()) as {
       messages?: { role: string; content: string | { type: string }[] }[]
+      tools?: { function?: { name?: string } }[]
     }
     const lastUser = [...(body.messages ?? [])].reverse().find((m) => m.role === 'user')
 
@@ -116,6 +117,47 @@ const server = Bun.serve({
     }
 
     const question = typeof lastUser?.content === 'string' ? lastUser.content : ''
+
+    /**
+     * A customer volunteering a phone number gets it recorded, the way a real model would.
+     *
+     * Only on the first pass: once the tool has answered, the conversation carries a `tool`
+     * message and the model is expected to write a reply instead of calling again. Without
+     * that check the turn would loop until the harness gave up.
+     */
+    const offersPhone = /0\d[\d\s-]{7,}\d/.exec(question)
+    const canSetField = (body.tools ?? []).some((t) => t.function?.name === 'set_customer_field')
+    const alreadyCalled = (body.messages ?? []).some((m) => m.role === 'tool')
+
+    if (offersPhone && canSetField && !alreadyCalled) {
+      return Response.json({
+        id: 'chatcmpl-mock-tool',
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: 'mock-model',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call_mock_phone',
+                  type: 'function',
+                  function: {
+                    name: 'set_customer_field',
+                    arguments: JSON.stringify({ key: 'phone', value: offersPhone[0].trim() }),
+                  },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 120, completion_tokens: 20, total_tokens: 140 },
+      })
+    }
 
     const reply = question.includes('description of the image')
       ? 'จากภาพที่ส่งมา ระบบแจ้งว่าการชำระเงินถูกปฏิเสธค่ะ รบกวนตรวจสอบบัตรหรือลองใหม่อีกครั้งนะคะ'

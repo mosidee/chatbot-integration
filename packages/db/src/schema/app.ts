@@ -8,6 +8,8 @@ import type {
   FeedbackTargetType,
   HandoffReason,
   Language,
+  MergeMatchKey,
+  MergeSuggestionStatus,
   MessageDirection,
   MessageStatus,
   NormalizedMessage,
@@ -101,6 +103,10 @@ export const feedbackReasonEnum = pgEnum('feedback_reason', [
   'should_have_handed_off',
 ])
 export const feedbackTargetEnum = pgEnum('feedback_target', ['message', 'suggestion'])
+
+/** Only identifiers that name a person or an account; see packages/shared/src/merge.ts. */
+export const mergeMatchKeyEnum = pgEnum('merge_match_key', ['phone', 'email', 'account_id'])
+export const mergeSuggestionStatusEnum = pgEnum('merge_suggestion_status', ['pending', 'rejected'])
 
 // ---------------------------------------------------------------------------
 // Workspace (1:1 extension of Better Auth's organization)
@@ -530,6 +536,50 @@ export const feedback = pgTable(
   ],
 )
 
+/**
+ * A proposal that two customer records are the same person.
+ *
+ * There is no `accepted` status. Accepting performs the merge, which deletes the absorbed
+ * customer, and this row cascades away with it; what survives is the audit entry. A
+ * rejected row, by contrast, must outlive the decision: it is the only thing stopping the
+ * same pair being proposed again on the customer's next message, forever.
+ *
+ * The pair is stored in a fixed order — `customerId` is always the older of the two, which
+ * is also the one that survives a merge — so the unique index cannot be defeated by
+ * proposing the same two people the other way round.
+ */
+export const mergeSuggestions = pgTable(
+  'merge_suggestions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** The older record: the one that keeps its id if a person accepts. */
+    customerId: text('customer_id')
+      .notNull()
+      .references(() => customers.id, { onDelete: 'cascade' }),
+    /** The newer record, absorbed into the other one on accept. */
+    otherCustomerId: text('other_customer_id')
+      .notNull()
+      .references(() => customers.id, { onDelete: 'cascade' }),
+    matchKey: mergeMatchKeyEnum('match_key').notNull(),
+    /** The normalised value both records carried, shown so a person can judge the match. */
+    matchValue: text('match_value').notNull(),
+    status: mergeSuggestionStatusEnum('status').notNull().default('pending'),
+    decidedByUserId: text('decided_by_user_id').references(() => user.id, {
+      onDelete: 'set null',
+    }),
+    decidedAt: ts('decided_at'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('merge_suggestions_pair_uq').on(t.customerId, t.otherCustomerId),
+    index('merge_suggestions_workspace_idx').on(t.workspaceId, t.status),
+    index('merge_suggestions_other_idx').on(t.otherCustomerId),
+  ],
+)
+
 export const auditLog = pgTable(
   'audit_log',
   {
@@ -558,6 +608,8 @@ export type {
   FeedbackTargetType,
   HandoffReason,
   Language,
+  MergeMatchKey,
+  MergeSuggestionStatus,
   MessageDirection,
   MessageStatus,
   SenderType,

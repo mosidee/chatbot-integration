@@ -92,6 +92,21 @@ export const uniqueCustomer = (label: string): string => `e2e-${label}-${uniqueT
 export const uniqueToken = (): string =>
   `r${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`
 
+/**
+ * A Thai mobile number belonging to this test alone.
+ *
+ * Customers persist between runs and merge matching is by value, so a shared number would
+ * make every customer any test ever created look like the same person, and the panel would
+ * show a pile of proposals instead of the one under test.
+ *
+ * Ten digits on purpose: redaction only considers runs of thirteen or more, so a phone
+ * reaches the database intact, which is the whole point of extracting it.
+ */
+export const uniquePhone = (): string =>
+  `08${Math.floor(Math.random() * 100_000_000)
+    .toString()
+    .padStart(8, '0')}`
+
 /** Return the embedding slot to its default: no provider, and the dimensions field sent. */
 export async function resetEmbedSlot(request: APIRequestContext): Promise<void> {
   const response = await request.put(`${API_URL}/api/v1/settings/task-slots/embed`, {

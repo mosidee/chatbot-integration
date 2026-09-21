@@ -184,6 +184,14 @@ without spending money.
 - A popover inside the message thread is clipped by its scroll container, so its bounding box
   can extend over the header and the click lands on the header instead. Panels that open from
   a bubble go in the normal flow and let the thread grow.
+- Merging two customers must repoint every table that references `customers.id` before the
+  losing row is deleted, in one transaction. All four of them cascade on delete, which is
+  how erasure wipes a person in one statement, so the wrong order destroys the history
+  instead of moving it. `packages/infra/src/merge.ts` lists the four; a fifth must be added
+  there too.
+- The e2e mock provider answers a phone number with a `set_customer_field` tool call, but
+  only while no `tool` message is in the request. Without that guard the turn calls the tool
+  forever and the harness gives up.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 
