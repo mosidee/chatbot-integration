@@ -137,5 +137,6 @@ build.
 
 ## Licence
 
-None yet, which means default copyright: the code is readable but not licensed for reuse.
-Open an issue if you want that changed.
+[MIT](LICENSE). Use it, change it, ship it, sell it. The only condition is that the
+copyright notice travels with substantial portions of the code, and it comes with no
+warranty.

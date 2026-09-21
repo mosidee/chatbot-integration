@@ -1,6 +1,7 @@
 {
   "name": "chatbot-integration",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "workspaces": [
     "apps/*",
