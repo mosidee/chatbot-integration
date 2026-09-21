@@ -1,4 +1,5 @@
 import type { AiTask, HandoffReason, Language } from '@ci/shared'
+import type { PendingWrite } from './tools'
 
 /** A provider profile with its secrets already decrypted by the caller. */
 export type ProviderProfile = {
@@ -128,6 +129,13 @@ export type AgentTurnResult = {
   /** Field updates the AI requested via tools, for the worker to apply. */
   customerFieldUpdates: Record<string, string>
   tagsToAdd: string[]
+  /**
+   * Writing tools the model called. Nothing has been sent to the tenant yet: the worker
+   * fires these after the turn and holds the reply until they succeed.
+   */
+  pendingWrites: PendingWrite[]
+  /** The model asked for a one-time verification link to be sent to this customer. */
+  verificationRequested: boolean
   trace: TraceRecord
 }
 

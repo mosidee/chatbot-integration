@@ -44,6 +44,10 @@ export async function createKnowledgeFixture(): Promise<KnowledgeFixture> {
       acknowledgementText: { th: 'รอสักครู่', en: 'One moment' },
       modelPrices: {},
       externalRetrieval: null,
+      identity: {
+        widgetToken: { enabled: true },
+        verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
+      },
     },
   })
 

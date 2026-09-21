@@ -1,4 +1,4 @@
-import type { ChannelType, NormalizedMessage } from '@ci/shared'
+import type { ChannelType, NormalizedMessage, VerifiedIdentity } from '@ci/shared'
 
 /**
  * The channel adapter contract.
@@ -42,6 +42,13 @@ export type InboundEvent = {
   replyToken?: string
   /** Profile hints the platform included, saved on the channel identity. */
   profile?: { displayName?: string; avatarUrl?: string }
+  /**
+   * An identity the channel proved, as opposed to one the customer claims.
+   *
+   * Only the web channel can supply this today, from a token the host application signed.
+   * A platform id such as a LINE userId is not proof of anything and never sets it.
+   */
+  verified?: VerifiedIdentity
 }
 
 export type SendResult = {

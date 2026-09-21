@@ -1,9 +1,12 @@
 import { type AgentTurnInput, type EffectPorts, type Logger, runAgentTurn } from '@ci/core'
 import { newId, schema } from '@ci/db'
-import type { Runtime, SuggestionJob } from '@ci/infra'
+import type { JobMeta, Runtime, SuggestionJob } from '@ci/infra'
 import {
+  boundIdentityFor,
   createTurnRetrieval,
+  createWorkspaceToolSources,
   loadAiConfig,
+  loadToolDefinitions,
   loadTurnContext,
   loadWorkspaceSettings,
   recordTrace,
@@ -24,6 +27,7 @@ export async function processSuggestion(
   _ports: EffectPorts,
   logger: Logger,
   job: SuggestionJob,
+  meta?: JobMeta,
 ): Promise<void> {
   const { db, env, publisher } = runtime
 
@@ -93,12 +97,20 @@ export async function processSuggestion(
     images: [],
   }
 
+  // A draft may look things up, but `mode: 'suggest'` withholds every writing tool: a
+  // draft nobody has read yet must not change anything in the tenant's system.
+  const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
+
   const result = await runAgentTurn({
     input,
     chatSlot: { ...slot, task: 'suggestion_for_human' },
     visionSlot: null,
     prices: aiConfig.prices,
     mode: 'suggest',
+    bound: boundIdentityFor(context, settings),
+    turnKey: meta?.jobId ?? `suggestion-${job.conversationId}`,
+    logger,
+    toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
     ...(retrieval.enabled.knowledge ? { searchKnowledge: retrieval.searchKnowledge } : {}),
     ...(retrieval.enabled.pastConversations
       ? { searchPastConversations: retrieval.searchPastConversations }

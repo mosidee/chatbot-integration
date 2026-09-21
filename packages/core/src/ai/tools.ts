@@ -1,5 +1,6 @@
 import { tool } from 'ai'
 import { z } from 'zod'
+import type { BoundIdentity, ToolSource } from './tool-source'
 import type { CustomerContext, HandoffIntent, RetrievedChunk } from './types'
 
 /**
@@ -7,8 +8,16 @@ import type { CustomerContext, HandoffIntent, RetrievedChunk } from './types'
  *
  * Tools never write to the database. They record intent on a scratchpad that the worker
  * reads and applies only after the turn has finished, so a turn that fails part way
- * leaves no side effects at all. External HTTP and MCP tools register through the same shape in M5.
+ * leaves no side effects at all. Tenant-defined HTTP tools join through `ToolSource` and
+ * obey the same rule; see `http-tool.ts`.
  */
+
+/** A tenant tool the model asked for that has not run yet. See `ToolEffect`. */
+export type PendingWrite = {
+  toolId: string
+  tool: string
+  args: Record<string, unknown>
+}
 
 export type TurnScratchpad = {
   handoff: HandoffIntent | null
@@ -16,10 +25,28 @@ export type TurnScratchpad = {
   tagsToAdd: string[]
   /** Everything retrieval surfaced this turn, pre-fetched or via a tool, for the trace. */
   retrieved: RetrievedChunk[]
+  /**
+   * Tenant tools that failed during the turn. A model told "that lookup failed" will
+   * cheerfully invent the answer instead, so the turn ends in a handoff rather than
+   * whatever it wrote next.
+   */
+  toolErrors: { tool: string; message: string }[]
+  /** Writing tools the model called, to be fired after the turn. */
+  pendingWrites: PendingWrite[]
+  /** The model asked for a verification link to be sent to this customer. */
+  verificationRequested: boolean
 }
 
 export function createScratchpad(): TurnScratchpad {
-  return { handoff: null, customerFieldUpdates: {}, tagsToAdd: [], retrieved: [] }
+  return {
+    handoff: null,
+    customerFieldUpdates: {},
+    tagsToAdd: [],
+    retrieved: [],
+    toolErrors: [],
+    pendingWrites: [],
+    verificationRequested: false,
+  }
 }
 
 export type PastConversationHit = {
@@ -31,6 +58,20 @@ export type PastConversationHit = {
 export type ToolContext = {
   customer: CustomerContext
   scratchpad: TurnScratchpad
+  /** Values the system supplies to a tool call. The model can neither see nor set these. */
+  bound: BoundIdentity
+  /**
+   * `suggest` means a human will approve whatever is drafted, so no writing tool is
+   * offered: a draft nobody has read must not change anything in the tenant's system.
+   */
+  mode: 'answer' | 'suggest'
+  /**
+   * Stable across a retry of the same job, so a write that reaches the tenant twice
+   * carries one idempotency key and lands once.
+   */
+  turnKey: string
+  /** Whether a verification link can actually be sent, which decides if the tool exists. */
+  identityVerificationAvailable?: boolean
   /**
    * Optional capabilities. A tool is only offered to the model when its capability is
    * present, so a workspace with no knowledge base does not advertise a search that can
@@ -105,17 +146,50 @@ export function createInternalTools(ctx: ToolContext) {
       },
     }),
 
+    /**
+     * The shape every bound tool follows: an empty input schema, because there is nothing
+     * here for the model to choose. Which customer this is was decided by the caller.
+     */
     get_customer_profile: tool({
-      description:
-        'Look up what is already known about this customer: their name, language, saved identifiers and a summary of past conversations.',
+      description: [
+        'Look up what is already known about this customer: their name, language, saved',
+        'identifiers, a summary of past conversations, and any account details their',
+        'verified login carried, such as which plan they are on.',
+      ].join(' '),
       inputSchema: z.object({}),
       execute: async () => ({
         displayName: ctx.customer.displayName,
         language: ctx.customer.primaryLanguage,
         summary: ctx.customer.summary,
         fields: ctx.customer.fields,
+        // Told apart on purpose. `fields` is what somebody typed into a chat window;
+        // `account` is what an identity proof carried and is the only half worth trusting
+        // for anything that costs money.
+        verified: ctx.bound.subject !== null,
+        account: ctx.bound.attributes,
       }),
     }),
+
+    ...(ctx.bound.subject === null && ctx.identityVerificationAvailable
+      ? {
+          request_identity_verification: tool({
+            description: [
+              'Send this customer a one-time link to confirm who they are by logging into',
+              'their account. Use it when they ask about their own account, subscription or',
+              'orders and you have no verified identity for them. Tell them a link is on its',
+              'way; do not guess at their account details in the meantime.',
+            ].join(' '),
+            inputSchema: z.object({}),
+            execute: async () => {
+              ctx.scratchpad.verificationRequested = true
+              return {
+                ok: true,
+                message: 'A verification link will be sent to this customer after your reply.',
+              }
+            },
+          }),
+        }
+      : {}),
 
     ...(ctx.searchKnowledge
       ? {
@@ -172,3 +246,13 @@ export function createInternalTools(ctx: ToolContext) {
 }
 
 export type InternalTools = ReturnType<typeof createInternalTools>
+
+/**
+ * The internal tools as a source.
+ *
+ * Always merged first, so no tenant definition can take a name this one needs.
+ */
+export const internalToolSource: ToolSource = {
+  id: 'internal',
+  tools: (ctx) => createInternalTools(ctx),
+}

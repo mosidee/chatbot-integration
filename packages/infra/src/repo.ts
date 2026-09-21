@@ -31,7 +31,31 @@ export async function loadWorkspaceSettings(
     .limit(1)
   const settings = rows[0]?.settings
   if (!settings) throw new Error(`workspace ${workspaceId} has no settings`)
-  return settings
+  return withSettingsDefaults(settings)
+}
+
+/**
+ * Fill in keys added after a row was written.
+ *
+ * Settings are one jsonb document, so a workspace created before a key existed simply does
+ * not have it. Defaulting on read means no backfill migration and no `undefined` reaching
+ * a caller that reasonably expected the type it was given.
+ */
+export function withSettingsDefaults(settings: WorkspaceSettings): WorkspaceSettings {
+  return {
+    ...settings,
+    identity: {
+      // A widget token was already trusted before this key existed, so leaving it on
+      // changes nothing for anyone. The link is new, and starts off.
+      widgetToken: { enabled: settings.identity?.widgetToken?.enabled ?? true },
+      verificationLink: {
+        enabled: settings.identity?.verificationLink?.enabled ?? false,
+        url: settings.identity?.verificationLink?.url ?? null,
+        secretEncrypted: settings.identity?.verificationLink?.secretEncrypted ?? null,
+        ttlMinutes: settings.identity?.verificationLink?.ttlMinutes ?? 15,
+      },
+    },
+  }
 }
 
 export type ResolvedConversation = {
@@ -96,14 +120,38 @@ export async function resolveConversation(
         displayName: event.profile?.displayName ?? null,
         avatarUrl: event.profile?.avatarUrl ?? null,
         profile: {},
+        ...(event.verified
+          ? {
+              verifiedSubject: event.verified.subject,
+              verifiedAttributes: event.verified.attributes,
+              verifiedVia: event.verified.via,
+              verifiedAt: new Date(),
+            }
+          : {}),
       })
       .returning()
     identity = inserted[0]
-  } else if (event.profile?.displayName && identity.displayName !== event.profile.displayName) {
-    await db
-      .update(schema.channelIdentities)
-      .set({ displayName: event.profile.displayName, updatedAt: new Date() })
-      .where(eq(schema.channelIdentities.id, identity.id))
+  } else {
+    const patch: Partial<typeof schema.channelIdentities.$inferInsert> = {}
+    if (event.profile?.displayName && identity.displayName !== event.profile.displayName) {
+      patch.displayName = event.profile.displayName
+    }
+    // Re-recorded on every message a proof accompanies, so a customer who changes plan is
+    // not answered from the plan they were on when they first wrote.
+    if (event.verified) {
+      patch.verifiedSubject = event.verified.subject
+      patch.verifiedAttributes = event.verified.attributes
+      patch.verifiedVia = event.verified.via
+      patch.verifiedAt = new Date()
+    }
+    if (Object.keys(patch).length > 0) {
+      patch.updatedAt = new Date()
+      await db
+        .update(schema.channelIdentities)
+        .set(patch)
+        .where(eq(schema.channelIdentities.id, identity.id))
+      identity = { ...identity, ...patch } as typeof identity
+    }
   }
 
   if (!identity) throw new Error('failed to resolve channel identity')

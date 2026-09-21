@@ -1,4 +1,4 @@
-import { normalizedMessageSchema } from '@ci/shared'
+import { normalizedMessageSchema, type VerifiedIdentity } from '@ci/shared'
 import { z } from 'zod'
 import { verifyVisitorToken } from '../jwt'
 import type { ChannelAdapter, InboundEvent, WebhookRequest } from '../types'
@@ -29,6 +29,19 @@ const inboundSchema = z.object({
   eventId: z.string().min(1).optional(),
   /** Token minted by the host application for a logged-in user. */
   token: z.string().optional(),
+  /**
+   * The identity the API already proved when it minted the session.
+   *
+   * Carried here rather than re-verified, because the widget presents its host token once,
+   * at session start, and every later message rides the session we signed ourselves.
+   */
+  verified: z
+    .object({
+      subject: z.string().min(1),
+      attributes: z.record(z.string(), z.string()).default({}),
+      via: z.literal('widget_token'),
+    })
+    .optional(),
 })
 
 export const webChannelAdapter: ChannelAdapter<WebChannelConfig> = {
@@ -61,6 +74,7 @@ export const webChannelAdapter: ChannelAdapter<WebChannelConfig> = {
         externalId: parsed.visitorId,
         message: parsed.message,
         timestamp: new Date(),
+        ...(parsed.verified ? { verified: parsed.verified } : {}),
       },
     ]
   },
@@ -87,18 +101,25 @@ export async function resolveWebVisitor(
   identified: boolean
   displayName: string | null
   attributes: Record<string, string>
+  /**
+   * The proof itself, when there was one. Distinct from `identified`, which has always
+   * meant "we know which visitor this is": that is continuity, and this is evidence.
+   */
+  verified?: VerifiedIdentity & { via: 'widget_token' }
 }> {
   if (input.token && config.visitorTokenSecret) {
     try {
       const claims = await verifyVisitorToken(input.token, config.visitorTokenSecret, now)
+      const attributes = {
+        ...(claims.attributes ?? {}),
+        ...(claims.email ? { email: claims.email } : {}),
+      }
       return {
         externalId: `host:${claims.sub}`,
         identified: true,
         displayName: claims.name ?? null,
-        attributes: {
-          ...(claims.attributes ?? {}),
-          ...(claims.email ? { email: claims.email } : {}),
-        },
+        attributes,
+        verified: { subject: claims.sub, attributes, via: 'widget_token' },
       }
     } catch {
       // Fall through to anonymous.

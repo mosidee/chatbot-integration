@@ -1,5 +1,7 @@
 export * from './conversation'
 export * from './events'
 export * from './feedback'
+export * from './identity'
 export * from './merge'
 export * from './message'
+export * from './tools'

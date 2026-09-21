@@ -41,6 +41,10 @@ const DEFAULT_SETTINGS: WorkspaceSettings = {
   },
   modelPrices: {},
   externalRetrieval: null,
+  identity: {
+    widgetToken: { enabled: true },
+    verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
+  },
 }
 
 async function main() {

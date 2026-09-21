@@ -7,6 +7,8 @@ import type {
   FeedbackReason,
   FeedbackTargetType,
   HandoffReason,
+  HttpToolConfig,
+  IdentityProof,
   Language,
   MergeMatchKey,
   MergeSuggestionStatus,
@@ -14,6 +16,7 @@ import type {
   MessageStatus,
   NormalizedMessage,
   SenderType,
+  ToolKind,
 } from '@ci/shared'
 import {
   boolean,
@@ -109,6 +112,10 @@ export const feedbackTargetEnum = pgEnum('feedback_target', ['message', 'suggest
 export const mergeMatchKeyEnum = pgEnum('merge_match_key', ['phone', 'email', 'account_id'])
 export const mergeSuggestionStatusEnum = pgEnum('merge_suggestion_status', ['pending', 'rejected'])
 
+/** `mcp` is absent on purpose: the MCP source adds it, and adding a value is cheap. */
+export const toolKindEnum = pgEnum('tool_kind', ['http'])
+export const identityProofEnum = pgEnum('identity_proof', ['widget_token', 'verification_link'])
+
 // ---------------------------------------------------------------------------
 // Workspace (1:1 extension of Better Auth's organization)
 // ---------------------------------------------------------------------------
@@ -130,6 +137,28 @@ export type WorkspaceSettings = {
   acknowledgementText: Record<Language, string>
   /** Per-model price table for cost estimates, keyed `provider:model`. */
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
+  /**
+   * Which proofs of identity this workspace accepts, each switched separately.
+   *
+   * A proof that is off still identifies a returning visitor — that is what keeps one
+   * person's history together — but it no longer counts as evidence, so no tool is bound
+   * to it. Turning one off is therefore safe: conversations keep working and account
+   * tools stop being offered.
+   */
+  identity: {
+    widgetToken: { enabled: boolean }
+    verificationLink: {
+      enabled: boolean
+      /** The tenant's own page. We append `?code=` to it. */
+      url: string | null
+      /**
+       * HS256 secret the tenant signs their confirmation token with. AES-256-GCM at rest;
+       * the settings endpoint reports `hasSecret` and never returns it.
+       */
+      secretEncrypted: string | null
+      ttlMinutes: number
+    }
+  }
   /**
    * Point retrieval at an existing knowledge platform instead of ours. Null uses the
    * built-in Postgres hybrid search.
@@ -221,6 +250,22 @@ export const channelIdentities = pgTable(
     displayName: text('display_name'),
     avatarUrl: text('avatar_url'),
     profile: jsonb('profile').$type<Record<string, unknown>>().default({}).notNull(),
+    /**
+     * Who this person was *proven* to be, as opposed to who they say they are.
+     *
+     * `customers.fields.account_id` is what a customer typed into a chat and the AI
+     * recorded. This is an id a proof carried: a token the host application signed, or a
+     * login the person completed behind a one-time link. Only this one may be bound into a
+     * tool call. Kept apart from `profile` so a LINE display name can never be mistaken
+     * for evidence of anything.
+     */
+    verifiedSubject: text('verified_subject'),
+    verifiedAttributes: jsonb('verified_attributes')
+      .$type<Record<string, string>>()
+      .default({})
+      .notNull(),
+    verifiedVia: identityProofEnum('verified_via'),
+    verifiedAt: ts('verified_at'),
     createdAt: ts('created_at').defaultNow().notNull(),
     updatedAt: ts('updated_at').defaultNow().notNull(),
   },
@@ -615,6 +660,75 @@ export const handoffEvents = pgTable(
   ],
 )
 
+// ---------------------------------------------------------------------------
+// Tenant-defined tools and identity proofs
+// ---------------------------------------------------------------------------
+
+/**
+ * A tool a workspace admin defined against their own API.
+ *
+ * The agent's registry takes sources rather than tools, so a row here contributes one
+ * entry to the tool set and a future MCP connection contributes a whole set, without the
+ * turn learning which produced what.
+ */
+export const tools = pgTable(
+  'tools',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    kind: toolKindEnum('kind').notNull(),
+    /** What the model calls it. Unique per workspace; see packages/shared/src/tools.ts. */
+    name: text('name').notNull(),
+    /** What the model is told it does. The only guidance it has for when to call it. */
+    description: text('description').notNull(),
+    enabled: boolean('enabled').default(true).notNull(),
+    config: jsonb('config').$type<HttpToolConfig>().notNull(),
+    /** AES-256-GCM. The API exposes `hasCredential`, never this. */
+    credentialEncrypted: text('credential_encrypted'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+    updatedAt: ts('updated_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('tools_workspace_name_uq').on(t.workspaceId, t.name),
+    index('tools_workspace_idx').on(t.workspaceId),
+  ],
+)
+
+/**
+ * A one-time code behind a verification link.
+ *
+ * Deliberately not on the merge repoint list in packages/infra/src/merge.ts: a code is
+ * worthless the moment it is used or expires, so letting it cascade with the customer is
+ * right. The identity it proved is on `channel_identities`, which *is* repointed.
+ */
+export const identityVerifications = pgTable(
+  'identity_verifications',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    channelIdentityId: text('channel_identity_id')
+      .notNull()
+      .references(() => channelIdentities.id, { onDelete: 'cascade' }),
+    /** Random, unguessable, and the only thing the tenant's page sends back. */
+    code: text('code').notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    usedAt: ts('used_at'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('identity_verifications_code_uq').on(t.code),
+    index('identity_verifications_identity_idx').on(t.channelIdentityId),
+    index('identity_verifications_workspace_idx').on(t.workspaceId),
+  ],
+)
+
 export const auditLog = pgTable(
   'audit_log',
   {
@@ -642,10 +756,13 @@ export type {
   FeedbackReason,
   FeedbackTargetType,
   HandoffReason,
+  HttpToolConfig,
+  IdentityProof,
   Language,
   MergeMatchKey,
   MergeSuggestionStatus,
   MessageDirection,
   MessageStatus,
   SenderType,
+  ToolKind,
 }

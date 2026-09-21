@@ -33,6 +33,21 @@ const sessionClaimsSchema = z.object({
   channelId: z.string().min(1),
   externalId: z.string().min(1),
   identified: z.boolean(),
+  /**
+   * The proof the host token carried, kept in the session so later messages need not
+   * present the token again.
+   *
+   * Optional, and it must stay optional: a session lasts twelve hours, so at any deploy
+   * there are signed sessions in flight that predate this claim. Requiring it would fail
+   * their verification and drop those visitors to a fresh anonymous identity mid-chat.
+   */
+  verified: z
+    .object({
+      subject: z.string().min(1),
+      attributes: z.record(z.string(), z.string()),
+      via: z.literal('widget_token'),
+    })
+    .optional(),
   exp: z.number().int(),
 })
 
@@ -145,6 +160,7 @@ export function widgetRoutes(ctx: ApiContext) {
               channelId: params.channelId,
               externalId: visitor.externalId,
               identified: visitor.identified,
+              ...(visitor.verified ? { verified: visitor.verified } : {}),
               exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
             } satisfies SessionClaims,
             loaded.channel.webhookSecret,
@@ -187,6 +203,9 @@ export function widgetRoutes(ctx: ApiContext) {
                 visitorId: session.externalId,
                 message: { kind: 'text', text: body.text },
                 eventId: `widget-${crypto.randomUUID()}`,
+                // From the session we signed, never from the request body: a widget that
+                // could assert its own identity would be no proof at all.
+                ...(session.verified ? { verified: session.verified } : {}),
               }),
               {},
               {},

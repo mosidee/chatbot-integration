@@ -23,6 +23,18 @@ export const QUEUE_NAMES = {
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
 
+/**
+ * What the queue knows about the attempt, as opposed to the work.
+ *
+ * The BullMQ job id is stable across a retry of the same job, which is what makes it usable
+ * as an idempotency key for anything a processor sends outside. A value minted inside the
+ * processor would differ on every retry, which is the same as sending no key at all.
+ */
+export type JobMeta = {
+  jobId: string
+  attempt: number
+}
+
 export type InboundJob = {
   workspaceId: string
   channelId: string

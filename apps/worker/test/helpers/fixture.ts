@@ -25,6 +25,10 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   acknowledgementText: { th: 'รอสักครู่นะคะ', en: 'One moment please.' },
   modelPrices: {},
   externalRetrieval: null,
+  identity: {
+    widgetToken: { enabled: true },
+    verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
+  },
 }
 
 export type Fixture = {

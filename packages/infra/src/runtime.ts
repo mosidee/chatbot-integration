@@ -1,9 +1,10 @@
 import { type Env, loadEnv } from '@ci/config'
-import type { BlobStore, Logger } from '@ci/core'
+import type { BlobStore, FetchLike, Logger } from '@ci/core'
 import { createDb, type Database } from '@ci/db'
 import type { Redis } from 'ioredis'
 import { createBlobStore } from './blob'
 import { createFilesystemBlobStore } from './blob-fs'
+import { createRestrictedFetch } from './egress'
 import { createLogger } from './logger'
 import { createPublisher } from './publisher'
 import { createQueues, type Queues } from './queues'
@@ -25,6 +26,12 @@ export type Runtime = {
   subscriberFactory: () => Redis
   queues: Queues
   blob: BlobStore
+  /**
+   * The client tenant-defined tools are fetched through. Restricted on purpose; see
+   * `egress.ts`. Provider and retrieval calls keep the plain `fetch`, because a self-hosted
+   * gateway on a private address is a legitimate operator configuration.
+   */
+  toolFetch: FetchLike
   publisher: ReturnType<typeof createPublisher>
   logger: Logger
   close: () => Promise<void>
@@ -33,6 +40,8 @@ export type Runtime = {
 export type RuntimeOptions = {
   /** Namespaces all queue keys in Redis. Tests use it to isolate fixtures. */
   queuePrefix?: string
+  /** Overrides the env flag, so an integration test can reach its own local endpoint. */
+  allowPrivateEgress?: boolean
 }
 
 export function createRuntime(
@@ -41,6 +50,15 @@ export function createRuntime(
   options: RuntimeOptions = {},
 ): Runtime {
   const logger = createLogger(service, env.NODE_ENV === 'production' ? 'info' : 'debug')
+
+  const allowPrivateEgress = options.allowPrivateEgress ?? env.TOOL_EGRESS_ALLOW_PRIVATE
+  if (allowPrivateEgress && env.NODE_ENV === 'production') {
+    // The same refusal `db:reset` makes, for the same reason: this is a switch that is
+    // harmless locally and hands the internal network to any tenant admin in production.
+    throw new Error(
+      'TOOL_EGRESS_ALLOW_PRIVATE must not be set in production: it would let a tenant-defined tool reach Postgres, Redis, MinIO and the model gateway.',
+    )
+  }
 
   const { db, close: closeDb } = createDb(env.DATABASE_URL)
   const redis = createRedis(env.REDIS_URL, { forQueue: true })
@@ -73,6 +91,7 @@ export function createRuntime(
     subscriberFactory: () => createRedis(env.REDIS_URL),
     queues,
     blob,
+    toolFetch: createRestrictedFetch({ allowPrivate: allowPrivateEgress }),
     publisher,
     logger,
     close: async () => {

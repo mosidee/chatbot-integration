@@ -10,16 +10,22 @@ import {
   transition,
 } from '@ci/core'
 import { newId, schema } from '@ci/db'
-import type { AiTurnJob, Runtime } from '@ci/infra'
+import type { AiTurnJob, JobMeta, Runtime } from '@ci/infra'
 import {
   addConversationTags,
+  boundIdentityFor,
   createTurnRetrieval,
+  createWorkspaceToolSources,
+  describeWriteFailure,
   loadAiConfig,
+  loadToolDefinitions,
   loadTurnContext,
   loadWorkspaceSettings,
   mergeCustomerFields,
   recordTrace,
   resolveExternalRetrieval,
+  runPendingWrites,
+  sendVerificationLink,
   storeMessage,
   suggestMergesFor,
   updateConversation,
@@ -42,6 +48,7 @@ export async function processAiTurn(
   ports: EffectPorts,
   logger: Logger,
   job: AiTurnJob,
+  meta?: JobMeta,
 ): Promise<void> {
   const { db, env, publisher, queues } = runtime
 
@@ -83,6 +90,14 @@ export async function processAiTurn(
 
   const visionSlot = usableSlot(aiConfig, 'vision')
   const images = visionSlot ? await readImages(runtime, recentMessages) : []
+
+  // Tools the workspace defined for itself, and the values the system will bind into them.
+  // The subject comes from a proof recorded on the channel identity, never from anything
+  // the model or the customer said; see packages/infra/src/identity.ts.
+  const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
+  const bound = boundIdentityFor(context, settings)
+  // Stable across a retry of this job, so a write that is sent twice carries one key.
+  const turnKey = meta?.jobId ?? `turn-${job.conversationId}-${Date.now()}`
 
   // Retrieval is bound to this workspace, customer and conversation before the model sees
   // it, so the tools it is offered cannot widen their own scope.
@@ -132,6 +147,15 @@ export async function processAiTurn(
     visionSlot,
     prices: aiConfig.prices,
     mode: job.deliver === 'draft' ? 'suggest' : 'answer',
+    bound,
+    turnKey,
+    logger,
+    toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
+    // Only worth offering when a link can actually be sent and nothing is proven yet.
+    identityVerificationAvailable:
+      settings.identity.verificationLink.enabled &&
+      settings.identity.verificationLink.url !== null &&
+      bound.subject === null,
     ...(retrieval.enabled.knowledge ? { searchKnowledge: retrieval.searchKnowledge } : {}),
     ...(retrieval.enabled.pastConversations
       ? { searchPastConversations: retrieval.searchPastConversations }
@@ -160,6 +184,9 @@ export async function processAiTurn(
   await addConversationTags(db, job.workspaceId, job.conversationId, result.tagsToAdd)
 
   if (result.handoff) {
+    // Pending writes are deliberately abandoned here. The model asked for them on the way
+    // to deciding it could not finish, and a turn that ends with a person should not also
+    // have changed something in the tenant's system on its own initiative.
     await handOff(
       runtime,
       ports,
@@ -169,6 +196,32 @@ export async function processAiTurn(
       result.handoff.note ?? `AI handed off: ${result.handoff.reason}`,
     )
     return
+  }
+
+  // Writes fire here: after the turn is known to have succeeded, and before the reply is
+  // stored. A customer must never read "done" for something that then failed, so a failed
+  // write discards the reply and fetches a person instead.
+  if (result.pendingWrites.length > 0) {
+    const outcome = await runPendingWrites(
+      toolDefinitions,
+      result.pendingWrites,
+      bound,
+      runtime,
+      turnKey,
+    )
+    if (outcome.failed) {
+      logger.warn('a tenant tool write failed; the reply was held back', {
+        conversationId: job.conversationId,
+        tool: outcome.failed.tool,
+        succeeded: outcome.succeeded,
+      })
+      await handOff(runtime, ports, logger, job, 'tool_error', describeWriteFailure(outcome))
+      return
+    }
+    logger.info('tenant tool writes carried out', {
+      conversationId: job.conversationId,
+      tools: outcome.succeeded,
+    })
   }
 
   // An empty answer used to end the turn here, which left the customer with silence and
@@ -232,6 +285,21 @@ export async function processAiTurn(
     conversationId: job.conversationId,
     messageId: stored.id,
   })
+
+  // Queued after the reply, so the customer reads the answer and then the link, in that
+  // order, rather than being handed a login prompt before being told why.
+  if (result.verificationRequested) {
+    const sent = await sendVerificationLink(runtime, {
+      workspaceId: job.workspaceId,
+      conversationId: job.conversationId,
+    })
+    if (!sent.ok) {
+      logger.warn('the AI asked for a verification link that could not be sent', {
+        conversationId: job.conversationId,
+        reason: sent.reason,
+      })
+    }
+  }
 }
 
 async function handOff(

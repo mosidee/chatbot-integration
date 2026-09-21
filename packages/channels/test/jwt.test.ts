@@ -79,7 +79,30 @@ describe('resolveWebVisitor', () => {
       identified: true,
       displayName: 'Nok',
       attributes: { plan: 'pro', email: 'nok@example.com' },
+      // The proof, kept apart from `identified`: that one means "we know which visitor
+      // this is", which a returning anonymous browser also satisfies.
+      verified: {
+        subject: 'acct_7',
+        attributes: { plan: 'pro', email: 'nok@example.com' },
+        via: 'widget_token',
+      },
     })
+  })
+
+  test('an anonymous visitor carries no proof at all', async () => {
+    const result = await resolveWebVisitor({ visitorId: 'browser-1' }, config)
+    expect(result.identified).toBe(false)
+    expect(result.verified).toBeUndefined()
+  })
+
+  test('an expired token identifies nobody and proves nothing', async () => {
+    const token = await signVisitorToken(
+      { sub: 'acct_7', exp: Math.floor(Date.now() / 1000) - 60 },
+      SECRET,
+    )
+    const result = await resolveWebVisitor({ visitorId: 'browser-1', token }, config)
+    expect(result.externalId).toBe('anon:browser-1')
+    expect(result.verified).toBeUndefined()
   })
 
   test('gives the same identity across browsers for one account', async () => {

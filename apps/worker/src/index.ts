@@ -7,6 +7,7 @@ import {
   createRedis,
   createRuntime,
   type InboundJob,
+  type JobMeta,
   type KnowledgeIngestJob,
   type OutboundJob,
   QUEUE_NAMES,
@@ -55,13 +56,22 @@ function makeWorker<T>(
   ports: EffectPorts,
   logger: Logger,
   concurrency: number,
-  handler: (runtime: Runtime, ports: EffectPorts, logger: Logger, payload: T) => Promise<void>,
+  handler: (
+    runtime: Runtime,
+    ports: EffectPorts,
+    logger: Logger,
+    payload: T,
+    meta: JobMeta,
+  ) => Promise<void>,
 ): Worker {
   const worker = new Worker(
     name,
     async (job: Job<T>) => {
       const startedAt = Date.now()
-      await handler(runtime, ports, logger, job.data)
+      await handler(runtime, ports, logger, job.data, {
+        jobId: job.id ?? `${name}-${job.timestamp}`,
+        attempt: job.attemptsMade,
+      })
       logger.info('job completed', { queue: name, jobId: job.id, ms: Date.now() - startedAt })
     },
     {

@@ -1,9 +1,11 @@
 import { generateText, stepCountIs } from 'ai'
+import type { Logger } from '../ports'
 import { estimateCost } from './cost'
 import { buildMessages, buildSystemPrompt } from './prompt'
 import { stripReasoning } from './reasoning'
 import { runWithFallback } from './registry'
-import { createInternalTools, createScratchpad, type ToolContext } from './tools'
+import { type BoundIdentity, mergeToolSources, type ToolSource } from './tool-source'
+import { createScratchpad, internalToolSource, type ToolContext } from './tools'
 import type { AgentTurnInput, AgentTurnResult, PriceTable, SlotConfig, TraceRecord } from './types'
 import { describeImages } from './vision'
 
@@ -26,6 +28,17 @@ export type RunAgentTurnOptions = {
    */
   searchKnowledge?: ToolContext['searchKnowledge']
   searchPastConversations?: ToolContext['searchPastConversations']
+  /** The values the system binds into a tool call. See `BoundIdentity`. */
+  bound: BoundIdentity
+  /**
+   * Tenant tool sources, merged after the internal ones. Empty for a workspace that has
+   * defined none, which is every workspace until an admin adds one.
+   */
+  toolSources?: ToolSource[]
+  /** Stable across a retry of the same job; becomes the idempotency key of any write. */
+  turnKey: string
+  identityVerificationAvailable?: boolean
+  logger?: Logger
 }
 
 /**
@@ -71,12 +84,20 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       // Models without function calling take the answer-only path: knowledge is already
       // in the system prompt, so they can still answer, just not act.
       const tools = target.provider.supportsTools
-        ? createInternalTools({
-            customer: input.customer,
-            scratchpad,
-            searchKnowledge: options.searchKnowledge,
-            searchPastConversations: options.searchPastConversations,
-          })
+        ? mergeToolSources(
+            [internalToolSource, ...(options.toolSources ?? [])],
+            {
+              customer: input.customer,
+              scratchpad,
+              bound: options.bound,
+              mode,
+              turnKey: options.turnKey,
+              identityVerificationAvailable: options.identityVerificationAvailable ?? false,
+              searchKnowledge: options.searchKnowledge,
+              searchPastConversations: options.searchPastConversations,
+            },
+            options.logger,
+          )
         : undefined
 
       return generateText({
@@ -99,7 +120,19 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     const tokensOut = result.usage?.outputTokens ?? null
     const chatCost = estimateCost(prices, target.provider.name, target.model, tokensIn, tokensOut)
 
-    const handoff = scratchpad.handoff
+    // A tenant tool that failed ends the turn with a person, even though the model will
+    // have written something. Told "the lookup failed", a model reliably answers from its
+    // own imagination instead, and an invented subscription date is worse than a wait.
+    const handoff =
+      scratchpad.handoff ??
+      (scratchpad.toolErrors.length > 0
+        ? {
+            reason: 'tool_error' as const,
+            note: `A tool the AI needed did not answer: ${scratchpad.toolErrors
+              .map((e) => `${e.tool} ${e.message}`)
+              .join('; ')}`,
+          }
+        : null)
     // Some gateways leave a reasoning model's thinking inside the message content. It is
     // not an answer and must never reach a customer.
     const text = stripReasoning(result.text)
@@ -111,7 +144,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       model: target.model,
       usedFallback,
       prompt: { system, messages },
-      toolCalls: result.steps?.flatMap((s) => s.toolCalls ?? []) ?? [],
+      toolCalls: collectToolCalls(result.steps),
       // Pre-fetched chunks plus anything the model looked up itself, so the trace shows
       // every piece of knowledge that could have shaped the answer.
       retrieved: [
@@ -137,6 +170,8 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       handoff,
       customerFieldUpdates: scratchpad.customerFieldUpdates,
       tagsToAdd: scratchpad.tagsToAdd,
+      pendingWrites: scratchpad.pendingWrites,
+      verificationRequested: scratchpad.verificationRequested,
       trace,
     }
   } catch (error) {
@@ -146,6 +181,9 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       handoff: { reason: 'model_error', note: `The AI could not reply: ${message}` },
       customerFieldUpdates: {},
       tagsToAdd: [],
+      // A turn that never produced an answer must not fire writes it asked for along the way.
+      pendingWrites: [],
+      verificationRequested: false,
       trace: {
         task: chatSlot.task,
         providerId: chatSlot.primary?.provider.id ?? null,
@@ -164,6 +202,41 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
       },
     }
   }
+}
+
+type TraceToolCall = { toolName: string; input: unknown; output: unknown }
+
+/**
+ * Pair each call with what it answered, for the trace panel.
+ *
+ * Handles both shapes: a statically-typed internal tool and a `dynamicTool`, whose parts
+ * carry `dynamic: true` with `input` and `output` typed as unknown. Reading only the
+ * static shape would leave the console blank for exactly the tenant tools this milestone
+ * added.
+ */
+function collectToolCalls(steps: { toolCalls?: unknown[]; toolResults?: unknown[] }[] | undefined) {
+  const calls: TraceToolCall[] = []
+  for (const step of steps ?? []) {
+    const results = (step.toolResults ?? []) as {
+      toolCallId?: string
+      output?: unknown
+      result?: unknown
+    }[]
+    for (const raw of (step.toolCalls ?? []) as {
+      toolCallId?: string
+      toolName?: string
+      input?: unknown
+      args?: unknown
+    }[]) {
+      const match = results.find((r) => r.toolCallId === raw.toolCallId)
+      calls.push({
+        toolName: raw.toolName ?? 'unknown',
+        input: raw.input ?? raw.args ?? null,
+        output: match ? (match.output ?? match.result ?? null) : null,
+      })
+    }
+  }
+  return calls
 }
 
 function errorMessage(error: unknown): string {
