@@ -27,6 +27,44 @@ function trigramEmbedding(text: string, dimensions: number): number[] {
   return vector.map((v) => v / magnitude)
 }
 
+/** The built-in registry, so anything else in the offered set is the tenant's own. */
+const INTERNAL_TOOL_NAMES = new Set([
+  'handoff_to_human',
+  'tag_conversation',
+  'set_customer_field',
+  'get_customer_profile',
+  'search_knowledge',
+  'search_past_conversations',
+  'request_identity_verification',
+])
+
+function toolCallResponse(name: string, args: Record<string, unknown>): Response {
+  return Response.json({
+    id: `chatcmpl-mock-${name}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: 'mock-model',
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: `call_mock_${name}`,
+              type: 'function',
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: { prompt_tokens: 120, completion_tokens: 20, total_tokens: 140 },
+  })
+}
+
 const server = Bun.serve({
   port,
   async fetch(request) {
@@ -128,6 +166,51 @@ const server = Bun.serve({
     const offersPhone = /0\d[\d\s-]{7,}\d/.exec(question)
     const canSetField = (body.tools ?? []).some((t) => t.function?.name === 'set_customer_field')
     const alreadyCalled = (body.messages ?? []).some((m) => m.role === 'tool')
+
+    /**
+     * Call whichever tool the workspace defined for itself.
+     *
+     * Named by exclusion rather than by a fixed name, so an end-to-end test can define a
+     * tool called anything and still see it exercised. Guarded by the same "no tool message
+     * yet" check: without it the turn would call forever.
+     */
+    const tenantTool = (body.tools ?? [])
+      .map((t) => t.function?.name)
+      .find((name) => name && !INTERNAL_TOOL_NAMES.has(name))
+
+    if (/check my plan|แพ็กเกจของฉัน/i.test(question) && tenantTool && !alreadyCalled) {
+      return toolCallResponse(tenantTool, {})
+    }
+
+    const canVerify = (body.tools ?? []).some(
+      (t) => t.function?.name === 'request_identity_verification',
+    )
+    if (/verify me|ยืนยันตัวตน/i.test(question) && canVerify && !alreadyCalled) {
+      return toolCallResponse('request_identity_verification', {})
+    }
+
+    // Answering from what the tool returned, which is what a real model does and what lets
+    // a test assert that the tool's answer actually reached the customer.
+    const toolAnswer = [...(body.messages ?? [])].reverse().find((m) => m.role === 'tool')
+    if (toolAnswer && typeof toolAnswer.content === 'string') {
+      const plan = /"plan"\s*:\s*"([^"]+)"/.exec(toolAnswer.content)?.[1]
+      if (plan) {
+        return Response.json({
+          id: 'chatcmpl-mock-tool-answer',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'mock-model',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: `แพ็กเกจของคุณคือ ${plan} ค่ะ` },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 140, completion_tokens: 20, total_tokens: 160 },
+        })
+      }
+    }
 
     if (offersPhone && canSetField && !alreadyCalled) {
       return Response.json({

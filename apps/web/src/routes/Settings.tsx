@@ -868,7 +868,12 @@ function ToolsCard() {
               onChange={(e) => toggle.mutate({ id: tool.id, enabled: e.target.checked })}
             />
           </label>
-          <Button size="sm" variant="ghost" onClick={() => setEditing(tool)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            data-testid="tool-edit"
+            onClick={() => setEditing(tool)}
+          >
             {t('common.edit')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => remove.mutate(tool.id)}>

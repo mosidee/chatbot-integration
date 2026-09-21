@@ -38,6 +38,15 @@ export default defineConfig({
       url: 'http://localhost:3000/healthz',
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+      // The tool endpoint these tests define runs on localhost, which the restricted
+      // egress client refuses everywhere else by design.
+      //
+      // This only applies when Playwright starts the process. A developer who already has
+      // `bun run dev` up gets that server reused without the flag, and e2e/tools.spec.ts
+      // then fails with an egress refusal that reads like a bug in the product. Restart
+      // the dev servers with TOOL_EGRESS_ALLOW_PRIVATE=true, or stop them and let
+      // Playwright start its own.
+      env: { ...process.env, TOOL_EGRESS_ALLOW_PRIVATE: 'true' },
     },
     {
       command: 'bun run apps/worker/src/index.ts',
@@ -46,6 +55,7 @@ export default defineConfig({
       url: 'http://localhost:3001/healthz',
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+      env: { ...process.env, TOOL_EGRESS_ALLOW_PRIVATE: 'true' },
     },
     {
       command: 'bun run dev:web',

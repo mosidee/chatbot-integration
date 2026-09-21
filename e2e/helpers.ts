@@ -82,6 +82,22 @@ export async function customerSays(
 export const uniqueCustomer = (label: string): string => `e2e-${label}-${uniqueToken()}`
 
 /**
+ * Remove every tenant tool before a test defines its own.
+ *
+ * Tools persist between runs, and the AI is offered all of them. A tool left behind by an
+ * earlier run points at a port that died with that run's test process, so the model picks
+ * it, the call is refused, and the conversation hands off with `tool_error` while the tool
+ * under test is never reached. The failure looks like a bug in egress and is not.
+ */
+export async function clearTools(request: APIRequestContext): Promise<void> {
+  const response = await request.get(`${API_URL}/api/v1/settings/tools`)
+  const body = (await response.json()) as { tools: { id: string }[] }
+  for (const tool of body.tools) {
+    await request.delete(`${API_URL}/api/v1/settings/tools/${tool.id}`)
+  }
+}
+
+/**
  * A token unique to one run, and deliberately not a plain run of digits.
  *
  * `Date.now()` is thirteen digits, which is the length of a Thai national ID, and about one
