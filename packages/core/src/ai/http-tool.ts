@@ -180,8 +180,13 @@ export async function executeHttpTool(
   const timer = setTimeout(() => controller.abort(), def.config.timeoutMs)
 
   let response: Response
+  let text: string
   try {
     response = await deps.fetch(url.toString(), { ...init, signal: controller.signal })
+    // Inside the same timer on purpose. Bounding only the time to headers leaves an
+    // endpoint that answers 200 and then trickles the body able to hold an AI turn open
+    // for ever; five of those exhaust the worker's ai_turn concurrency and the queue stops.
+    text = await readCapped(response)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new HttpToolError(
@@ -193,8 +198,6 @@ export async function executeHttpTool(
   } finally {
     clearTimeout(timer)
   }
-
-  const text = await readCapped(response)
 
   if (!response.ok) {
     throw new HttpToolError(`returned ${response.status}: ${text.slice(0, 200)}`, def.name)

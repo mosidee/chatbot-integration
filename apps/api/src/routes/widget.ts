@@ -6,6 +6,7 @@ import {
 } from '@ci/channels'
 import { schema } from '@ci/db'
 import { ingestWebhook, toWebhookRequest } from '@ci/infra'
+import { identityAttributesSchema } from '@ci/shared'
 import { and, asc, eq, gt } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
@@ -44,7 +45,7 @@ const sessionClaimsSchema = z.object({
   verified: z
     .object({
       subject: z.string().min(1),
-      attributes: z.record(z.string(), z.string()),
+      attributes: identityAttributesSchema,
       via: z.literal('widget_token'),
     })
     .optional(),

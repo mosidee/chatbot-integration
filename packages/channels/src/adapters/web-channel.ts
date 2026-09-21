@@ -1,4 +1,9 @@
-import { normalizedMessageSchema, type VerifiedIdentity } from '@ci/shared'
+import {
+  capIdentityAttributes,
+  identityAttributesSchema,
+  normalizedMessageSchema,
+  type VerifiedIdentity,
+} from '@ci/shared'
 import { z } from 'zod'
 import { verifyVisitorToken } from '../jwt'
 import type { ChannelAdapter, InboundEvent, WebhookRequest } from '../types'
@@ -38,7 +43,7 @@ const inboundSchema = z.object({
   verified: z
     .object({
       subject: z.string().min(1),
-      attributes: z.record(z.string(), z.string()).default({}),
+      attributes: identityAttributesSchema.default({}),
       via: z.literal('widget_token'),
     })
     .optional(),
@@ -110,10 +115,10 @@ export async function resolveWebVisitor(
   if (input.token && config.visitorTokenSecret) {
     try {
       const claims = await verifyVisitorToken(input.token, config.visitorTokenSecret, now)
-      const attributes = {
+      const attributes = capIdentityAttributes({
         ...(claims.attributes ?? {}),
         ...(claims.email ? { email: claims.email } : {}),
-      }
+      })
       return {
         externalId: `host:${claims.sub}`,
         identified: true,

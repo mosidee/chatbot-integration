@@ -331,6 +331,32 @@ describe('executeHttpTool', () => {
     ).rejects.toThrow(/timed out after 1000ms/)
   })
 
+  test('times out on a body that never finishes, not only on slow headers', async () => {
+    // The failure a header-only timeout misses: the endpoint answers at once and then
+    // holds the stream open, which would otherwise pin an AI turn indefinitely.
+    const base = local(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"plan":'))
+              // and never closes
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    )
+
+    await expect(
+      executeHttpTool(
+        definition({ config: config({ url: `${base}/x`, timeoutMs: 1000 }) }),
+        {},
+        bound(),
+        { fetch },
+      ),
+    ).rejects.toThrow(/timed out after 1000ms/)
+  })
+
   test('truncates an answer too large to put in a prompt', async () => {
     const base = local(() => new Response('x'.repeat(200_000), { headers: {} }))
     const outcome = await executeHttpTool(

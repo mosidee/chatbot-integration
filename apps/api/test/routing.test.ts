@@ -70,12 +70,48 @@ describe('the auth handler', () => {
   })
 })
 
+/**
+ * The endpoint a tenant's own verification page posts to.
+ *
+ * Public by necessity: the caller is their application, with no session here. What stands
+ * in for authentication is a code only the person who received the link holds and a token
+ * signed with a secret only the tenant holds, so the assertions worth making are that it
+ * answers without a session and refuses everything it should.
+ */
+describe('the identity confirm endpoint', () => {
+  const confirm = (body: unknown) =>
+    get('/api/identity/confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  test('is reachable without a session, and does not serve the console', async () => {
+    const response = await confirm({ code: 'no-such-code', token: 'x.y.z' })
+    expect(response.status).not.toBe(401)
+    expect(await response.text()).not.toContain('<div id="root">')
+  })
+
+  test('refuses a code it has never issued', async () => {
+    const response = await confirm({ code: 'no-such-code', token: 'x.y.z' })
+    expect(response.status).toBe(404)
+  })
+
+  test('validates its body rather than throwing', async () => {
+    const response = await confirm({ code: '' })
+    expect(response.status).toBe(422)
+  })
+})
+
 describe('the API', () => {
   test('refuses data without a session rather than serving the console', async () => {
     for (const path of [
       '/api/v1/conversations',
       '/api/v1/settings/workspace',
       '/api/v1/knowledge/sources',
+      // Listing tools exposes which hosts this workspace reaches, so it is not public
+      // either, even though the credentials themselves are never returned.
+      '/api/v1/settings/tools',
     ]) {
       const response = await get(path)
       expect(response.status).toBe(401)
@@ -86,6 +122,41 @@ describe('the API', () => {
     const response = await get('/api/v1/does-not-exist')
     expect(response.status).toBe(404)
     expect(await response.text()).not.toContain('<div id="root">')
+  })
+
+  /**
+   * Defining a tool stores a credential and points the worker at a host of the caller's
+   * choosing, so these are the routes where an authentication gap would matter most.
+   */
+  test('refuses to define a tool without a session', async () => {
+    const response = await get('/api/v1/settings/tools', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'sneaky_tool',
+        description: 'Should never be created.',
+        config: {
+          method: 'GET',
+          url: 'https://example.com/',
+          headers: {},
+          auth: 'none',
+          args: [],
+          bindings: [],
+          effect: 'read',
+          timeoutMs: 8000,
+        },
+      }),
+    })
+    expect(response.status).toBe(401)
+  })
+
+  test('refuses to test a tool without a session', async () => {
+    const response = await get('/api/v1/settings/tools/any-id/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(response.status).toBe(401)
   })
 
   test('reports health without a session', async () => {

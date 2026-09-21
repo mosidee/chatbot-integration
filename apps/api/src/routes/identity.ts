@@ -2,10 +2,12 @@ import { verifyVisitorToken } from '@ci/channels'
 import { decryptSecret, schema } from '@ci/db'
 import {
   consumeVerificationCode,
+  findVerificationCode,
   loadWorkspaceSettings,
   recordVerifiedIdentity,
   storeMessage,
 } from '@ci/infra'
+import { capIdentityAttributes } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
@@ -30,14 +32,16 @@ export function identityRoutes(ctx: ApiContext) {
   return new Elysia({ name: 'identity-routes' }).post(
     '/confirm',
     async ({ body, status }) => {
-      // Claimed and checked in one statement, so two requests racing one code cannot both
-      // win, and a spent code is spent whatever happens next.
-      const consumed = await consumeVerificationCode(db, body.code)
-      if (!consumed) {
+      // Looked up without spending, because the token cannot be checked until we know
+      // which workspace's secret signed it. Burning the code first would let a bad token
+      // destroy the customer's only link, and anyone who can read the chat can read the
+      // code out of it.
+      const pending = await findVerificationCode(db, body.code)
+      if (!pending) {
         return status(404, { error: 'That link is not valid any more' })
       }
 
-      const settings = await loadWorkspaceSettings(db, consumed.workspaceId)
+      const settings = await loadWorkspaceSettings(db, pending.workspaceId)
       const link = settings.identity.verificationLink
       if (!link.enabled || !link.secretEncrypted) {
         // Turning the proof off must stop it working immediately, including for a code
@@ -51,13 +55,21 @@ export function identityRoutes(ctx: ApiContext) {
       try {
         claims = await verifyVisitorToken(body.token, secret)
       } catch {
+        // The code is still unspent, so an honest retry works.
         return status(401, { error: 'That confirmation could not be verified' })
       }
 
-      const attributes = {
+      // Only now is it spent, and in one statement that both checks and claims it, so two
+      // requests racing the same code cannot both win.
+      const consumed = await consumeVerificationCode(db, body.code)
+      if (!consumed) {
+        return status(404, { error: 'That link is not valid any more' })
+      }
+
+      const attributes = capIdentityAttributes({
         ...(claims.attributes ?? {}),
         ...(claims.email ? { email: claims.email } : {}),
-      }
+      })
 
       await recordVerifiedIdentity(db, {
         workspaceId: consumed.workspaceId,

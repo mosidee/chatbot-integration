@@ -26,11 +26,11 @@ import {
 
 let endpoint: Server
 let endpointUrl = ''
-let lastRequest: { path: string; headers: Record<string, unknown> } | null = null
+const requestPaths: string[] = []
 
 test.beforeAll(async () => {
   endpoint = createServer((request, response) => {
-    lastRequest = { path: request.url ?? '', headers: request.headers }
+    requestPaths.push(request.url ?? '')
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ plan: 'pro', renewsOn: '2026-10-01' }))
   })
@@ -80,6 +80,8 @@ test.describe('tenant tools', () => {
     await page.getByTestId('tool-test').click()
     await expect(page.getByTestId('tool-test-result')).toContainText('200')
     await expect(page.getByTestId('tool-test-result')).toContainText('pro')
+    // Even the test button binds the customer id rather than letting it be typed.
+    expect(requestPaths.at(-1)).toContain('customer_id=')
 
     // Now a real conversation.
     const channelId = await findTestChannelId(request)
@@ -93,10 +95,10 @@ test.describe('tenant tools', () => {
       .filter({ hasText: customer })
       .first()
       .click({ timeout: 20_000 })
+    // The reply carries what the endpoint returned, which is the assertion that proves the
+    // worker called the tool and bound the customer id. `lastRequest` is not used for that:
+    // the test button above already hit the endpoint, so it would pass either way.
     await expect(page.getByTestId('message-thread')).toContainText('pro', { timeout: 20_000 })
-
-    // The endpoint saw the bound customer id, which the model never chose.
-    expect(lastRequest?.path).toContain('customer_id=')
   })
 
   test('a tool the workspace has not enabled is never offered', async ({ request }) => {

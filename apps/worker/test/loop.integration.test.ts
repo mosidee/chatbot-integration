@@ -13,6 +13,7 @@ import {
   createEntry,
   createSource,
   eraseCustomer,
+  findVerificationCode,
   indexEntry,
   ingestWebhook,
   listMergeSuggestions,
@@ -2178,6 +2179,40 @@ describe('the verification link', () => {
     // Two live links minutes apart is how the wrong identity lands on the wrong person.
     expect(await consumeVerificationCode(f.runtime.db, first.code)).toBeNull()
     expect(await consumeVerificationCode(f.runtime.db, second.code)).not.toBeNull()
+  })
+
+  test('looking a code up does not spend it, so a bad confirmation is survivable', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        identity: {
+          widgetToken: { enabled: true },
+          verificationLink: {
+            enabled: true,
+            url: 'https://salon.example.com/verify',
+            secretEncrypted: null,
+            ttlMinutes: 15,
+          },
+        },
+      },
+    })
+
+    await customerSays(f, 'สวัสดี')
+    const conversation = await onlyConversation(f)
+    const sent = await sendVerificationLink(f.runtime, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+    })
+    if (!sent.ok) throw new Error('the link should have been sent')
+
+    // The confirm endpoint looks the code up to find the workspace whose secret signed the
+    // token. If that lookup spent the code, a bad token would destroy the customer's only
+    // link, and anyone who can read the chat can read the code out of it.
+    expect(await findVerificationCode(f.runtime.db, sent.code)).not.toBeNull()
+    expect(await findVerificationCode(f.runtime.db, sent.code)).not.toBeNull()
+    expect(await consumeVerificationCode(f.runtime.db, sent.code)).not.toBeNull()
+    expect(await findVerificationCode(f.runtime.db, sent.code)).toBeNull()
   })
 
   test('an expired code cannot be spent', async () => {

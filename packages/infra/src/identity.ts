@@ -132,6 +132,38 @@ export type ConsumedVerification = {
 }
 
 /**
+ * Look a code up without spending it.
+ *
+ * Needed because the caller cannot check the confirmation token until it knows which
+ * workspace the code belongs to, and burning the code to find that out would let a bad
+ * token — a bug in the tenant's page, or anybody who read the code out of the chat and
+ * posted nonsense — destroy the customer's only link. Spending still happens in the atomic
+ * update below, so this lookup grants nothing on its own.
+ */
+export async function findVerificationCode(
+  db: Database,
+  code: string,
+): Promise<ConsumedVerification | null> {
+  const rows = await db
+    .select({
+      workspaceId: schema.identityVerifications.workspaceId,
+      conversationId: schema.identityVerifications.conversationId,
+      channelIdentityId: schema.identityVerifications.channelIdentityId,
+    })
+    .from(schema.identityVerifications)
+    .where(
+      and(
+        eq(schema.identityVerifications.code, code),
+        isNull(schema.identityVerifications.usedAt),
+        sql`${schema.identityVerifications.expiresAt} > now()`,
+      ),
+    )
+    .limit(1)
+
+  return rows[0] ?? null
+}
+
+/**
  * Spend a code, or refuse.
  *
  * Claimed in the same statement that checks it, so two requests racing the same code

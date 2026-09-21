@@ -20,8 +20,46 @@ export const identityProofSchema = z.enum([
 ])
 export type IdentityProof = z.infer<typeof identityProofSchema>
 
+/**
+ * How much of a proof's attributes we are willing to keep.
+ *
+ * These are new in three ways at once: persisted as jsonb, signed into the widget's session
+ * token, and read into every prompt through `get_customer_profile`. A tenant who puts their
+ * whole user record in here would be paying for it on every turn, so it is capped where it
+ * enters rather than discovered later in a token that will not fit.
+ */
+export const MAX_IDENTITY_ATTRIBUTES_BYTES = 2048
+
 /** Attributes a proof carried, such as the plan a customer is on. Strings only. */
-export const identityAttributesSchema = z.record(z.string(), z.string())
+export const identityAttributesSchema = z
+  .record(z.string(), z.string())
+  .refine(
+    (value) =>
+      new TextEncoder().encode(JSON.stringify(value)).length <= MAX_IDENTITY_ATTRIBUTES_BYTES,
+    { message: `attributes must serialise to at most ${MAX_IDENTITY_ATTRIBUTES_BYTES} bytes` },
+  )
+
+/**
+ * Keep as many attributes as fit, in the order given, and drop the rest.
+ *
+ * Dropping rather than refusing: a customer whose account carries one oversized field
+ * should still get support, and the alternative is a conversation that silently loses its
+ * identity because somebody added a long field to a user record.
+ */
+export function capIdentityAttributes(attributes: Record<string, string>): Record<string, string> {
+  const encoder = new TextEncoder()
+  if (encoder.encode(JSON.stringify(attributes)).length <= MAX_IDENTITY_ATTRIBUTES_BYTES) {
+    return attributes
+  }
+
+  const kept: Record<string, string> = {}
+  for (const [key, value] of Object.entries(attributes)) {
+    const candidate = { ...kept, [key]: value }
+    if (encoder.encode(JSON.stringify(candidate)).length > MAX_IDENTITY_ATTRIBUTES_BYTES) continue
+    kept[key] = value
+  }
+  return kept
+}
 
 export type VerifiedIdentity = {
   subject: string
