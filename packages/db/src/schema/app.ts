@@ -580,6 +580,40 @@ export const mergeSuggestions = pgTable(
   ],
 )
 
+/**
+ * Every time the AI stopped answering, and why.
+ *
+ * `conversations.handoff_reason` answers a different question: why is this one waiting
+ * right now. It is cleared the moment a person hands the conversation back, which is
+ * correct for a badge in the inbox and useless for a month's worth of reporting — the list
+ * of what the AI could not handle would empty itself as agents worked through their queue.
+ * This table is the history, and the dashboard's "what to write into the knowledge base
+ * next" reads from here.
+ *
+ * `occurred_at` is the instant the state machine recorded, not the insert time, which is
+ * what makes the row idempotent: a retried job replays an effect list that was already
+ * computed, so the same handoff carries the same instant and conflicts with itself.
+ */
+export const handoffEvents = pgTable(
+  'handoff_events',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    reason: handoffReasonEnum('reason').notNull(),
+    occurredAt: ts('occurred_at').notNull(),
+    createdAt: ts('created_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('handoff_events_conversation_at_uq').on(t.conversationId, t.occurredAt),
+    index('handoff_events_workspace_idx').on(t.workspaceId, t.occurredAt),
+  ],
+)
+
 export const auditLog = pgTable(
   'audit_log',
   {

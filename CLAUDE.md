@@ -184,6 +184,10 @@ without spending money.
 - A popover inside the message thread is clipped by its scroll container, so its bounding box
   can extend over the header and the click lands on the header instead. Panels that open from
   a bubble go in the normal flow and let the thread grow.
+- `conversations.handoff_reason` is cleared when a conversation goes back to the AI, so it
+  can never be the source for reporting: the dashboard list of what the AI could not handle
+  emptied itself as agents worked their queue. `handoff_events` is the history; the column
+  stays for the inbox badge. Both exist on purpose.
 - Merging two customers must repoint every table that references `customers.id` before the
   losing row is deleted, in one transaction. All four of them cascade on delete, which is
   how erasure wipes a person in one statement, so the wrong order destroys the history

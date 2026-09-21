@@ -27,6 +27,7 @@ function fakePorts(failing: Partial<Record<keyof EffectPorts, Error>> = {}) {
     scheduleWaitingHumanTimeout: record('scheduleWaitingHumanTimeout'),
     cancelWaitingHumanTimeout: record('cancelWaitingHumanTimeout'),
     enqueueSummary: record('enqueueSummary'),
+    recordHandoff: record('recordHandoff'),
   } as unknown as EffectPorts
 
   return { ports, calls }
@@ -48,6 +49,7 @@ describe('applyEffects', () => {
     const effects: Effect[] = [
       { type: 'run_ai_turn', deliver: 'send' },
       { type: 'run_suggestion' },
+      { type: 'record_handoff', reason: 'low_confidence', at: new Date('2026-09-01T10:00:00Z') },
       { type: 'add_internal_note', body: 'note body' },
       { type: 'notify_agents', reason: 'handoff' },
       { type: 'schedule_waiting_human_timeout', minutes: 15 },
@@ -61,6 +63,7 @@ describe('applyEffects', () => {
     expect(calls.map((c) => c.port)).toEqual([
       'enqueueAiTurn',
       'enqueueSuggestion',
+      'recordHandoff',
       'addInternalNote',
       'notifyAgents',
       'scheduleWaitingHumanTimeout',

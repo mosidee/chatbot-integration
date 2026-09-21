@@ -15,6 +15,7 @@ import {
   indexEntry,
   ingestWebhook,
   listMergeSuggestions,
+  loadDashboard,
   loadWorkspaceSettings,
   markReviewed,
   markSuggestionSent,
@@ -1618,5 +1619,143 @@ describe('merge suggestions', () => {
     await runQueuedWork(f)
 
     expect(await countPendingMerges(f.runtime.db, f.workspaceId)).toBe(0)
+  })
+})
+
+/**
+ * Handoffs, recorded as history rather than as current state.
+ *
+ * `conversations.handoff_reason` says why a conversation is waiting right now, and is
+ * cleared the moment somebody hands it back. That is right for the inbox and useless for
+ * reporting: the dashboard's list of what the AI could not handle emptied itself as agents
+ * worked through their queue. These pin the log that replaced it.
+ */
+describe('the handoff log', () => {
+  const handoffs = async (f: Fixture) =>
+    f.runtime.db
+      .select()
+      .from(schema.handoffEvents)
+      .where(eq(schema.handoffEvents.workspaceId, f.workspaceId))
+
+  test('the reason outlives the conversation going back to the AI', async () => {
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          {
+            name: 'handoff_to_human',
+            arguments: { reason: 'customer_requested', note: 'Asked for a person.' },
+          },
+        ],
+      },
+      { kind: 'text', text: 'ขอโอนสายนะคะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'ขอคุยกับเจ้าหน้าที่')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    const recorded = await handoffs(f)
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]?.reason).toBe('customer_requested')
+
+    // An agent picks it up and hands it back, which clears the column on the conversation.
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+    await humanAction(f, conversation.id, {
+      type: 'human_return_to_ai',
+      at: new Date(),
+      note: null,
+    })
+
+    const after = await onlyConversation(f)
+    expect(after.handoffReason).toBeNull()
+    // The history does not care.
+    expect(await handoffs(f)).toHaveLength(1)
+  })
+
+  test('replaying the same handoff records it once', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'hi' }]).url })
+    await customerSays(f, 'สวัสดี')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    // The instant travels with the effect, so a retried job writes the row it already wrote.
+    const at = new Date()
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await humanAction(f, conversation.id, {
+        type: 'ai_handoff',
+        at,
+        reason: 'low_confidence',
+        note: null,
+      })
+      // The second pass is ignored by the state machine once the mode has moved, so drive
+      // the effect directly, which is what a queue retry replays.
+      await applyEffects(
+        [{ type: 'record_handoff', reason: 'low_confidence', at }],
+        { workspaceId: f.workspaceId, conversationId: conversation.id },
+        createEffectPorts(f.runtime, f.runtime.logger),
+        f.runtime.logger,
+      )
+    }
+
+    expect(await handoffs(f)).toHaveLength(1)
+  })
+
+  test('a second, genuinely later handoff is counted again', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'hi' }]).url })
+    await customerSays(f, 'สวัสดี')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    const ctx = { workspaceId: f.workspaceId, conversationId: conversation.id }
+
+    await applyEffects(
+      [{ type: 'record_handoff', reason: 'low_confidence', at: new Date('2026-09-01T10:00:00Z') }],
+      ctx,
+      ports,
+      f.runtime.logger,
+    )
+    await applyEffects(
+      [{ type: 'record_handoff', reason: 'tool_error', at: new Date('2026-09-02T10:00:00Z') }],
+      ctx,
+      ports,
+      f.runtime.logger,
+    )
+
+    expect(await handoffs(f)).toHaveLength(2)
+  })
+
+  test('the dashboard reports a handoff an agent has already dealt with', async () => {
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          {
+            name: 'handoff_to_human',
+            arguments: { reason: 'low_confidence', note: 'Not covered by the knowledge base.' },
+          },
+        ],
+      },
+      { kind: 'text', text: 'ขอโอนสายนะคะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'คำถามยากค่ะ')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    await humanAction(f, conversation.id, {
+      type: 'human_return_to_ai',
+      at: new Date(),
+      note: null,
+    })
+
+    const dashboard = await loadDashboard(f.runtime.db, { workspaceId: f.workspaceId, days: 7 })
+    expect(dashboard.handoffReasons).toContainEqual({ reason: 'low_confidence', conversations: 1 })
+    expect(dashboard.totals.handoffs).toBe(1)
   })
 })

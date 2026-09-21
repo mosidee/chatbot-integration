@@ -57,6 +57,15 @@ export type Effect =
   | { type: 'cancel_waiting_human_timeout' }
   /** Fold the conversation into the customer's rolling summary and index it for recall. */
   | { type: 'enqueue_summary' }
+  /**
+   * Record that the AI stopped answering, and why.
+   *
+   * `at` travels with the effect rather than being taken when it runs, so a retried job
+   * replaying an already-computed effect list writes the same instant and the row conflicts
+   * with itself instead of counting the same handoff twice. A genuinely repeated turn
+   * carries a new instant and is counted again, which is right: it handed off again.
+   */
+  | { type: 'record_handoff'; reason: HandoffReason; at: Date }
 
 export type TransitionOptions = {
   /** Minutes before a `waiting_human` conversation gets an AI fallback. Null disables it. */
@@ -97,6 +106,7 @@ export function transition(
         return { patch: {}, effects: [] }
       }
       const effects: Effect[] = [
+        { type: 'record_handoff', reason: event.reason, at: event.at },
         {
           type: 'add_internal_note',
           body: event.note ?? `AI handed off. Reason: ${event.reason}.`,
@@ -221,6 +231,7 @@ function onCustomerMessage(
             waitingHumanSince: event.at,
           },
           effects: [
+            { type: 'record_handoff', reason: 'unsupported_media', at: event.at },
             {
               type: 'add_internal_note',
               body: 'Customer sent media the AI cannot interpret. Handed off.',
