@@ -4,12 +4,14 @@ import {
   countReviewQueue,
   createEffectPorts,
   deleteFeedback,
+  identityProofAccepted,
   inReviewQueue,
   isInReviewQueue,
   listFeedback,
   loadWorkspaceSettings,
   markReviewed,
   markSuggestionSent,
+  sendVerificationLink,
   storeMessage,
   updateConversation,
   upsertFeedback,
@@ -268,10 +270,27 @@ export function conversationRoutes(ctx: ApiContext) {
             .set({ unreadCount: 0 })
             .where(eq(schema.conversations.id, params.id))
 
+          const identityRow = identityRows[0] ?? null
+          const settingsForIdentity = await loadWorkspaceSettings(db, workspaceId)
+
           return {
             conversation: loaded.row,
             customer: customerRows[0] ?? null,
-            identity: identityRows[0] ?? null,
+            identity: identityRow
+              ? {
+                  ...identityRow,
+                  /**
+                   * Whether this proof still counts, not merely whether one was recorded.
+                   * A workspace that switched the proof off should see the badge go with
+                   * it, because that is also when tools stop being bound to it.
+                   */
+                  verified: identityProofAccepted(identityRow.verifiedVia, settingsForIdentity),
+                }
+              : null,
+            /** Whether an agent can offer this customer a link, for the sidebar button. */
+            canSendVerificationLink:
+              settingsForIdentity.identity.verificationLink.enabled &&
+              settingsForIdentity.identity.verificationLink.url !== null,
             messages,
             notes,
             suggestions,
@@ -281,6 +300,41 @@ export function conversationRoutes(ctx: ApiContext) {
           }
         },
         { auth: 'viewer', params: z.object({ id: z.string() }) },
+      )
+
+      /**
+       * Offer this customer a one-time link to prove who they are.
+       *
+       * An agent can send it directly rather than waiting for the AI to think of it, which
+       * is what a person does when a customer has been asking about their account for three
+       * messages already.
+       */
+      .post(
+        '/:id/verification-link',
+        async ({ workspaceId, params, status }) => {
+          const loaded = await loadState(workspaceId, params.id)
+          if (!loaded) return status(404, { error: 'Conversation not found' })
+
+          const sent = await sendVerificationLink(runtime, {
+            workspaceId,
+            conversationId: params.id,
+          })
+          if (!sent.ok) {
+            return status(400, {
+              error:
+                sent.reason === 'disabled'
+                  ? 'Verification links are switched off for this workspace'
+                  : 'No verification link URL is configured',
+            })
+          }
+
+          await runtime.publisher.publish(workspaceId, {
+            type: 'conversation.updated',
+            conversationId: params.id,
+          })
+          return { ok: true, messageId: sent.messageId }
+        },
+        { auth: 'agent', params: z.object({ id: z.string() }) },
       )
 
       /** An agent replies. This implicitly takes ownership so the AI does not answer next. */

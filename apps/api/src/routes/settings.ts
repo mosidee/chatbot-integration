@@ -9,6 +9,7 @@ import {
   newId,
   schema,
 } from '@ci/db'
+import { withSettingsDefaults } from '@ci/infra'
 import { aiTaskSchema, channelTypeSchema, conversationModeSchema, languageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -75,12 +76,21 @@ export function settingsRoutes(ctx: ApiContext) {
           const workspace = rows[0]
           if (!workspace) return status(404, { error: 'Workspace not found' })
 
-          // A viewer can read settings, so the external retrieval credential is reported as
-          // present rather than returned, exactly as provider keys are.
-          const { externalRetrieval, ...rest } = workspace.settings
+          // A viewer can read settings, so every credential in them is reported as present
+          // rather than returned, exactly as provider keys are.
+          const { externalRetrieval, ...rest } = withSettingsDefaults(workspace.settings)
           return {
             settings: {
               ...rest,
+              identity: {
+                widgetToken: rest.identity.widgetToken,
+                verificationLink: {
+                  enabled: rest.identity.verificationLink.enabled,
+                  url: rest.identity.verificationLink.url,
+                  ttlMinutes: rest.identity.verificationLink.ttlMinutes,
+                  hasSecret: Boolean(rest.identity.verificationLink.secretEncrypted),
+                },
+              },
               externalRetrieval: externalRetrieval
                 ? {
                     kind: externalRetrieval.kind,
@@ -123,8 +133,35 @@ export function settingsRoutes(ctx: ApiContext) {
           const workspace = rows[0]
           if (!workspace) return status(404, { error: 'Workspace not found' })
 
-          const { externalRetrieval: incomingExternal, ...plainBody } = body
-          const merged: typeof workspace.settings = { ...workspace.settings, ...plainBody }
+          const {
+            externalRetrieval: incomingExternal,
+            identity: incomingIdentity,
+            ...plainBody
+          } = body
+          const current = withSettingsDefaults(workspace.settings)
+          const merged: typeof workspace.settings = { ...current, ...plainBody }
+
+          if (incomingIdentity !== undefined) {
+            const link = incomingIdentity.verificationLink
+            merged.identity = {
+              widgetToken: {
+                enabled:
+                  incomingIdentity.widgetToken?.enabled ?? current.identity.widgetToken.enabled,
+              },
+              verificationLink: {
+                enabled: link?.enabled ?? current.identity.verificationLink.enabled,
+                url: link?.url === undefined ? current.identity.verificationLink.url : link.url,
+                ttlMinutes: link?.ttlMinutes ?? current.identity.verificationLink.ttlMinutes,
+                // An omitted secret keeps what is stored; an empty string clears it.
+                secretEncrypted:
+                  link?.secret === undefined
+                    ? current.identity.verificationLink.secretEncrypted
+                    : link.secret
+                      ? await encryptSecret(link.secret, env.APP_SECRET_KEY)
+                      : null,
+              },
+            }
+          }
 
           if (incomingExternal !== undefined) {
             merged.externalRetrieval = incomingExternal
@@ -177,6 +214,20 @@ export function settingsRoutes(ctx: ApiContext) {
                   z.string(),
                   z.object({ open: z.string(), close: z.string() }).optional(),
                 ),
+              })
+              .optional(),
+            identity: z
+              .object({
+                widgetToken: z.object({ enabled: z.boolean() }).optional(),
+                verificationLink: z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    url: z.string().url().nullable().optional(),
+                    /** Omit to keep the stored secret; send an empty string to clear it. */
+                    secret: z.string().optional(),
+                    ttlMinutes: z.number().int().min(1).max(1440).optional(),
+                  })
+                  .optional(),
               })
               .optional(),
             externalRetrieval: z

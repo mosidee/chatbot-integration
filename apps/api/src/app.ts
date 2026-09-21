@@ -6,9 +6,11 @@ import type { ApiContext } from './context'
 import { conversationRoutes } from './routes/conversations'
 import { customerRoutes } from './routes/customers'
 import { dashboardRoutes } from './routes/dashboard'
+import { identityRoutes } from './routes/identity'
 import { knowledgeRoutes } from './routes/knowledge'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
+import { toolRoutes } from './routes/tools'
 import { traceRoutes } from './routes/traces'
 import { uploadRoutes } from './routes/uploads'
 import { webhookRoutes } from './routes/webhooks'
@@ -66,6 +68,10 @@ export function createApp(ctx: ApiContext) {
       // customer's page to our internal changes.
       .group('/api/widget', (app) => app.use(widgetRoutes(ctx)))
 
+      // Also public, and for the same reason: the caller is the tenant's own application
+      // completing a verification, with no console session to present.
+      .group('/api/identity', (app) => app.use(identityRoutes(ctx)))
+
       .group('/api/v1', (app) =>
         app
           .use(conversationRoutes(ctx))
@@ -73,6 +79,7 @@ export function createApp(ctx: ApiContext) {
           .use(dashboardRoutes(ctx))
           .use(simulatorRoutes(ctx))
           .use(settingsRoutes(ctx))
+          .use(toolRoutes(ctx))
           .use(knowledgeRoutes(ctx))
           .use(traceRoutes(ctx))
           .use(uploadRoutes(ctx))

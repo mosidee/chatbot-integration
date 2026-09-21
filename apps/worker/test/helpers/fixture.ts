@@ -3,6 +3,7 @@ import type { SlotConfig } from '@ci/core'
 import { encryptJson, encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import { createRuntime, type Runtime } from '@ci/infra'
+import type { HttpToolConfig } from '@ci/shared'
 import type { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
 
@@ -41,6 +42,13 @@ export type Fixture = {
   lineChannelId: string | null
   /** The embed slot as core sees it, for indexing knowledge inside a test. */
   embedSlot: () => SlotConfig
+  /** Define a tenant tool the AI can call. Returns its id. */
+  createTool: (input: {
+    name: string
+    description?: string
+    config: HttpToolConfig
+    credential?: string
+  }) => Promise<string>
   cleanup: () => Promise<void>
 }
 
@@ -59,7 +67,12 @@ export async function createFixture(options: {
   const workspaceId = newId()
   // Each fixture gets its own queue namespace so tests sharing one Redis cannot consume
   // each other's jobs.
-  const runtime = createRuntime('test', env, { queuePrefix: `{test-${workspaceId.slice(0, 8)}}` })
+  // Tool endpoints in these tests run on localhost, which the restricted client refuses by
+  // design, so the fixture relaxes it here rather than in the environment.
+  const runtime = createRuntime('test', env, {
+    queuePrefix: `{test-${workspaceId.slice(0, 8)}}`,
+    allowPrivateEgress: true,
+  })
   const { db } = runtime
   const slug = `test-${workspaceId}`
 
@@ -202,6 +215,21 @@ export async function createFixture(options: {
     userId,
     providerId,
     lineChannelId,
+    createTool: async (input) => {
+      const id = newId()
+      await db.insert(schema.tools).values({
+        id,
+        workspaceId,
+        kind: 'http',
+        name: input.name,
+        description: input.description ?? `Call ${input.name}`,
+        config: input.config,
+        credentialEncrypted: input.credential
+          ? await encryptSecret(input.credential, env.APP_SECRET_KEY)
+          : null,
+      })
+      return id
+    },
     embedSlot: (): SlotConfig => ({
       task: 'embed',
       primary: embedBaseUrl

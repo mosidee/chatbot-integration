@@ -5,6 +5,7 @@ import { newId, schema } from '@ci/db'
 import {
   acceptMergeSuggestion,
   applyReceipt,
+  consumeVerificationCode,
   conversationForReceipt,
   countPendingMerges,
   countReviewQueue,
@@ -19,7 +20,9 @@ import {
   loadWorkspaceSettings,
   markReviewed,
   markSuggestionSent,
+  recordVerifiedIdentity,
   runRetention,
+  sendVerificationLink,
   storeMessage,
   toWebhookRequest,
   updateConversation,
@@ -1757,5 +1760,469 @@ describe('the handoff log', () => {
     const dashboard = await loadDashboard(f.runtime.db, { workspaceId: f.workspaceId, days: 7 })
     expect(dashboard.handoffReasons).toContainEqual({ reason: 'low_confidence', conversations: 1 })
     expect(dashboard.totals.handoffs).toBe(1)
+  })
+})
+
+/**
+ * Tenant-defined tools.
+ *
+ * The rules here are the ones that cost money or trust when they are wrong: a read that
+ * fails must not become an invented answer, a write must not fire before the turn is known
+ * to have worked, and a bound identity must come from a proof rather than from the model.
+ */
+describe('tenant tools', () => {
+  const endpoints: { stop: () => void }[] = []
+
+  afterEach(() => {
+    for (const e of endpoints.splice(0)) e.stop()
+  })
+
+  function endpoint(handler: (request: Request) => Response | Promise<Response>): string {
+    const server = Bun.serve({ port: 0, fetch: handler })
+    endpoints.push({ stop: () => server.stop(true) })
+    return `http://127.0.0.1:${server.port}`
+  }
+
+  test('a read tool answers the customer and its result reaches the trace', async () => {
+    const base = endpoint(() => Response.json({ plan: 'pro', renewsOn: '2026-10-01' }))
+    const server = mock([
+      { kind: 'tool_calls', toolCalls: [{ name: 'check_plan', arguments: {} }] },
+      { kind: 'text', text: 'คุณอยู่แพ็กเกจ Pro ค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await f.createTool({
+      name: 'check_plan',
+      description: 'Look up which plan this customer is on.',
+      config: {
+        method: 'GET',
+        url: `${base}/plan`,
+        headers: {},
+        auth: 'none',
+        args: [],
+        bindings: [{ name: 'customer_id', source: 'customer_id' }],
+        effect: 'read',
+        timeoutMs: 8000,
+      },
+    })
+
+    await customerSays(f, 'แพ็กเกจของฉันคืออะไร')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.mode).toBe('ai')
+
+    const messages = await f.runtime.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversation.id))
+      .orderBy(asc(schema.messages.createdAt))
+    expect(messages.at(-1)?.text).toBe('คุณอยู่แพ็กเกจ Pro ค่ะ')
+
+    const traces = await f.runtime.db
+      .select()
+      .from(schema.aiTraces)
+      .where(eq(schema.aiTraces.conversationId, conversation.id))
+    const calls = traces[0]?.toolCalls as { toolName: string; output: unknown }[]
+    expect(calls?.[0]?.toolName).toBe('check_plan')
+    expect(calls?.[0]?.output).toMatchObject({ body: { plan: 'pro' } })
+  })
+
+  test('a tool the workspace has not defined is simply not offered', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await customerSays(f, 'สวัสดี')
+    await runQueuedWork(f)
+
+    const request = server.requests[0] as { tools?: { function?: { name?: string } }[] }
+    const names = (request.tools ?? []).map((t) => t.function?.name)
+    expect(names).toContain('handoff_to_human')
+    expect(names).not.toContain('check_plan')
+  })
+
+  test('a read tool that fails hands off instead of letting the model invent an answer', async () => {
+    const base = endpoint(() => new Response('upstream exploded', { status: 500 }))
+    const server = mock([
+      { kind: 'tool_calls', toolCalls: [{ name: 'check_plan', arguments: {} }] },
+      // The model answers anyway, which is exactly the behaviour being guarded against.
+      { kind: 'text', text: 'คุณอยู่แพ็กเกจ Pro ค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await f.createTool({
+      name: 'check_plan',
+      config: {
+        method: 'GET',
+        url: `${base}/plan`,
+        headers: {},
+        auth: 'none',
+        args: [],
+        bindings: [],
+        effect: 'read',
+        timeoutMs: 8000,
+      },
+    })
+
+    await customerSays(f, 'แพ็กเกจของฉันคืออะไร')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.mode).toBe('waiting_human')
+    expect(conversation.handoffReason).toBe('tool_error')
+
+    const messages = await f.runtime.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversation.id))
+    // The invented answer never reached the customer.
+    expect(messages.filter((m) => m.senderType === 'ai')).toHaveLength(0)
+
+    const events = await f.runtime.db
+      .select()
+      .from(schema.handoffEvents)
+      .where(eq(schema.handoffEvents.conversationId, conversation.id))
+    expect(events).toHaveLength(1)
+    expect(events[0]?.reason).toBe('tool_error')
+  })
+
+  test('a writing tool sends nothing during the turn and fires once after it', async () => {
+    const seen: { key: string | null; body: unknown }[] = []
+    const base = endpoint(async (request) => {
+      seen.push({
+        key: request.headers.get('idempotency-key'),
+        body: await request.json().catch(() => null),
+      })
+      return Response.json({ cancelled: true })
+    })
+
+    const server = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [{ name: 'cancel_booking', arguments: { booking_id: 'B-12' } }],
+      },
+      { kind: 'text', text: 'ยกเลิกให้แล้วค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await f.createTool({
+      name: 'cancel_booking',
+      config: {
+        method: 'POST',
+        url: `${base}/cancel`,
+        headers: {},
+        auth: 'none',
+        args: [
+          { name: 'booking_id', type: 'string', description: 'Which booking', required: true },
+        ],
+        bindings: [{ name: 'customer', source: 'customer_id' }],
+        effect: 'write',
+        timeoutMs: 8000,
+      },
+    })
+
+    await customerSays(f, 'ยกเลิกการจองให้หน่อย')
+    await runQueuedWork(f)
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.body).toMatchObject({ booking_id: 'B-12' })
+    // Stable across a retry of the same job, which is what makes it worth sending at all.
+    expect(seen[0]?.key).toBeTruthy()
+
+    const conversation = await onlyConversation(f)
+    const messages = await f.runtime.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversation.id))
+      .orderBy(asc(schema.messages.createdAt))
+    expect(messages.at(-1)?.text).toBe('ยกเลิกให้แล้วค่ะ')
+  })
+
+  test('a failing write holds the reply back and fetches a person', async () => {
+    const base = endpoint(() => new Response('already cancelled', { status: 409 }))
+    const server = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [{ name: 'cancel_booking', arguments: { booking_id: 'B-12' } }],
+      },
+      { kind: 'text', text: 'ยกเลิกให้แล้วค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await f.createTool({
+      name: 'cancel_booking',
+      config: {
+        method: 'POST',
+        url: `${base}/cancel`,
+        headers: {},
+        auth: 'none',
+        args: [
+          { name: 'booking_id', type: 'string', description: 'Which booking', required: true },
+        ],
+        bindings: [],
+        effect: 'write',
+        timeoutMs: 8000,
+      },
+    })
+
+    await customerSays(f, 'ยกเลิกการจองให้หน่อย')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.handoffReason).toBe('tool_error')
+
+    const messages = await f.runtime.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversation.id))
+    // "ยกเลิกให้แล้วค่ะ" means "I have cancelled it", which was not true.
+    expect(messages.some((m) => m.senderType === 'ai')).toBe(false)
+
+    const notes = await f.runtime.db
+      .select()
+      .from(schema.internalNotes)
+      .where(eq(schema.internalNotes.conversationId, conversation.id))
+    expect(notes.some((n) => n.body.includes('cancel_booking'))).toBe(true)
+  })
+
+  test('a tool bound to a proved identity is withheld until one exists', async () => {
+    const base = endpoint(() => Response.json({ plan: 'pro' }))
+    const server = mock([{ kind: 'text', text: 'ขอทราบอีเมลที่ใช้สมัครได้ไหมคะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await f.createTool({
+      name: 'account_details',
+      config: {
+        method: 'GET',
+        url: `${base}/account`,
+        headers: {},
+        auth: 'none',
+        args: [],
+        bindings: [{ name: 'account_id', source: 'subject' }],
+        effect: 'read',
+        timeoutMs: 8000,
+      },
+    })
+
+    await customerSays(f, 'ขอดูข้อมูลบัญชีหน่อย')
+    await runQueuedWork(f)
+
+    const offered = (server.requests[0] as { tools?: { function?: { name?: string } }[] }).tools
+    expect((offered ?? []).map((t) => t.function?.name)).not.toContain('account_details')
+
+    // Prove who they are, the way the confirm endpoint does, and the tool appears.
+    const conversation = await onlyConversation(f)
+    await recordVerifiedIdentity(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      channelIdentityId: conversation.channelIdentityId,
+      verified: { subject: 'acct_7', attributes: { plan: 'pro' }, via: 'widget_token' },
+    })
+
+    const second = mock([
+      { kind: 'tool_calls', toolCalls: [{ name: 'account_details', arguments: {} }] },
+      { kind: 'text', text: 'คุณอยู่แพ็กเกจ Pro ค่ะ' },
+    ])
+    await f.runtime.db
+      .update(schema.providers)
+      .set({ baseUrl: second.url })
+      .where(eq(schema.providers.id, f.providerId))
+
+    await customerSays(f, 'ขอดูข้อมูลบัญชีอีกครั้ง')
+    await runQueuedWork(f)
+
+    const names = (
+      (second.requests[0] as { tools?: { function?: { name?: string } }[] }).tools ?? []
+    ).map((t) => t.function?.name)
+    expect(names).toContain('account_details')
+  })
+
+  test('switching a proof off withdraws the tools bound to it', async () => {
+    const base = endpoint(() => Response.json({ plan: 'pro' }))
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        identity: {
+          widgetToken: { enabled: false },
+          verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
+        },
+      },
+    })
+
+    await f.createTool({
+      name: 'account_details',
+      config: {
+        method: 'GET',
+        url: `${base}/account`,
+        headers: {},
+        auth: 'none',
+        args: [],
+        bindings: [{ name: 'account_id', source: 'subject' }],
+        effect: 'read',
+        timeoutMs: 8000,
+      },
+    })
+
+    await customerSays(f, 'สวัสดี')
+    const conversation = await onlyConversation(f)
+    // A proof is on the record, but the workspace no longer accepts that kind.
+    await recordVerifiedIdentity(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      channelIdentityId: conversation.channelIdentityId,
+      verified: { subject: 'acct_7', attributes: {}, via: 'widget_token' },
+    })
+
+    await customerSays(f, 'ขอดูข้อมูลบัญชี')
+    await runQueuedWork(f)
+
+    const names = (
+      (server.requests.at(-1) as { tools?: { function?: { name?: string } }[] }).tools ?? []
+    ).map((t) => t.function?.name)
+    expect(names).not.toContain('account_details')
+  })
+})
+
+/**
+ * The verification link, end to end.
+ *
+ * What it has to prove is that a link the AI asked for actually reaches the customer, that
+ * spending the code binds the identity, and that the question they asked before proving
+ * themselves gets answered afterwards.
+ */
+describe('the verification link', () => {
+  test('the AI asks for one, the customer gets it, and spending it proves the identity', async () => {
+    const server = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [{ name: 'request_identity_verification', arguments: {} }],
+      },
+      { kind: 'text', text: 'ขอส่งลิงก์ยืนยันตัวตนให้นะคะ' },
+    ])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        identity: {
+          widgetToken: { enabled: true },
+          verificationLink: {
+            enabled: true,
+            url: 'https://salon.example.com/verify',
+            secretEncrypted: null,
+            ttlMinutes: 15,
+          },
+        },
+      },
+    })
+
+    await customerSays(f, 'ขอดูข้อมูลบัญชีของฉัน')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    const messages = await f.runtime.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversation.id))
+      .orderBy(asc(schema.messages.createdAt))
+
+    // The reply comes first and the link after it, so the customer is told why before
+    // being handed a login prompt.
+    const ai = messages.filter((m) => m.senderType === 'ai')
+    const system = messages.filter((m) => m.senderType === 'system')
+    expect(ai.at(-1)?.text).toBe('ขอส่งลิงก์ยืนยันตัวตนให้นะคะ')
+    expect(system.at(-1)?.text).toContain('https://salon.example.com/verify?code=')
+
+    const codes = await f.runtime.db
+      .select()
+      .from(schema.identityVerifications)
+      .where(eq(schema.identityVerifications.workspaceId, f.workspaceId))
+    expect(codes).toHaveLength(1)
+    const code = codes[0]?.code ?? ''
+
+    // Spending it binds the account, exactly as the confirm endpoint does.
+    const consumed = await consumeVerificationCode(f.runtime.db, code)
+    expect(consumed?.conversationId).toBe(conversation.id)
+
+    // And it is spent: a second attempt gets nothing.
+    expect(await consumeVerificationCode(f.runtime.db, code)).toBeNull()
+  })
+
+  test('a second link invalidates the first, so only the newest can be spent', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        identity: {
+          widgetToken: { enabled: true },
+          verificationLink: {
+            enabled: true,
+            url: 'https://salon.example.com/verify',
+            secretEncrypted: null,
+            ttlMinutes: 15,
+          },
+        },
+      },
+    })
+
+    await customerSays(f, 'สวัสดี')
+    const conversation = await onlyConversation(f)
+
+    const first = await sendVerificationLink(f.runtime, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+    })
+    const second = await sendVerificationLink(f.runtime, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+    })
+    if (!first.ok || !second.ok) throw new Error('the links should have been sent')
+
+    // Two live links minutes apart is how the wrong identity lands on the wrong person.
+    expect(await consumeVerificationCode(f.runtime.db, first.code)).toBeNull()
+    expect(await consumeVerificationCode(f.runtime.db, second.code)).not.toBeNull()
+  })
+
+  test('an expired code cannot be spent', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        identity: {
+          widgetToken: { enabled: true },
+          verificationLink: {
+            enabled: true,
+            url: 'https://salon.example.com/verify',
+            secretEncrypted: null,
+            ttlMinutes: 15,
+          },
+        },
+      },
+    })
+
+    await customerSays(f, 'สวัสดี')
+    const conversation = await onlyConversation(f)
+    const sent = await sendVerificationLink(f.runtime, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+    })
+    if (!sent.ok) throw new Error('the link should have been sent')
+
+    await f.runtime.db
+      .update(schema.identityVerifications)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.identityVerifications.code, sent.code))
+
+    expect(await consumeVerificationCode(f.runtime.db, sent.code)).toBeNull()
+  })
+
+  test('the tool is not offered when no link is configured', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await customerSays(f, 'ขอดูข้อมูลบัญชี')
+    await runQueuedWork(f)
+
+    const names = (
+      (server.requests[0] as { tools?: { function?: { name?: string } }[] }).tools ?? []
+    ).map((t) => t.function?.name)
+    expect(names).not.toContain('request_identity_verification')
   })
 })
