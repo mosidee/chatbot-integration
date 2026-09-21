@@ -176,9 +176,17 @@ export function Dashboard() {
         </Card>
       ) : null}
 
+      {data.reviewQueueNow > 0 ? (
+        <Card className="border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-100">
+          <p className="text-sm" data-testid="review-queue-now">
+            {data.reviewQueueNow} {t('dashboard.reviewQueueNow')}
+          </p>
+        </Card>
+      ) : null}
+
       <Volume data={data} language={i18n.language} />
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Card className="space-y-2">
           <h2 className="text-sm font-semibold">{t('dashboard.handoffReasons')}</h2>
           {data.handoffReasons.length === 0 ? (
@@ -194,6 +202,43 @@ export function Dashboard() {
             </ul>
           )}
           <p className="text-[11px] text-[var(--text-muted)]">{t('dashboard.handoffHint')}</p>
+        </Card>
+
+        {/* The other half of "what to fix next": where the AI answered but answered badly. */}
+        <Card className="space-y-2">
+          <h2 className="text-sm font-semibold">{t('dashboard.feedback')}</h2>
+          <div className="flex gap-4 text-[13px]" data-testid="feedback-summary">
+            <span className="flex items-center gap-1">
+              <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                {data.feedback.up}
+              </span>
+              <span className="text-[var(--text-muted)]">{t('dashboard.feedbackUp')}</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="font-semibold tabular-nums text-red-600 dark:text-red-400">
+                {data.feedback.down}
+              </span>
+              <span className="text-[var(--text-muted)]">{t('dashboard.feedbackDown')}</span>
+            </span>
+          </div>
+          {data.feedback.up === 0 && data.feedback.down === 0 ? (
+            <EmptyState title={t('dashboard.noFeedback')} />
+          ) : data.feedback.reasons.length > 0 ? (
+            <>
+              <h3 className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                {t('dashboard.downReasons')}
+              </h3>
+              <ul className="space-y-1 text-[13px]" data-testid="feedback-reasons">
+                {data.feedback.reasons.map((row) => (
+                  <li key={row.reason} className="flex justify-between gap-2">
+                    <span className="truncate font-mono text-[12px]">{row.reason}</span>
+                    <span className="tabular-nums">{row.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          <p className="text-[11px] text-[var(--text-muted)]">{t('dashboard.feedbackHint')}</p>
         </Card>
 
         <Card className="space-y-2">

@@ -1,9 +1,15 @@
-import type { ConversationMode } from '@ci/shared'
+import type {
+  ConversationMode,
+  FeedbackRating,
+  FeedbackReason,
+  FeedbackTargetType,
+} from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DeliveryTicks } from '../components/DeliveryTicks'
 import { EraseCustomer } from '../components/EraseCustomer'
+import { FeedbackControls } from '../components/FeedbackControls'
 import { Lightbox } from '../components/Lightbox'
 import {
   Button,
@@ -23,6 +29,7 @@ import {
   api,
   type ConversationDetail,
   type ConversationListItem,
+  type Feedback,
   type Message,
 } from '../lib/api'
 import { useRealtime } from '../lib/ws'
@@ -39,10 +46,26 @@ export function Inbox() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | undefined>('open')
   const [modeFilter, setModeFilter] = useState<ConversationMode | undefined>(undefined)
+  const [reviewFilter, setReviewFilter] = useState(false)
 
   const conversations = useQuery({
-    queryKey: ['conversations', statusFilter, modeFilter],
-    queryFn: () => api.conversations.list({ status: statusFilter, mode: modeFilter }),
+    queryKey: ['conversations', statusFilter, modeFilter, reviewFilter],
+    queryFn: () =>
+      api.conversations.list({
+        status: statusFilter,
+        mode: modeFilter,
+        ...(reviewFilter ? { review: 'true' as const } : {}),
+      }),
+    refetchInterval: 30_000,
+  })
+
+  /**
+   * How much is waiting to be reviewed. Its own query rather than a count off the list,
+   * because the badge has to be right on every tab, not only while the review tab is open.
+   */
+  const reviewCount = useQuery({
+    queryKey: ['review-count'],
+    queryFn: () => api.conversations.reviewCount(),
     refetchInterval: 30_000,
   })
 
@@ -50,6 +73,7 @@ export function Inbox() {
   useRealtime((event) => {
     if ('conversationId' in event) {
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['review-count'] })
       if (event.conversationId === selectedId) {
         void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
       }
@@ -77,34 +101,53 @@ export function Inbox() {
             [
               { key: 'open', label: t('inbox.filters.open') },
               { key: 'waiting', label: t('inbox.waiting') },
+              { key: 'review', label: t('inbox.review') },
               { key: 'resolved', label: t('inbox.filters.resolved') },
             ] as const
           ).map((tab) => {
-            const active =
-              tab.key === 'waiting'
+            const active = reviewFilter
+              ? tab.key === 'review'
+              : tab.key === 'waiting'
                 ? modeFilter === 'waiting_human'
-                : statusFilter === tab.key && modeFilter === undefined
+                : tab.key !== 'review' && statusFilter === tab.key && modeFilter === undefined
+            const waitingToReview = reviewCount.data?.count ?? 0
             return (
               <button
                 key={tab.key}
                 type="button"
+                data-testid={`inbox-tab-${tab.key}`}
                 onClick={() => {
                   if (tab.key === 'waiting') {
+                    setReviewFilter(false)
                     setModeFilter('waiting_human')
                     setStatusFilter(undefined)
+                  } else if (tab.key === 'review') {
+                    // Review cuts across status: a resolved conversation still needs reading.
+                    setReviewFilter(true)
+                    setModeFilter(undefined)
+                    setStatusFilter(undefined)
                   } else {
+                    setReviewFilter(false)
                     setModeFilter(undefined)
                     setStatusFilter(tab.key)
                   }
                 }}
                 className={cn(
-                  'flex-1 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors',
+                  'flex flex-1 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors',
                   active
                     ? 'bg-[var(--surface-muted)] text-[var(--text)]'
                     : 'text-[var(--text-muted)] hover:text-[var(--text)]',
                 )}
               >
                 {tab.label}
+                {tab.key === 'review' && waitingToReview > 0 ? (
+                  <span
+                    data-testid="review-tab-count"
+                    className="rounded-full bg-amber-500/20 px-1.5 text-[11px] font-semibold tabular-nums text-amber-600 dark:text-amber-300"
+                  >
+                    {waitingToReview}
+                  </span>
+                ) : null}
               </button>
             )
           })}
@@ -164,7 +207,13 @@ export function Inbox() {
         data-testid="composer-or-empty-inbox"
       >
         {selectedId ? (
-          <ConversationPane conversationId={selectedId} onBack={() => setSelectedId(null)} />
+          /* Keyed: the draft and the suggestion it came from belong to one conversation,
+             and remounting is what guarantees they never follow the agent to the next. */
+          <ConversationPane
+            key={selectedId}
+            conversationId={selectedId}
+            onBack={() => setSelectedId(null)}
+          />
         ) : (
           <EmptyState title={t('conversation.selectPrompt')} />
         )}
@@ -183,9 +232,21 @@ function ConversationPane({
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
+  /**
+   * The draft in the composer came from this suggestion, if it came from one.
+   *
+   * Carried so that inserting a draft, editing it and sending it still records which
+   * suggestion it was. That pairing is the only honest measure of how good the drafts are:
+   * it says whether the agent trusted one or rewrote it, without asking them.
+   */
+  const [insertedSuggestionId, setInsertedSuggestionId] = useState<string | null>(null)
   const [showSidebar, setShowSidebar] = useState(false)
   const [promoting, setPromoting] = useState<Message | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
+  // Viewers see every opinion and hold none. The routes enforce this; here it is courtesy.
+  const canWrite = me.data?.role === 'admin' || me.data?.role === 'agent'
 
   const detail = useQuery({
     queryKey: ['conversation', conversationId],
@@ -216,6 +277,7 @@ function ConversationPane({
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
     void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    void queryClient.invalidateQueries({ queryKey: ['review-count'] })
   }
 
   const send = useMutation({
@@ -223,8 +285,31 @@ function ConversationPane({
       api.conversations.send(conversationId, { kind: 'text', text }, suggestionId),
     onSuccess: () => {
       setDraft('')
+      setInsertedSuggestionId(null)
       invalidate()
     },
+  })
+
+  const rate = useMutation({
+    mutationFn: (input: {
+      targetType: FeedbackTargetType
+      targetId: string
+      rating: FeedbackRating
+      reason?: FeedbackReason | null
+      note?: string | null
+    }) => api.conversations.giveFeedback(conversationId, input),
+    onSuccess: invalidate,
+  })
+
+  const unrate = useMutation({
+    mutationFn: (feedbackId: string) =>
+      api.conversations.removeFeedback(conversationId, feedbackId),
+    onSuccess: invalidate,
+  })
+
+  const markReviewed = useMutation({
+    mutationFn: () => api.conversations.markReviewed(conversationId),
+    onSuccess: invalidate,
   })
 
   const takeOver = useMutation({
@@ -242,6 +327,17 @@ function ConversationPane({
       api.conversations.setStatus(conversationId, status),
     onSuccess: invalidate,
   })
+
+  /** This person's own opinion of one thing, out of everybody's. */
+  const mineFor = (targetType: FeedbackTargetType, targetId: string): Feedback | null =>
+    detail.data?.feedback.find(
+      (row) =>
+        row.targetType === targetType &&
+        row.targetId === targetId &&
+        row.userId === me.data?.userId,
+    ) ?? null
+
+  const fromSuggestion = () => (insertedSuggestionId ? { suggestionId: insertedSuggestionId } : {})
 
   if (detail.isLoading) {
     return (
@@ -328,6 +424,22 @@ function ConversationPane({
                     ? () => setPromoting(message)
                     : undefined
                 }
+                feedback={{
+                  mine: mineFor('message', message.id),
+                  canWrite,
+                  onRate: (rating, reason, note) =>
+                    rate.mutate({
+                      targetType: 'message',
+                      targetId: message.id,
+                      rating,
+                      reason,
+                      note,
+                    }),
+                  onRemove: () => {
+                    const mine = mineFor('message', message.id)
+                    if (mine) unrate.mutate(mine.id)
+                  },
+                }}
               />
             ))
           )}
@@ -350,11 +462,16 @@ function ConversationPane({
               data-testid="composer"
               value={draft}
               placeholder={t('conversation.placeholder')}
-              onChange={(e) => setDraft(expandShortcut(e.target.value))}
+              onChange={(e) => {
+                const next = expandShortcut(e.target.value)
+                setDraft(next)
+                // Cleared the box: whatever draft was inserted is no longer what is being sent.
+                if (!next.trim()) setInsertedSuggestionId(null)
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && draft.trim()) {
                   e.preventDefault()
-                  send.mutate({ text: draft.trim() })
+                  send.mutate({ text: draft.trim(), ...fromSuggestion() })
                 }
               }}
             />
@@ -362,7 +479,7 @@ function ConversationPane({
               variant="primary"
               data-testid="send"
               disabled={!draft.trim() || send.isPending}
-              onClick={() => send.mutate({ text: draft.trim() })}
+              onClick={() => send.mutate({ text: draft.trim(), ...fromSuggestion() })}
             >
               {t('conversation.send')}
             </Button>
@@ -378,11 +495,24 @@ function ConversationPane({
         detail={data}
         className={cn(showSidebar ? 'flex' : 'hidden', 'lg:flex')}
         language={i18n.language}
-        onInsert={(text) => setDraft(text)}
+        canWrite={canWrite}
+        feedbackFor={(suggestionId) => mineFor('suggestion', suggestionId)}
+        onInsert={(text, suggestionId) => {
+          setDraft(text)
+          setInsertedSuggestionId(suggestionId)
+        }}
         onInsertAndSend={(text, suggestionId) => send.mutate({ text, suggestionId })}
         onDiscard={(suggestionId) => {
           void api.conversations.discardSuggestion(conversationId, suggestionId).then(invalidate)
         }}
+        onRate={(suggestionId, rating, reason, note) =>
+          rate.mutate({ targetType: 'suggestion', targetId: suggestionId, rating, reason, note })
+        }
+        onRemoveRating={(suggestionId) => {
+          const mine = mineFor('suggestion', suggestionId)
+          if (mine) unrate.mutate(mine.id)
+        }}
+        onMarkReviewed={() => markReviewed.mutate()}
         onErased={invalidate}
       />
     </div>
@@ -410,9 +540,21 @@ function attachmentsOf(
 function Bubble({
   message,
   onPromote,
+  feedback,
 }: {
   message: Message
   onPromote?: (() => void) | undefined
+  /**
+   * Rating lives on the bubble because that is where the answer is. The conversation id
+   * never comes down here: the pane binds it into these callbacks, so a bubble cannot rate
+   * anything outside the thread it is drawn in.
+   */
+  feedback?: {
+    mine: Feedback | null
+    canWrite: boolean
+    onRate: (rating: FeedbackRating, reason?: FeedbackReason | null, note?: string | null) => void
+    onRemove: () => void
+  }
 }) {
   const { t, i18n } = useTranslation()
   const isCustomer = message.senderType === 'customer'
@@ -425,6 +567,7 @@ function Bubble({
     <div
       className={cn('flex', isCustomer ? 'justify-start' : 'justify-end')}
       data-sender={message.senderType}
+      data-message-id={message.id}
     >
       {zoomed ? (
         <Lightbox src={zoomed.src} alt={zoomed.alt} onClose={() => setZoomed(null)} />
@@ -492,6 +635,18 @@ function Bubble({
             </button>
           ) : null}
         </div>
+        {/* Below the footer rather than in it: the reason panel needs the bubble's width. */}
+        {isAi && feedback ? (
+          <div className="mt-1">
+            <FeedbackControls
+              testIdPrefix="feedback-message"
+              mine={feedback.mine}
+              canWrite={feedback.canWrite}
+              onRate={feedback.onRate}
+              onRemove={feedback.onRemove}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -501,17 +656,32 @@ function AiSidebar({
   detail,
   className,
   language,
+  canWrite,
+  feedbackFor,
   onInsert,
   onInsertAndSend,
   onDiscard,
+  onRate,
+  onRemoveRating,
+  onMarkReviewed,
   onErased,
 }: {
   detail: ConversationDetail
   className?: string
   language: string
-  onInsert: (text: string) => void
+  canWrite: boolean
+  feedbackFor: (suggestionId: string) => Feedback | null
+  onInsert: (text: string, suggestionId: string) => void
   onInsertAndSend: (text: string, suggestionId: string) => void
   onDiscard: (suggestionId: string) => void
+  onRate: (
+    suggestionId: string,
+    rating: FeedbackRating,
+    reason?: FeedbackReason | null,
+    note?: string | null,
+  ) => void
+  onRemoveRating: (suggestionId: string) => void
+  onMarkReviewed: () => void
   onErased: () => void
 }) {
   const { t } = useTranslation()
@@ -535,6 +705,30 @@ function AiSidebar({
         className,
       )}
     >
+      {detail.inReviewQueue ? (
+        <section
+          data-testid="review-panel"
+          className="rounded-lg border border-amber-400/60 bg-amber-50 p-2.5 dark:bg-amber-950/30"
+        >
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+            {t('sidebar.review')}
+          </h3>
+          <p className="text-[12px] text-amber-900 dark:text-amber-200">
+            {t('sidebar.inReviewQueue')}
+          </p>
+          {canWrite ? (
+            <Button
+              size="sm"
+              className="mt-2 w-full"
+              data-testid="mark-reviewed"
+              onClick={onMarkReviewed}
+            >
+              {t('sidebar.markReviewed')}
+            </Button>
+          ) : null}
+        </section>
+      ) : null}
+
       <section>
         <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           {t('sidebar.suggestion')}
@@ -543,19 +737,37 @@ function AiSidebar({
           <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] p-2.5">
             <p className="whitespace-pre-wrap text-[13px]">{suggestion.messageText}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              <Button size="sm" onClick={() => onInsert(suggestion.messageText)}>
+              <Button
+                size="sm"
+                data-testid="suggestion-insert"
+                onClick={() => onInsert(suggestion.messageText, suggestion.id)}
+              >
                 {t('sidebar.insert')}
               </Button>
               <Button
                 size="sm"
                 variant="primary"
+                data-testid="suggestion-insert-and-send"
                 onClick={() => onInsertAndSend(suggestion.messageText, suggestion.id)}
               >
                 {t('sidebar.insertAndSend')}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => onDiscard(suggestion.id)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="suggestion-discard"
+                onClick={() => onDiscard(suggestion.id)}
+              >
                 {t('sidebar.discard')}
               </Button>
+              <FeedbackControls
+                testIdPrefix="feedback-suggestion"
+                tone="dark"
+                mine={feedbackFor(suggestion.id)}
+                canWrite={canWrite}
+                onRate={(rating, reason, note) => onRate(suggestion.id, rating, reason, note)}
+                onRemove={() => onRemoveRating(suggestion.id)}
+              />
             </div>
           </div>
         ) : (

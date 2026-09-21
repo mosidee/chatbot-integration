@@ -492,3 +492,33 @@ export async function addConversationTags(
   const merged = [...new Set([...current, ...tags])]
   await updateConversation(db, workspaceId, conversationId, { tags: merged })
 }
+
+/**
+ * Record that a draft became a real message.
+ *
+ * Called whether the agent pressed "insert and send" or inserted the draft, rewrote half
+ * of it and sent that. Both are the AI's draft reaching a customer, and the difference
+ * between them is the interesting part: comparing the stored `messageText` with the
+ * message's own text says whether the draft was trusted or corrected, without asking the
+ * agent to tell us.
+ */
+export async function markSuggestionSent(
+  db: Database,
+  workspaceId: string,
+  conversationId: string,
+  suggestionId: string,
+  messageId: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(schema.suggestions)
+    .set({ status: 'sent', sentMessageId: messageId })
+    .where(
+      and(
+        eq(schema.suggestions.id, suggestionId),
+        eq(schema.suggestions.workspaceId, workspaceId),
+        eq(schema.suggestions.conversationId, conversationId),
+      ),
+    )
+    .returning({ id: schema.suggestions.id })
+  return rows.length > 0
+}

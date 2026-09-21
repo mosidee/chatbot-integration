@@ -1,5 +1,6 @@
 import { type Database, schema } from '@ci/db'
 import { and, eq, sql } from 'drizzle-orm'
+import { countReviewQueue } from './review'
 
 /**
  * The numbers an operator needs to decide whether the pilot is working.
@@ -40,6 +41,14 @@ export type DashboardSummary = {
   handoffReasons: { reason: string; conversations: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number
+  /**
+   * What people thought of the AI's answers. The reasons are the second list of things to
+   * fix, beside the handoff reasons: one says where the AI gave up, the other where it
+   * should have.
+   */
+  feedback: { up: number; down: number; reasons: { reason: string; count: number }[] }
+  /** Conversations the AI handled that nobody has looked at yet. Not bounded by the window. */
+  reviewQueueNow: number
 }
 
 function startOfWindow(days: number, now: Date): Date {
@@ -65,28 +74,36 @@ export async function loadDashboard(
   const sinceIso = since.toISOString()
   const workspaceId = input.workspaceId
 
-  const [conversationsPerDay, messagesPerDay, tracesPerDay, firstResponse, reasons, channels] =
-    await Promise.all([
-      db.execute<{ day: string; count: number }>(sql`
+  const [
+    conversationsPerDay,
+    messagesPerDay,
+    tracesPerDay,
+    firstResponse,
+    reasons,
+    channels,
+    ratings,
+    downReasons,
+  ] = await Promise.all([
+    db.execute<{ day: string; count: number }>(sql`
         SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
         FROM ${schema.conversations}
         WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz
         GROUP BY 1
       `),
-      db.execute<{ day: string; count: number }>(sql`
+    db.execute<{ day: string; count: number }>(sql`
         SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
         FROM ${schema.messages}
         WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz AND direction = 'inbound'
         GROUP BY 1
       `),
-      db.execute<{
-        day: string
-        outcome: string
-        count: number
-        cost: string | null
-        tokens_in: number | null
-        tokens_out: number | null
-      }>(sql`
+    db.execute<{
+      day: string
+      outcome: string
+      count: number
+      cost: string | null
+      tokens_in: number | null
+      tokens_out: number | null
+    }>(sql`
         SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
                outcome,
                count(*)::int AS count,
@@ -97,11 +114,11 @@ export async function loadDashboard(
         WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz
         GROUP BY 1, 2
       `),
-      /**
-       * The middle conversation rather than the mean: one conversation that sat all weekend
-       * would otherwise make a fast week look slow.
-       */
-      db.execute<{ median: number | null; conversations: number }>(sql`
+    /**
+     * The middle conversation rather than the mean: one conversation that sat all weekend
+     * would otherwise make a fast week look slow.
+     */
+    db.execute<{ median: number | null; conversations: number }>(sql`
         WITH bounds AS (
           SELECT conversation_id,
                  min(created_at) FILTER (WHERE direction = 'inbound') AS asked,
@@ -117,7 +134,7 @@ export async function loadDashboard(
         FROM bounds
         WHERE asked IS NOT NULL AND answered IS NOT NULL AND answered >= asked
       `),
-      db.execute<{ reason: string; count: number }>(sql`
+    db.execute<{ reason: string; count: number }>(sql`
         SELECT handoff_reason::text AS reason, count(*)::int AS count
         FROM ${schema.conversations}
         WHERE workspace_id = ${workspaceId}
@@ -126,7 +143,7 @@ export async function loadDashboard(
         GROUP BY 1
         ORDER BY 2 DESC
       `),
-      db.execute<{ channel: string; type: string; count: number }>(sql`
+    db.execute<{ channel: string; type: string; count: number }>(sql`
         SELECT ch.name AS channel, ch.type::text AS type, count(*)::int AS count
         FROM ${schema.conversations} c
         JOIN ${schema.channels} ch ON ch.id = c.channel_id
@@ -134,17 +151,36 @@ export async function loadDashboard(
         GROUP BY 1, 2
         ORDER BY 3 DESC
       `),
-    ])
+    db.execute<{ rating: string; count: number }>(sql`
+        SELECT rating::text AS rating, count(*)::int AS count
+        FROM ${schema.feedback}
+        WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz
+        GROUP BY 1
+      `),
+    db.execute<{ reason: string; count: number }>(sql`
+        SELECT reason::text AS reason, count(*)::int AS count
+        FROM ${schema.feedback}
+        WHERE workspace_id = ${workspaceId}
+          AND created_at >= ${sinceIso}::timestamptz
+          AND rating = 'down'
+          AND reason IS NOT NULL
+        GROUP BY 1
+        ORDER BY 2 DESC
+      `),
+  ])
 
-  const [waiting] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(schema.conversations)
-    .where(
-      and(
-        eq(schema.conversations.workspaceId, workspaceId),
-        eq(schema.conversations.mode, 'waiting_human'),
+  const [[waiting], reviewQueueNow] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.conversations)
+      .where(
+        and(
+          eq(schema.conversations.workspaceId, workspaceId),
+          eq(schema.conversations.mode, 'waiting_human'),
+        ),
       ),
-    )
+    countReviewQueue(db, workspaceId),
+  ])
 
   // Every day in the window, including the quiet ones. A gap in a chart reads as missing
   // data rather than as nothing having happened.
@@ -197,5 +233,11 @@ export async function loadDashboard(
       conversations: row.count,
     })),
     waitingNow: waiting?.count ?? 0,
+    feedback: {
+      up: [...ratings].find((row) => row.rating === 'up')?.count ?? 0,
+      down: [...ratings].find((row) => row.rating === 'down')?.count ?? 0,
+      reasons: [...downReasons].map((row) => ({ reason: row.reason, count: row.count })),
+    },
+    reviewQueueNow,
   }
 }

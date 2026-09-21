@@ -209,7 +209,30 @@ do not exist yet.
   list of what to write into the knowledge base next, and everything else answers whether
   the pilot is working. Computed in Postgres and drawn without a charting library.
 
-Still to come in M4: customer merge suggestions, and the review queue and feedback.
+- Feedback and the review queue. A thumb up or down on every AI reply and on every draft,
+  with a fixed list of five reasons behind a thumbs-down and an optional note. The reasons
+  are fixed so they can be ranked: the dashboard turns them into a second list of what to
+  fix, beside the handoff reasons. One opinion per person per reply, changeable and
+  withdrawable.
+
+  The review queue is a tab in the inbox holding the conversations the AI answered with
+  nobody watching: an AI reply, no human message, no handoff, and nothing said since the
+  last review. Rating a reply counts as reviewing it, and so does saying plainly that it
+  was read. A conversation returns to the queue when the AI speaks again afterwards, so
+  reviewing is good only until the next unwatched turn.
+
+  Two consequences are deliberate. A conversation a person ever replied in never enters,
+  even if the AI then runs it alone for weeks, because someone who answered there has seen
+  how the AI behaves. `ai_supervised` conversations never enter either: their drafts are
+  sent by a person, under a person's name, so nothing about them was unsupervised.
+  Resolved conversations do enter, because one the AI closed badly is exactly what nobody
+  notices.
+
+  Drafts an agent sends now record the message they became, whether they were sent
+  untouched or edited first. Comparing the two texts is the implicit correction signal the
+  requirements ask for, and it costs no extra clicks from the agent.
+
+Still to come in M4: customer merge suggestions.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)

@@ -33,5 +33,8 @@ Chunks table with `embedding vector`, `tsv`/trigram index, workspace + language 
 ## Key tables (all with workspace_id)
 workspaces, users, memberships, channels, channel_identities, customers, customer_fields, merge_suggestions, conversations, messages, attachments, internal_notes, inbound_events, ai_traces, suggestions, feedback, knowledge_sources, knowledge_entries, knowledge_chunks, customer_summaries, providers, task_slots, canned_responses, handoff_rules, audit_log.
 
+## Review queue (packages/infra/src/review.ts)
+One SQL fragment, `inReviewQueue()`, correlated on the `conversations` row of whatever query uses it, so the inbox list, the tab's count badge and the dashboard all ask the identical question. It reads: no handoff reason, no message with `sender_type = 'human'`, and some message with `sender_type = 'ai'` newer than `conversations.reviewed_at`. `reviewed_at` is written with the database's `now()`, because it is compared against `messages.created_at`, which `defaultNow()` writes on the same clock. Feedback rows hang off the conversation and cascade with it, which is how retention and erasure reach them.
+
 ## Scale path
 Same images on Fly.io / Cloud Run / k3s / Cloudflare Containers. Requirements already met: stateless api, Redis fan-out, separate worker, S3 client, pooled Postgres.
