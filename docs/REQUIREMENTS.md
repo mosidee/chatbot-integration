@@ -29,6 +29,9 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 15 | Languages | GUI Thai + English (i18n, Thai default). AI matches customer's dominant language, workspace default Thai. Per-language knowledge variants. Trigram search for Thai | Thai has no word spaces |
 | 16 | Quality loop | Thumbs feedback + implicit corrections (draft vs sent), review queue for unsupervised AI conversations, full per-turn trace in v1; automatic grading next; regression evals once knowledge stabilises | Pilot must end with numbers |
 | 17 | Phasing | M1 skeleton+loop → M2 knowledge+memory → M3 real channels → M4 pilot readiness → M5 salon-saas tools. v1 = M1–M4 | Architecture proven before features pile on |
+| 18 | Tool extensibility | The agent takes tool **sources**, not tools. `http_tool` (one configured endpoint) and an **MCP client** (a connected server's whole set) are two sources behind one interface; both are **tenant-facing**, configured per workspace by an admin. `http_tool` first | `http_tool` is the low floor: any tenant with an endpoint, no server to run. MCP is the ceiling: the tenant owns the definitions and adds tools without us shipping. A source interface from the start keeps the agent loop untouched when the second arrives |
+| 19 | Tool identity | A tool definition separates **arguments the model fills** from **values the system binds** (verified customer, workspace, conversation). The model can neither name nor override a bound value, and a tool needing identity cannot run in a conversation where identity was never proven | Letting a model choose whose account to read is the cross-customer leak in a new place. `get_customer_profile` already does this with an empty input schema; the config format promotes it |
+| 20 | Tenant-defined egress | A tenant-defined tool is fetched through a **restricted client**: HTTPS only, hostname resolved and the resolved address checked, loopback / private / link-local / CGNAT refused, re-checked on redirect. Operator-level provider config keeps the unrestricted client | A tenant typing a URL gets a request origin inside our network: the worker shares a network with Postgres, Redis and MinIO, and the model gateway answers on a private address. Checking the hostname alone survives neither a name that resolves inward nor one that changes answer after the check |
 
 Pilot success metrics: share of conversations fully handled by AI with no negative rating and no repeat question within 24 h; median first-response time.
 
@@ -71,7 +74,11 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] Language matching (Thai/English), workspace default language
 - [v1] Full trace per AI turn: prompt, chunks + scores, tool calls, model, tokens, latency, cost
 - [v1] Redaction of card numbers and Thai ID numbers before storage and model calls
-- [M5] `http_tool` type (endpoint + schema + auth) configurable by admin; MCP client
+- [M5] Tool **sources** behind one registry interface, so the agent loop does not know where a tool came from
+- [M5] `http_tool`: one endpoint configured per workspace by an admin — URL, method, model-filled arguments, system-bound values, encrypted credential, timeout
+- [M5] MCP client: a tenant connects their own server and brings its whole tool set; per-workspace allowlist, because every exposed tool costs prompt budget
+- [M5] Restricted egress for tenant-defined tools (see decision 20); `tool_error` handoff when a tool fails or times out
+- [M5] A tool that writes records intent and fires after the turn, as every other side effect does
 - [M5] salon-saas tools: account lookup, subscription status, ticket creation
 - [later] Per-tenant budgets / rate limits; prompt versioning with A/B
 
@@ -266,8 +273,61 @@ neither belongs to a milestone that has closed:
   never sees another, which is exactly what stops recall leaking between people, so it has
   no way to name the other half of a merge.
 
-M5 adds the salon-saas tools: account lookup, subscription status and ticket creation,
-through the `http_tool` type and an MCP client.
+## 3.10 M5 design intent
+
+M5 is not yet built. What follows is decided rather than discovered, so that it is not
+re-argued at implementation time. Decisions 18 to 20 carry the short form; this is the
+reasoning.
+
+**The agent takes tool sources, not tools.** Today `createInternalTools` returns a fixed
+object written in TypeScript. An `http_tool` contributes one entry to that object and a
+connected MCP server contributes a set, so the registry's unit is a source and the agent
+loop never learns which kind produced a tool. Build the interface while `http_tool` is its
+only implementation: retrofitting it later means editing the turn, which is the part least
+worth disturbing.
+
+**Both extension points are the tenant's, not the operator's.** They are not alternatives.
+`http_tool` is the low floor, reaching any API that exists today from a tenant who will
+never run a server, and it needs no cooperation from the other side. MCP is the ceiling:
+the tenant owns the names, descriptions and schemas, keeps them beside the code that
+implements them where they cannot drift, and adds a tool without us shipping anything. A
+product sold to more than one business wants both, or every integration is our work
+forever.
+
+**Identity is bound by the system, never supplied by the model.** A tool definition has two
+kinds of input: arguments the model fills, and values we inject — the verified customer,
+the workspace, the conversation. The model cannot name a bound value or override one, and a
+tool that needs identity simply cannot be called in a conversation where identity was never
+proven. This is the same rule that scopes recall by workspace and customer, and
+`get_customer_profile` already demonstrates the shape with an empty input schema. MCP makes
+it harder rather than easier, because a server declares its own arguments; a tenant tool
+that asks for a customer id gets ours or nothing.
+
+**A tenant who can type a URL has a request origin inside our network.** The worker shares a
+Docker network with Postgres, Redis and MinIO, and the model gateway answers on a private
+address, so a tool aimed at an internal host would fetch it and read the answer to a
+customer. Tenant-defined tools therefore go through a restricted client: HTTPS, the
+hostname resolved and the resolved address checked rather than the string, loopback,
+private, link-local and CGNAT ranges refused, and the check repeated on redirect. Operator
+provider configuration keeps the unrestricted client, because a self-hosted gateway on a
+private address is the legitimate case the restriction would otherwise break.
+
+**Three smaller rulings.** Defining a tool stores a credential and points our infrastructure
+at a host, so it is admin-only. A tool that writes records intent and fires after the turn,
+because a turn that fails halfway must not leave a real record in somebody else's system.
+And every tool a source exposes costs prompt budget, so an MCP connection needs a
+per-workspace allowlist; since the trace already records tokens and cost, settings can show
+a tenant what their tool list costs per conversation rather than letting them degrade their
+own AI invisibly.
+
+**The salon-saas tools are the first consumers**, and only one of the three is reachable
+today. Subscription status can be answered with no new credential at all by putting `plan`
+and `paidUntil` into the widget token's existing attributes. Account lookup is blocked:
+every platform route is guarded by a check that refuses any bearer header before it
+evaluates a session, deliberately, so it needs a narrow read-only support credential on the
+salon-saas side. Ticket creation has nothing to call, and should not be built: a conversation
+in this console already has an assignee, a status, tags, notes and a history, which is what a
+ticket is.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)
