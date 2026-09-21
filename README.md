@@ -24,11 +24,17 @@ Milestones one to four are delivered and running in a pilot on the operator's ow
 | Knowledge | Hybrid retrieval over Postgres with pgvector and trigram search, Thai and English |
 | Memory | Rolling per-customer summaries, plus recall over that customer's past conversations |
 | Console | Inbox, takeover, suggested replies, knowledge management, settings, dashboard |
+| Tools | Tenant-defined HTTP tools the AI can call, with restricted egress and proved identity |
 | Quality | Thumbs and reasons on AI replies, and a review queue of conversations nobody has read |
 | Privacy | Card and national-ID redaction before storage, retention sweeps, erasure on request |
 
-Still to come: tools that call the operator's own product, so the AI can answer questions
-about a customer's account rather than only about the documentation.
+Milestone five added tools: an admin describes an endpoint of their own, and the AI can
+call it during a conversation. What the model fills in and what the system supplies are
+separate parts of the definition, so a model can never choose whose account to read, and a
+tool that needs a proved identity is not offered in a conversation where nobody proved one.
+
+Still to come: an MCP client, so a tenant can connect their own server and bring a whole
+tool set without us shipping anything.
 
 ## Requirements
 

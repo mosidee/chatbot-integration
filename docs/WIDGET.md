@@ -44,7 +44,7 @@ const token = await signVisitorToken(
     sub: user.id,                 // becomes the channel identity
     name: user.name,
     email: user.email,
-    attributes: { plan: user.plan },
+    attributes: { plan: user.plan, paidUntil: user.paidUntil },
     exp: Math.floor(Date.now() / 1000) + 300,
   },
   process.env.CHAT_WIDGET_SECRET,
@@ -56,6 +56,19 @@ when the widget starts a session, and a fresh page load mints a new one.
 
 A token that is invalid or expired degrades to anonymous rather than refusing. Somebody with
 a stale session still deserves support.
+
+`sub` and `attributes` are kept as a **proof** of identity, not merely as a label: they are
+stored on the channel identity and are what a tool binds to when it needs to know whose
+account to read. That is worth exploiting before writing any tool at all. Put `plan` and
+`paidUntil` in `attributes` and the AI can answer "what plan am I on?" from
+`get_customer_profile`, with no endpoint and no credential anywhere.
+
+Re-read on every message, so a customer who upgrades mid-conversation is not answered from
+the plan they were on when they opened the widget.
+
+Whether the token counts as proof is a workspace setting (**Settings → Proving who a
+customer is**). Switching it off leaves identification working — the same person still keeps
+one history across browsers — while withdrawing every tool bound to it.
 
 ## What the widget may see
 

@@ -108,6 +108,18 @@ The proxy host then forwards to the **container name** and port 3000, for exampl
 Webhook URLs then take the form `https://chat.example.com/api/v1/webhooks/<channel-id>`, which
 the settings screen shows per channel.
 
+## Tenant-defined tools
+
+Leave `TOOL_EGRESS_ALLOW_PRIVATE` unset or `false` in production. It exists so a tool
+endpoint can run on localhost during development, and the API and worker **refuse to
+start** with it set while `NODE_ENV=production`: the worker shares a Docker network with
+Postgres, Redis and MinIO, so a tenant admin who could aim a tool inward would have the
+product fetch an internal service and read the answer out to a customer. See
+[docs/adr/0004-restricted-egress-for-tenant-tools.md](adr/0004-restricted-egress-for-tenant-tools.md).
+
+A tenant whose own API is not reachable over public HTTPS cannot be served by a tool. That
+is the intended trade, and the test button in settings reports the refusal plainly.
+
 ## Checks after deploying
 
 ```bash

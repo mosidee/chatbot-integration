@@ -198,6 +198,25 @@ without spending money.
 - The e2e mock provider answers a phone number with a `set_customer_field` tool call, but
   only while no `tool` message is in the request. Without that guard the turn calls the tool
   forever and the harness gives up.
+- `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool reach loopback and private
+  addresses. Tests and local development need it; `createRuntime` **throws at startup** if
+  it is set with `NODE_ENV=production`, because the worker shares a network with Postgres,
+  Redis and MinIO. `playwright.config.ts` sets it for the servers it starts, which does not
+  cover a dev server Playwright reuses: restart that one with the flag, or the tools spec
+  fails with an egress refusal that reads like a product bug.
+- A writing tool is never offered while the AI is drafting for a human (`mode: 'suggest'`).
+  A draft nobody has approved must not change anything in the tenant's system.
+- Writes fire after the turn and before the reply is stored, so a failed write discards the
+  reply and hands off. The handoff note names what *did* succeed as well as what failed:
+  `runPendingWrites` stops at the first failure, so the writes ahead of it already landed
+  and the person picking it up needs to know that.
+- `customers.fields.account_id` is what a customer typed into a chat. `channel_identities.
+  verified_subject` is what an identity proof carried. Only the second may be bound into a
+  tool call, and they are separate columns so that the difference cannot be lost.
+- Browser tests must clear tenant tools before defining their own. Tools persist between
+  runs and the AI is offered all of them, so one left behind points at a port that died with
+  its test process, the model picks it, and the conversation hands off before reaching the
+  tool under test. `clearTools()` in `e2e/helpers.ts`.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 
@@ -213,7 +232,13 @@ and `checkCredentials` so settings can verify a token without waiting for a cust
 
 **An AI tool:** add it to `createInternalTools` in `packages/core/src/ai/tools.ts`. Tools
 record intent on the scratchpad and never write to the database, so a failed turn leaves no
-partial side effects.
+partial side effects. A tool a *tenant* defines is not code: it is a `tools` row an admin
+writes in settings, offered through `createHttpToolSource`.
+
+**A tool source:** implement `ToolSource` from `packages/core/src/ai/tool-source.ts` and add
+it to the list the worker passes to `runAgentTurn`. The agent takes sources rather than
+tools precisely so this needs no change to the turn. The internal source is merged first and
+wins any name clash.
 
 **A migration:** edit `packages/db/src/schema/app.ts`, run `bun run db:generate`, review the
 generated SQL, then `bun run db:migrate`.
