@@ -13,7 +13,6 @@ import { newId, schema } from '@ci/db'
 import type { AiTurnJob, Runtime } from '@ci/infra'
 import {
   addConversationTags,
-  addInternalNote,
   createTurnRetrieval,
   loadAiConfig,
   loadTurnContext,
@@ -317,5 +316,3 @@ async function readImages(
   }
   return images
 }
-
-export { addInternalNote }

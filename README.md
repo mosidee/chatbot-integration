@@ -15,7 +15,7 @@ owed is worse than a reply that says "let me fetch someone".
 
 ## What works today
 
-Milestones one to four are delivered and running in a pilot.
+Milestones one to four are delivered and running in a pilot on the operator's own product.
 
 | | |
 |---|---|

@@ -36,7 +36,7 @@ irrelevant by roughly 5x on Thai and 3x on English, returns exactly 1.0 for an e
 and 0 when the term is absent.
 
 A GIN index with `gin_trgm_ops` is used for Thai: `EXPLAIN` on 20,000 rows shows a bitmap
-index scan on the `%>` operator, not a sequential scan.
+index scan on the `<%` operator, not a sequential scan.
 
 One caveat the numbers make clear: `SO-1234` scores 0.375 against a query for `SO-8891`,
 because they share trigrams. That is higher than a genuinely relevant Thai match at 0.333.

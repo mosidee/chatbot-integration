@@ -15,7 +15,7 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 1 | Tenancy | Single business now, **tenant-ready schema** (`workspace_id` on every table), one workspace of UI | Cheap now, keeps SaaS door open |
 | 2 | Build vs fork | **Build ourselves**, reuse libraries only | AI+human loop lives in the GUI; bolting it onto Chatwoot's Rails UI is painful. Chatwoot remains the fallback |
 | 3 | Deployment | **Docker Compose on operator's VPS** (public IP, Nginx Proxy Manager, Let's Encrypt). Scale-up via containers (Fly.io / Cloud Run / k3s / Cloudflare Containers), not Workers | Long LLM calls, WebSockets and ingestion jobs fit containers |
-| 4 | Stack | **Elysia on Bun**, Drizzle ORM, Postgres + pgvector, Redis (BullMQ + pub/sub), MinIO (S3 API), **Vite React SPA** with shadcn/ui + Tailwind, Bun workspaces monorepo, Zod/TypeBox schemas shared, Eden Treaty typed client | Team preference; thin HTTP layer keeps core framework-free |
+| 4 | Stack | **Elysia on Bun**, Drizzle ORM, Postgres + pgvector, Redis (BullMQ + pub/sub), MinIO (S3 API), **Vite React SPA** with Tailwind and hand-rolled components, Bun workspaces monorepo, **Zod** schemas shared, hand-written typed `fetch` client | Team preference; thin HTTP layer keeps core framework-free. shadcn/ui, TypeBox and Eden Treaty were in the original plan and not adopted: Eden's route inference slowed the browser typecheck and tied it to the server's |
 | 5 | Customer identity | Contact per channel identity → `customers` record; **merge suggested** by shared phone / order ID, **human confirms**; never auto-merge | Avoid leaking one customer's history to another |
 | 6 | Conversation modes | `ai` (default for pilot), `ai_supervised`, `human`, `waiting_human`; selectable per workspace / channel / conversation. **AI never sends while mode is `human`** | Trusted pilot partner; supervised mode ready for later |
 | 7 | AI capabilities | **Tool-using agent, internal tools now**, registry designed for HTTP tools + MCP later. Fallback to answer-only for models without function calling | Option 3 is "register another tool" |
@@ -45,7 +45,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] Facebook Messenger adapter via Graph API (webhook verify + X-Hub-Signature-256, page token, quick replies, referral params, read receipts, media)
 - [v1] Internal test channel / simulator page
 - [v1] Embeddable web chat widget (script tag), anonymous or **signed-token (JWT) identified** user
-- [v1] Channel settings: paste credentials, show webhook URL, signature status, "send test message"
+- [v1] Channel settings: paste credentials, show webhook URL, signature status, a credential check button. ("send test message" was planned and not built; the check verifies the token without messaging anyone)
 - [v1] Webhook ingestion: verify → persist raw event → enqueue → 200 within ms; idempotency on platform message IDs
 - [later] "Connect Facebook Page" OAuth flow; LINE Login
 - [later] Additional channels, in order of ease: **Instagram DM** (Meta Graph API, same review as Messenger), **Telegram** (Bot API, no review), **WhatsApp** (Meta Cloud API; needs business number, Business Verification, 24 h customer-service window and paid templates outside it), **TikTok** (Business Messaging API is partner-gated via TikTok Business Center, region-restricted in EEA/CH/UK; TikTok Shop Customer Service API is a separate, harder approval). Design hooks now: per-conversation messaging-window expiry, and a template outbound message type
@@ -53,11 +53,11 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 
 ### 3.2 Conversation and handoff
 - [v1] Modes `ai` / `ai_supervised` / `human` / `waiting_human`, defaults per workspace and per channel
-- [v1] AI→human handoff triggers: `handoff_to_human` tool with reason, low retrieval confidence, customer asks for human, negative sentiment, keyword/intent rules
+- [v1] AI→human handoff: the `handoff_to_human` tool, with the model choosing the reason from a fixed list. Media the AI cannot read hands off without a turn. (A confidence threshold, a sentiment check and keyword/intent rules were planned and not built; the model's own judgement has covered the pilot)
 - [v1] Handoff reason posted as internal note; acknowledgement message to customer (configurable text, business hours aware)
 - [v1] One-click take over; one-click return to AI with optional instruction note the AI reads
 - [v1] `waiting_human` queue; optional fallback to AI after N minutes outside business hours
-- [v1] Assignment to agent; status open / snoozed / resolved; tags
+- [v1] Assignment to agent; status open / resolved; tags. (`snoozed` exists in the enum and nothing sets it)
 - [next] Debounce AI turns so a burst of customer messages produces one considered reply
   rather than one per message. Needs care: a deterministic job id alone would drop a message
   that arrived mid-turn
@@ -65,11 +65,11 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 
 ### 3.3 AI harness
 - [v1] Provider profiles (name, base URL, key, headers), keys encrypted at rest, never returned to browser
-- [v1] Task slots: `agent_chat`, `suggestion_for_human`, `summarize`, `classify_intent_and_handoff`, `embed`, `rerank`, `vision`; each with primary + fallback provider/model
+- [v1] Task slots: `agent_chat`, `suggestion_for_human`, `summarize`, `embed`, `rerank`, `vision`; each with primary + fallback provider/model. (`classify_intent_and_handoff` is configurable and read by no processor; it awaits the rule engine above)
 - [v1] Agent loop on Vercel AI SDK `openai-compatible` provider; tool registry with typed schemas
-- [v1] Internal tools: `search_knowledge`, `get_customer_profile`, `search_past_conversations`, `handoff_to_human`, `tag_conversation`, `set_customer_field`, `propose_merge`, `schedule_follow_up`
+- [v1] Internal tools: `search_knowledge`, `get_customer_profile`, `search_past_conversations`, `handoff_to_human`, `tag_conversation`, `set_customer_field`. (`propose_merge` struck: a model never sees a second customer, so it cannot name the other half of a merge; deterministic matching does the job, see §3.9. `schedule_follow_up` moved to [later]: never built, nothing depends on it)
 - [v1] Answer-only fallback path (retrieval pre-injected) for models without function calling
-- [v1] Structured output for quick replies / buttons, translated per channel
+- [later] Structured output for quick replies / buttons, translated per channel. (Was [v1]; structured output is used by the summariser only)
 - [v1] Image understanding when the assigned model supports vision
 - [v1] Language matching (Thai/English), workspace default language
 - [v1] Full trace per AI turn: prompt, chunks + scores, tool calls, model, tokens, latency, cost
@@ -80,7 +80,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [M5] Restricted egress for tenant-defined tools (see decision 20); `tool_error` handoff when a tool fails or times out
 - [M5] A tool that writes records intent and fires after the turn, as every other side effect does
 - [M5] salon-saas tools: account lookup, subscription status, ticket creation
-- [later] Per-tenant budgets / rate limits; prompt versioning with A/B
+- [later] `schedule_follow_up` tool; per-tenant budgets / rate limits; prompt versioning with A/B
 
 ### 3.4 Knowledge (RAG)
 - [v1] Q&A entries (question, answer, tags, channel restriction, per-language variants)
@@ -107,10 +107,10 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] AI sidebar: take over / return to AI, live suggested reply (insert, insert & send), retrieved chunks with sources, customer summary, cost so far, feedback thumbs
 - [v1] Customer panel: identities, fields, merge suggestions, past conversations
 - [v1] Knowledge management screens
-- [v1] Settings: channels, providers + task slots, mode defaults, handoff rules, business hours, retention, redaction, users/roles, canned responses
+- [v1] Settings: channels, providers + task slots, mode defaults, business hours, retention, redaction, members, canned responses. (Handoff rules: no table, route or screen; see the handoff line in §3.2)
 - [v1] Minimal dashboard: volume per channel, AI vs human handled, handoff reasons, first-response time, cost/day
 - [v1] Review queue for unsupervised AI conversations
-- [v1] Roles `admin` / `agent` / `viewer`; email+password, optional Google sign-in; invite-only
+- [v1] Roles `admin` / `agent` / `viewer`; email+password. (Google sign-in is wired in the auth config and has no control on the login page; invitations have a table and no endpoint, so members are added by seed or by hand)
 - [v1] Thai + English i18n; mobile-friendly responsive layout
 - [later] Charts dashboard; agent performance; CSAT survey to customer
 
@@ -121,7 +121,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [later] Regression eval set run on knowledge change; alerting
 
 ### 3.8 Platform / ops
-- [v1] Bun workspaces monorepo: `apps/api`, `apps/worker`, `apps/web`, `apps/widget`, `packages/core` (framework-free domain), `packages/channels`, `packages/db`, `packages/shared`
+- [v1] Bun workspaces monorepo: `apps/api`, `apps/worker`, `apps/web`, `apps/widget`, `packages/core` (framework-free domain), `packages/channels`, `packages/db`, `packages/infra`, `packages/shared`, `packages/config`
 - [v1] Docker Compose: api, worker, web (static via nginx or served by api), postgres+pgvector, redis, minio; `.env.example`
 - [v1] Drizzle migrations; seed script for a workspace, admin user, test channel
 - [v1] Stateless API, BullMQ queues, S3-compatible storage client, PgBouncer-ready connection handling
@@ -134,8 +134,8 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 **M1 is complete.** The skeleton and the AI/human loop run end to end, locally and as
 container images. Delivered:
 
-- Monorepo, Docker Compose infrastructure, CI running lint, typecheck, migrations, 147
-  tests and the web build.
+- Monorepo, Docker Compose infrastructure, CI running lint, typecheck, migrations, the
+  test suite and the web build.
 - Database schema for the whole M1 surface with `workspace_id` on every tenant-owned table,
   Better Auth with admin/agent/viewer roles, AES-256-GCM credential encryption.
 - Conversation state machine and redaction as pure, exhaustively tested functions.
@@ -258,20 +258,13 @@ do not exist yet.
   destroy the history instead of moving it. The audit entry naming both ids outlives the
   record and the proposal.
 
-  The `propose_merge` AI tool listed in §3.3 is deliberately not built. A model is given one
+  The `propose_merge` AI tool from the original §3.3 list is deliberately not built. A model is given one
   customer and never sees another, which is what stops recall leaking across people, so it
   has no way to name the other half of a merge. Deterministic matching on extracted
   identifiers does the same job without that access.
 
-**M4's own list is done.** Two internal tools named in §3.3 are still outstanding, and
-neither belongs to a milestone that has closed:
-
-- `schedule_follow_up` has never been built. Nothing else depends on it and no pilot
-  conversation has needed it yet, but it is listed as v1 and is not there.
-- `propose_merge` is deliberately not built, and should be struck from §3.3 rather than
-  scheduled. See the merge suggestions entry above: a model is handed one customer and
-  never sees another, which is exactly what stops recall leaking between people, so it has
-  no way to name the other half of a merge.
+**M4's own list is done.** Not every `[v1]` line in §3 was built; the ones that were not
+are marked in place there rather than deleted, so the gap stays visible.
 
 ## 3.10 M5 design intent
 

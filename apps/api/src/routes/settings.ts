@@ -328,7 +328,6 @@ export function settingsRoutes(ctx: ApiContext) {
           const provider = rows[0]
           if (!provider) return status(404, { error: 'Provider not found' })
 
-          const { decryptSecret } = await import('@ci/db')
           const key = provider.apiKeyEncrypted
             ? await decryptSecret(provider.apiKeyEncrypted, env.APP_SECRET_KEY)
             : null

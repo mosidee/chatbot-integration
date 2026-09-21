@@ -502,3 +502,18 @@ test('the dashboard reports what the pilot is doing', async ({ page, request }) 
   await expect(page.getByTestId('figure-first-response')).toBeVisible()
   await expect(page.getByTestId('figure-cost')).toBeVisible()
 })
+
+test('a note cannot be written against a conversation id the workspace does not own', async ({
+  request,
+}) => {
+  // Every sibling route loads the conversation under the workspace before acting. The notes
+  // route once did not, so a note posted at a foreign id would land in that workspace's
+  // thread. The seeded workspace owns no conversation with this id, so it must be refused.
+  const response = await request.post(
+    `${API_URL}/api/v1/conversations/not-ours-${uniqueToken()}/notes`,
+    {
+      data: { body: 'should never be stored' },
+    },
+  )
+  expect(response.status()).toBe(404)
+})

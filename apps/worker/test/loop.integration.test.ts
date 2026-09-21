@@ -976,7 +976,7 @@ describe('customer memory', () => {
     for (const job of await drainQueue<{
       workspaceId: string
       customerId: string
-      conversationId?: string | null
+      conversationId: string
     }>(f.runtime.queues.summarize)) {
       await processSummarize(f.runtime, ports, f.runtime.logger, job)
     }
@@ -1033,7 +1033,7 @@ describe('customer memory', () => {
     for (const job of await drainQueue<{
       workspaceId: string
       customerId: string
-      conversationId?: string | null
+      conversationId: string
     }>(f.runtime.queues.summarize)) {
       await processSummarize(f.runtime, ports, f.runtime.logger, job)
     }

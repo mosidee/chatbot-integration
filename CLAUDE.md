@@ -44,9 +44,10 @@ because a human may have taken over since the job was queued. Do not add a path 
 It defines ports; `apps/*` and `packages/infra` implement them. This is what keeps the domain
 testable with fakes and the worker portable.
 
-**Every tenant-owned query is scoped by `workspaceId`.** There is no ambient workspace. Use
-`scoped()` from `@ci/db` or pass the id explicitly, and add `workspace_id` to every new
-tenant-owned table.
+**Every tenant-owned query is scoped by `workspaceId`.** There is no ambient workspace and
+no helper that adds it: put an explicit `eq(table.workspaceId, workspaceId)` in every
+WHERE, and add `workspace_id` to every new tenant-owned table. A lookup keyed by a row
+id alone is acceptable only when that id was itself loaded under a workspace check.
 
 **Redact before you persist.** Card numbers and Thai national IDs are masked before anything
 reaches the database or a model. `storeMessage` does this; do not write message rows by hand.
@@ -80,7 +81,7 @@ bun run db:reset        # DESTROYS ALL DATA, then migrates and seeds. Local only
 bun run dev             # api + worker + web with hot reload
 bun run test            # unit and integration (needs infra:up)
 bun run test:e2e        # Playwright browser tests (starts the app itself)
-bun run typecheck       # server packages and the web app
+bun run typecheck       # server packages, the web app and the widget
 bun run lint            # Biome
 bun run auth:generate   # regenerate the Better Auth schema after changing auth config
 ./scripts/smoke.sh      # end-to-end: sign in, configure a mock provider, assert the AI answers
@@ -188,11 +189,12 @@ without spending money.
   can never be the source for reporting: the dashboard list of what the AI could not handle
   emptied itself as agents worked their queue. `handoff_events` is the history; the column
   stays for the inbox badge. Both exist on purpose.
-- Merging two customers must repoint every table that references `customers.id` before the
-  losing row is deleted, in one transaction. All four of them cascade on delete, which is
-  how erasure wipes a person in one statement, so the wrong order destroys the history
-  instead of moving it. `packages/infra/src/merge.ts` lists the four; a fifth must be added
-  there too.
+- Merging two customers must repoint every table holding a person's history before the
+  losing row is deleted, in one transaction. Five tables reference `customers.id` and all
+  cascade on delete, which is how erasure wipes a person in one statement, so the wrong
+  order destroys history instead of moving it. `packages/infra/src/merge.ts` repoints four
+  and leaves `merge_suggestions` to the cascade on purpose; a new table that stores anything
+  worth keeping goes on the repoint list.
 - The e2e mock provider answers a phone number with a `set_customer_field` tool call, but
   only while no `tool` message is in the request. Without that guard the turn calls the tool
   forever and the harness gives up.

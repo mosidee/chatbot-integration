@@ -232,20 +232,3 @@ export async function indexConversationText(
 
   return pieces.length
 }
-
-/** Remove indexed conversation text, used by the delete-customer job. */
-export async function deleteConversationEmbeddings(
-  db: Database,
-  workspaceId: string,
-  customerIds: string[],
-): Promise<void> {
-  if (customerIds.length === 0) return
-  await db
-    .delete(schema.conversationEmbeddings)
-    .where(
-      and(
-        eq(schema.conversationEmbeddings.workspaceId, workspaceId),
-        inArray(schema.conversationEmbeddings.customerId, customerIds),
-      ),
-    )
-}

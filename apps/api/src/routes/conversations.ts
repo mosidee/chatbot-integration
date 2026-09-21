@@ -425,7 +425,13 @@ export function conversationRoutes(ctx: ApiContext) {
 
       .post(
         '/:id/notes',
-        async ({ workspaceId, params, body, user }) => {
+        async ({ workspaceId, params, body, user, status }) => {
+          // Every sibling route loads the conversation under the workspace first. This one
+          // did not, so a note could be written against another workspace's conversation
+          // id and surface in that workspace's thread.
+          const loaded = await loadState(workspaceId, params.id)
+          if (!loaded) return status(404, { error: 'Conversation not found' })
+
           const id = newId()
           await db.insert(schema.internalNotes).values({
             id,

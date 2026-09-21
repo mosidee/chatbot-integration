@@ -65,18 +65,6 @@ export type CustomerErasureJob = {
   requestedByUserId: string | null
 }
 
-export type JobPayloads = {
-  inbound: InboundJob
-  ai_turn: AiTurnJob
-  suggestion: SuggestionJob
-  outbound: OutboundJob
-  waiting_human: WaitingHumanTimeoutJob
-  summarize: { workspaceId: string; customerId: string; conversationId?: string | null }
-  knowledge_ingest: KnowledgeIngestJob
-  retention: RetentionJob
-  customer_erasure: CustomerErasureJob
-}
-
 export type KnowledgeIngestJob = {
   workspaceId: string
   sourceId: string

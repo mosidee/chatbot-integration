@@ -376,20 +376,6 @@ export async function recordTrace(
   return id
 }
 
-export async function applyHandoff(
-  db: Database,
-  workspaceId: string,
-  conversationId: string,
-  reason: HandoffReason,
-  at: Date,
-): Promise<void> {
-  await updateConversation(db, workspaceId, conversationId, {
-    mode: 'waiting_human',
-    handoffReason: reason,
-    waitingHumanSince: at,
-  })
-}
-
 /**
  * Fill in a customer's name and avatar from the platform.
  *

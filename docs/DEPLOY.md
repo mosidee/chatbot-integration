@@ -3,8 +3,9 @@
 One VPS running Docker, with Nginx Proxy Manager terminating TLS. The same images run on
 Fly.io, Cloud Run, Kubernetes or Cloudflare Containers when traffic justifies moving.
 
-The stack is five containers: `api`, `worker`, `postgres`, `redis`, `minio`. The API also
-serves the built console, so one hostname fronts the whole product.
+The stack is five long-running containers, `api`, `worker`, `postgres`, `redis` and `minio`,
+plus `minio-init`, which creates the bucket once and exits. The API also serves the built
+console and the widget, so one hostname fronts the whole product.
 
 ## Prerequisites
 
@@ -111,7 +112,7 @@ the settings screen shows per channel.
 
 ```bash
 curl -s https://chat.example.com/healthz   # {"status":"ok","db":true,"redis":true}
-docker compose ps                          # five services, api and worker healthy
+docker compose ps                          # five up, minio-init exited, api and worker healthy
 docker compose logs -f worker              # jobs completing
 ```
 

@@ -221,9 +221,11 @@ export type MergeResult = {
  * the last statement, and the whole thing is one transaction, because a merge that stopped
  * half way would leave a customer whose history had partly moved.
  *
- * The four tables below are every table in the schema that references `customers.id`. A new
- * one must be added here as well, or its rows will be deleted by the cascade instead of
- * following the person they belong to.
+ * Five tables reference `customers.id`. Four are repointed below because their rows are the
+ * person's history. The fifth, `merge_suggestions`, is deliberately left to the cascade: a
+ * proposal naming the absorbed customer is answered by this very merge, and one naming the
+ * survivor is re-derived afterwards. A new table that stores anything a person would want
+ * to keep must be added to the repoint list, or the cascade will delete it.
  */
 export async function mergeCustomers(
   db: Database,

@@ -33,7 +33,8 @@ import { organization, user } from './auth'
  * Application schema.
  *
  * Tenancy rule: every tenant-owned table carries `workspaceId` and every query must be
- * scoped by it. See `scoped()` in ../tenancy.ts — do not hand-write unscoped queries.
+ * scoped by it, with an explicit `eq(table.workspaceId, workspaceId)` in the WHERE. There
+ * is no ambient workspace and no helper that adds it for you.
  *
  * IDs are UUIDv7 (time-ordered) generated in the application via `newId()` in ../id.ts,
  * stored as text so they join cleanly with Better Auth's text ids.

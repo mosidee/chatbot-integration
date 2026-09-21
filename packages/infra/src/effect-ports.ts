@@ -1,8 +1,8 @@
 import { getAdapter } from '@ci/channels'
 import type { EffectContext, EffectPorts, Logger } from '@ci/core'
-import { type Database, decryptJson, schema } from '@ci/db'
+import { type Database, decryptJson, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { summaryJobId, waitingHumanJobId } from './queues'
 import { loadWorkspaceSettings, storeMessage } from './repo'
 import type { Runtime } from './runtime'
@@ -21,9 +21,9 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
       // One turn per inbound message, so no message can go unanswered.
       //
       // A burst therefore produces a reply each, and those replies interleave with the
-      // later messages. Collapsing them needs a debounce: a deterministic job id alone
-      // would drop any message that arrived while a turn was already running, which is a
-      // worse failure than answering twice. Tracked for M2.
+      // later messages. Collapsing them would need a debounce: a deterministic job id
+      // alone would drop any message that arrived while a turn was already running, which
+      // is a worse failure than answering twice. Answering twice is the accepted cost.
       await queues.ai_turn.add(
         'run',
         { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId, deliver },
@@ -63,7 +63,7 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
 
     async addInternalNote(ctx, body) {
       await db.insert(schema.internalNotes).values({
-        id: crypto.randomUUID(),
+        id: newId(),
         workspaceId: ctx.workspaceId,
         conversationId: ctx.conversationId,
         authorType: 'ai',
@@ -77,7 +77,7 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
       await db
         .insert(schema.handoffEvents)
         .values({
-          id: crypto.randomUUID(),
+          id: newId(),
           workspaceId: ctx.workspaceId,
           conversationId: ctx.conversationId,
           reason,
@@ -116,7 +116,12 @@ export function createEffectPorts(runtime: Runtime, logger: Logger): EffectPorts
       const rows = await db
         .select({ customerId: schema.conversations.customerId })
         .from(schema.conversations)
-        .where(eq(schema.conversations.id, ctx.conversationId))
+        .where(
+          and(
+            eq(schema.conversations.id, ctx.conversationId),
+            eq(schema.conversations.workspaceId, ctx.workspaceId),
+          ),
+        )
         .limit(1)
       const customerId = rows[0]?.customerId
       if (!customerId) return

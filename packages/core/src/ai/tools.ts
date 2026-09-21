@@ -6,8 +6,8 @@ import type { CustomerContext, HandoffIntent, RetrievedChunk } from './types'
  * Internal tools available to the agent.
  *
  * Tools never write to the database. They record intent on a scratchpad that the worker
- * reads after the turn and applies transactionally, so a failed turn leaves no partial
- * side effects. External HTTP and MCP tools register through the same shape in M5.
+ * reads and applies only after the turn has finished, so a turn that fails part way
+ * leaves no side effects at all. External HTTP and MCP tools register through the same shape in M5.
  */
 
 export type TurnScratchpad = {

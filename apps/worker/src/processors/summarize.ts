@@ -26,7 +26,7 @@ import { and, asc, desc, eq } from 'drizzle-orm'
 export type SummarizeJob = {
   workspaceId: string
   customerId: string
-  conversationId?: string | null
+  conversationId: string
 }
 
 export async function processSummarize(
@@ -57,20 +57,34 @@ export async function processSummarize(
   const slot = usableSlot(aiConfig, 'summarize') ?? usableSlot(aiConfig, 'agent_chat')
   const embedSlot = usableSlot(aiConfig, 'embed')
 
-  // The messages to fold in: this conversation if named, otherwise the customer's recent.
-  const messageRows = job.conversationId
-    ? await db
-        .select()
-        .from(schema.messages)
-        .where(eq(schema.messages.conversationId, job.conversationId))
-        .orderBy(asc(schema.messages.createdAt))
-        .limit(200)
-    : await db
-        .select()
-        .from(schema.messages)
-        .where(eq(schema.messages.workspaceId, job.workspaceId))
-        .orderBy(desc(schema.messages.createdAt))
-        .limit(60)
+  // The conversation must belong to this customer. A job that named someone else's
+  // conversation would fold their words into this customer's summary, which is the leak
+  // this product refuses, so it is refused here rather than trusted from the queue.
+  const owned = await db
+    .select({ id: schema.conversations.id })
+    .from(schema.conversations)
+    .where(
+      and(
+        eq(schema.conversations.id, job.conversationId),
+        eq(schema.conversations.workspaceId, job.workspaceId),
+        eq(schema.conversations.customerId, job.customerId),
+      ),
+    )
+    .limit(1)
+  if (owned.length === 0) {
+    logger.warn("summary skipped: conversation is not this customer's", {
+      customerId: job.customerId,
+      conversationId: job.conversationId,
+    })
+    return
+  }
+
+  const messageRows = await db
+    .select()
+    .from(schema.messages)
+    .where(eq(schema.messages.conversationId, job.conversationId))
+    .orderBy(asc(schema.messages.createdAt))
+    .limit(200)
 
   const relevant = messageRows.filter((m) => m.content.kind !== 'event')
   if (relevant.length === 0) return
@@ -102,7 +116,7 @@ export async function processSummarize(
       prices: aiConfig.prices,
     })
 
-    const traceId = await recordTrace(db, job.workspaceId, job.conversationId ?? null, result.trace)
+    const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)
 
     if (result.summary) {
       const rendered = renderSummary(result.summary)
@@ -140,7 +154,7 @@ export async function processSummarize(
 
   // Index for recall. Only the customer's own words and what was said back to them; a
   // digest, not a transcript, so recall surfaces topics rather than pleasantries.
-  if (embedSlot && job.conversationId) {
+  if (embedSlot) {
     await db
       .delete(schema.conversationEmbeddings)
       .where(eq(schema.conversationEmbeddings.conversationId, job.conversationId))

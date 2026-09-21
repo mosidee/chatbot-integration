@@ -10,8 +10,9 @@ import type { Effect } from './state-machine'
  *
  * Failure policy: `notify_agents` is best effort, since a dropped realtime nudge is a
  * cosmetic problem and the agent's inbox still refreshes. Every other effect propagates,
- * so the queue retries the job. Effect implementations must therefore be idempotent, which
- * is why notes and jobs are keyed on the conversation and the triggering message.
+ * so the queue retries the job. Effect implementations must therefore tolerate a replay:
+ * the handoff log and the timer and summary jobs are keyed so a repeat is a no-op, while an
+ * internal note replayed after a crash is written twice, which is visible and harmless.
  */
 export async function applyEffects(
   effects: Effect[],

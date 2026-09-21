@@ -11,7 +11,7 @@ import type { ChannelAdapter, InboundEvent, WebhookRequest } from '../types'
  * is how a salon-saas customer gets support without ever identifying themselves, and how
  * account-specific tools can act on their behalf.
  *
- * M1 ships the adapter and its token handling; the browser widget itself lands in M4.
+ * The browser widget that speaks to this adapter lives in apps/widget.
  */
 
 const configSchema = z.object({

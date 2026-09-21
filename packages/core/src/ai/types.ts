@@ -93,7 +93,7 @@ export type AgentTurnInput = {
   recentMessages: ConversationTurn[]
   /** Agent notes, including any instruction left when handing back to the AI. */
   internalNotes: { body: string; at: Date }[]
-  /** Knowledge retrieved for this turn. Empty until M2. */
+  /** Knowledge retrieved for this turn, pre-fetched by the worker before core is called. */
   retrieved: RetrievedChunk[]
   /** Images on the newest customer message, already read from object storage. */
   images: ImageInput[]
