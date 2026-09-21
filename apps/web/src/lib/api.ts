@@ -1,6 +1,9 @@
 import type {
   ConversationMode,
   ConversationStatus,
+  FeedbackRating,
+  FeedbackReason,
+  FeedbackTargetType,
   HandoffReason,
   Language,
   NormalizedMessage,
@@ -114,7 +117,22 @@ export type Suggestion = {
   messageText: string
   aiTraceId: string | null
   status: 'pending' | 'inserted' | 'sent' | 'discarded'
+  sentMessageId: string | null
   createdAt: string
+}
+
+/** What one person thought of one thing the AI wrote. */
+export type Feedback = {
+  id: string
+  conversationId: string
+  targetType: FeedbackTargetType
+  targetId: string
+  userId: string
+  rating: FeedbackRating
+  reason: FeedbackReason | null
+  note: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export type Customer = {
@@ -130,6 +148,8 @@ export type ConversationDetail = {
     customerId: string
     channelIdentityId: string
     handoffNote: string | null
+    /** Only the detail carries this: the list projects its columns explicitly. */
+    reviewedAt: string | null
   }
   customer: Customer | null
   identity: {
@@ -141,6 +161,9 @@ export type ConversationDetail = {
   messages: Message[]
   notes: InternalNote[]
   suggestions: Suggestion[]
+  feedback: Feedback[]
+  /** Whether this conversation is still waiting to be reviewed. Drives the sidebar button. */
+  inReviewQueue: boolean
 }
 
 export type AiTrace = {
@@ -265,6 +288,8 @@ export type Dashboard = {
   handoffReasons: { reason: string; conversations: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number
+  feedback: { up: number; down: number; reasons: { reason: string; count: number }[] }
+  reviewQueueNow: number
 }
 
 export type ConversationFilters = {
@@ -273,6 +298,8 @@ export type ConversationFilters = {
   channelId?: string
   assigneeUserId?: string
   tag?: string
+  /** Only what nobody has reviewed. A literal string: the server refuses anything else. */
+  review?: 'true'
   limit?: number
 }
 
@@ -390,6 +417,20 @@ export const api = {
       post<{ noteId: string }>(`/v1/conversations/${id}/notes`, { body }),
     discardSuggestion: (id: string, suggestionId: string) =>
       post<{ ok: true }>(`/v1/conversations/${id}/suggestions/${suggestionId}/discard`),
+    reviewCount: () => get<{ count: number }>('/v1/conversations/review-count'),
+    markReviewed: (id: string) => post<{ reviewedAt: string }>(`/v1/conversations/${id}/review`),
+    giveFeedback: (
+      id: string,
+      input: {
+        targetType: FeedbackTargetType
+        targetId: string
+        rating: FeedbackRating
+        reason?: FeedbackReason | null
+        note?: string | null
+      },
+    ) => post<{ feedback: Feedback }>(`/v1/conversations/${id}/feedback`, input),
+    removeFeedback: (id: string, feedbackId: string) =>
+      del<{ ok: true }>(`/v1/conversations/${id}/feedback/${feedbackId}`),
   },
 
   simulator: {

@@ -3,6 +3,9 @@ import type {
   ChannelEventKind,
   ConversationMode,
   ConversationStatus,
+  FeedbackRating,
+  FeedbackReason,
+  FeedbackTargetType,
   HandoffReason,
   Language,
   MessageDirection,
@@ -78,11 +81,26 @@ export const aiTaskEnum = pgEnum('ai_task', [
 ])
 export const suggestionStatusEnum = pgEnum('suggestion_status', [
   'pending',
+  /**
+   * Nothing writes this. Inserting a draft into the composer is not a decision — the agent
+   * may still edit it away or never send — so the status only moves when the message goes.
+   * The value stays because dropping one from a Postgres enum means rebuilding the type.
+   */
   'inserted',
   'sent',
   'discarded',
 ])
 export const aiOutcomeEnum = pgEnum('ai_outcome', ['sent', 'draft', 'handoff', 'error'])
+
+export const feedbackRatingEnum = pgEnum('feedback_rating', ['up', 'down'])
+export const feedbackReasonEnum = pgEnum('feedback_reason', [
+  'wrong_answer',
+  'fabricated',
+  'missing_knowledge',
+  'wrong_tone_or_language',
+  'should_have_handed_off',
+])
+export const feedbackTargetEnum = pgEnum('feedback_target', ['message', 'suggestion'])
 
 // ---------------------------------------------------------------------------
 // Workspace (1:1 extension of Better Auth's organization)
@@ -248,6 +266,18 @@ export const conversations = pgTable(
     lastMessageAt: ts('last_message_at'),
     lastCustomerMessageAt: ts('last_customer_message_at'),
     waitingHumanSince: ts('waiting_human_since'),
+    /**
+     * When a person last looked over what the AI said here, and who.
+     *
+     * Written with the database's `now()`, never a Date from the application: it is
+     * compared against `messages.created_at`, which `defaultNow()` writes on the database
+     * clock, and two clocks a few hundred milliseconds apart would let a conversation
+     * re-enter the review queue or slip out of it.
+     */
+    reviewedAt: ts('reviewed_at'),
+    reviewedByUserId: text('reviewed_by_user_id').references(() => user.id, {
+      onDelete: 'set null',
+    }),
     unreadCount: integer('unread_count').default(0).notNull(),
     createdAt: ts('created_at').defaultNow().notNull(),
     updatedAt: ts('updated_at').defaultNow().notNull(),
@@ -257,6 +287,7 @@ export const conversations = pgTable(
     index('conversations_workspace_mode_idx').on(t.workspaceId, t.mode),
     index('conversations_identity_idx').on(t.channelIdentityId),
     index('conversations_customer_idx').on(t.customerId),
+    index('conversations_workspace_reviewed_idx').on(t.workspaceId, t.reviewedAt),
   ],
 )
 
@@ -290,6 +321,8 @@ export const messages = pgTable(
   },
   (t) => [
     index('messages_conversation_idx').on(t.conversationId, t.createdAt),
+    /** The review queue asks "is there an AI message here, and a human one?" per conversation. */
+    index('messages_conversation_sender_idx').on(t.conversationId, t.senderType, t.createdAt),
     index('messages_workspace_idx').on(t.workspaceId),
     // Postgres treats NULLs as distinct in a unique index, which is exactly what we want:
     // outbound messages have no platform id until the adapter sends them, so many rows
@@ -441,9 +474,60 @@ export const suggestions = pgTable(
     chunks: jsonb('chunks').$type<unknown>().default([]).notNull(),
     aiTraceId: text('ai_trace_id').references(() => aiTraces.id, { onDelete: 'set null' }),
     status: suggestionStatusEnum('status').notNull().default('pending'),
+    /**
+     * The message this draft became, once a human sent it.
+     *
+     * It is what makes the draft worth studying: comparing this message's text with
+     * `messageText` says whether the agent trusted the draft or rewrote it, which is the
+     * implicit correction signal. Set whether the agent used "insert and send" or inserted
+     * the draft, edited it and sent it themselves.
+     */
+    sentMessageId: text('sent_message_id').references(() => messages.id, {
+      onDelete: 'set null',
+    }),
     createdAt: ts('created_at').defaultNow().notNull(),
   },
   (t) => [index('suggestions_conversation_idx').on(t.conversationId, t.createdAt)],
+)
+
+/**
+ * What a person thought of something the AI wrote.
+ *
+ * `targetId` points at either a message or a suggestion and carries no foreign key, the
+ * same compromise `messages.ai_trace_id` makes: one column cannot reference two tables.
+ * Nothing is orphaned by it, because feedback hangs off the conversation and dies with it,
+ * and deleting a conversation is how both retention and erasure work.
+ *
+ * One row per person per target. An agent who changes their mind updates their own row,
+ * and the unique index is what makes that an upsert rather than a second opinion.
+ */
+export const feedback = pgTable(
+  'feedback',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    targetType: feedbackTargetEnum('target_type').notNull(),
+    targetId: text('target_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    rating: feedbackRatingEnum('rating').notNull(),
+    /** Only ever set on a thumbs-down; forced to null on a thumbs-up. */
+    reason: feedbackReasonEnum('reason'),
+    note: text('note'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+    updatedAt: ts('updated_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('feedback_target_user_uq').on(t.targetType, t.targetId, t.userId),
+    index('feedback_workspace_idx').on(t.workspaceId, t.createdAt),
+    index('feedback_conversation_idx').on(t.conversationId),
+  ],
 )
 
 export const auditLog = pgTable(
@@ -469,6 +553,9 @@ export type {
   ChannelEventKind,
   ConversationMode,
   ConversationStatus,
+  FeedbackRating,
+  FeedbackReason,
+  FeedbackTargetType,
   HandoffReason,
   Language,
   MessageDirection,

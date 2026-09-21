@@ -1,14 +1,25 @@
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import {
+  countReviewQueue,
   createEffectPorts,
+  deleteFeedback,
+  inReviewQueue,
+  isInReviewQueue,
+  listFeedback,
   loadWorkspaceSettings,
+  markReviewed,
+  markSuggestionSent,
   storeMessage,
   updateConversation,
+  upsertFeedback,
 } from '@ci/infra'
 import {
   conversationModeSchema,
   conversationStatusSchema,
+  feedbackRatingSchema,
+  feedbackReasonSchema,
+  feedbackTargetTypeSchema,
   normalizedMessageSchema,
 } from '@ci/shared'
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
@@ -92,6 +103,7 @@ export function conversationRoutes(ctx: ApiContext) {
             filters.push(eq(schema.conversations.assigneeUserId, query.assigneeUserId))
           }
           if (query.tag) filters.push(sql`${query.tag} = ANY(${schema.conversations.tags})`)
+          if (query.review) filters.push(inReviewQueue())
           if (query.before)
             filters.push(lt(schema.conversations.lastMessageAt, new Date(query.before)))
 
@@ -161,10 +173,26 @@ export function conversationRoutes(ctx: ApiContext) {
             channelId: z.string().optional(),
             assigneeUserId: z.string().optional(),
             tag: z.string().optional(),
+            /**
+             * Only conversations nobody has reviewed. A literal rather than a coerced
+             * boolean: `z.coerce.boolean()` reads the string 'false' as true, so
+             * `?review=false` would turn the filter on.
+             */
+            review: z.literal('true').optional(),
             before: z.string().optional(),
             limit: z.coerce.number().int().min(1).max(100).optional(),
           }),
         },
+      )
+
+      /**
+       * The badge on the review tab. Declared before `/:id` so the static segment is never
+       * read as a conversation id, whatever the router's matching order happens to be.
+       */
+      .get(
+        '/review-count',
+        async ({ workspaceId }) => ({ count: await countReviewQueue(db, workspaceId) }),
+        { auth: 'viewer' },
       )
 
       .get(
@@ -173,40 +201,43 @@ export function conversationRoutes(ctx: ApiContext) {
           const loaded = await loadState(workspaceId, params.id)
           if (!loaded) return status(404, { error: 'Conversation not found' })
 
-          const [messages, notes, suggestions, customerRows, identityRows] = await Promise.all([
-            db
-              .select()
-              .from(schema.messages)
-              .where(eq(schema.messages.conversationId, params.id))
-              .orderBy(schema.messages.createdAt)
-              .limit(200),
-            db
-              .select()
-              .from(schema.internalNotes)
-              .where(eq(schema.internalNotes.conversationId, params.id))
-              .orderBy(schema.internalNotes.createdAt),
-            db
-              .select()
-              .from(schema.suggestions)
-              .where(
-                and(
-                  eq(schema.suggestions.conversationId, params.id),
-                  eq(schema.suggestions.status, 'pending'),
-                ),
-              )
-              .orderBy(desc(schema.suggestions.createdAt))
-              .limit(5),
-            db
-              .select()
-              .from(schema.customers)
-              .where(eq(schema.customers.id, loaded.row.customerId))
-              .limit(1),
-            db
-              .select()
-              .from(schema.channelIdentities)
-              .where(eq(schema.channelIdentities.id, loaded.row.channelIdentityId))
-              .limit(1),
-          ])
+          const [messages, notes, suggestions, customerRows, identityRows, feedback, needsReview] =
+            await Promise.all([
+              db
+                .select()
+                .from(schema.messages)
+                .where(eq(schema.messages.conversationId, params.id))
+                .orderBy(schema.messages.createdAt)
+                .limit(200),
+              db
+                .select()
+                .from(schema.internalNotes)
+                .where(eq(schema.internalNotes.conversationId, params.id))
+                .orderBy(schema.internalNotes.createdAt),
+              db
+                .select()
+                .from(schema.suggestions)
+                .where(
+                  and(
+                    eq(schema.suggestions.conversationId, params.id),
+                    eq(schema.suggestions.status, 'pending'),
+                  ),
+                )
+                .orderBy(desc(schema.suggestions.createdAt))
+                .limit(5),
+              db
+                .select()
+                .from(schema.customers)
+                .where(eq(schema.customers.id, loaded.row.customerId))
+                .limit(1),
+              db
+                .select()
+                .from(schema.channelIdentities)
+                .where(eq(schema.channelIdentities.id, loaded.row.channelIdentityId))
+                .limit(1),
+              listFeedback(db, workspaceId, params.id),
+              isInReviewQueue(db, workspaceId, params.id),
+            ])
 
           await db
             .update(schema.conversations)
@@ -220,6 +251,8 @@ export function conversationRoutes(ctx: ApiContext) {
             messages,
             notes,
             suggestions,
+            feedback,
+            inReviewQueue: needsReview,
           }
         },
         { auth: 'viewer', params: z.object({ id: z.string() }) },
@@ -263,10 +296,7 @@ export function conversationRoutes(ctx: ApiContext) {
           })
 
           if (body.suggestionId) {
-            await db
-              .update(schema.suggestions)
-              .set({ status: 'sent' })
-              .where(eq(schema.suggestions.id, body.suggestionId))
+            await markSuggestionSent(db, workspaceId, params.id, body.suggestionId, stored.id)
           }
 
           return { messageId: stored.id }
@@ -428,6 +458,88 @@ export function conversationRoutes(ctx: ApiContext) {
           return { queued: true, customerId }
         },
         { auth: 'admin', params: z.object({ id: z.string() }) },
+      )
+
+      /** Someone has read what the AI said here. Takes it out of the review queue. */
+      .post(
+        '/:id/review',
+        async ({ workspaceId, params, user, status }) => {
+          const reviewedAt = await markReviewed(db, workspaceId, params.id, user.id)
+          if (!reviewedAt) return status(404, { error: 'Conversation not found' })
+
+          await runtime.publisher.publish(workspaceId, {
+            type: 'conversation.updated',
+            conversationId: params.id,
+          })
+          return { reviewedAt: reviewedAt.toISOString() }
+        },
+        { auth: 'agent', params: z.object({ id: z.string() }) },
+      )
+
+      /**
+       * Rate a reply the AI sent, or a draft it offered.
+       *
+       * Rating something counts as having looked at it, so this reviews the conversation
+       * too: an agent who has just told us an answer was wrong should not also have to
+       * tell us they read it.
+       */
+      .post(
+        '/:id/feedback',
+        async ({ workspaceId, params, body, user, status }) => {
+          const row = await upsertFeedback(db, {
+            workspaceId,
+            conversationId: params.id,
+            targetType: body.targetType,
+            targetId: body.targetId,
+            userId: user.id,
+            rating: body.rating,
+            reason: body.reason ?? null,
+            note: body.note ?? null,
+          })
+          if (!row) return status(404, { error: 'Nothing here to give feedback on' })
+
+          await markReviewed(db, workspaceId, params.id, user.id)
+          await runtime.publisher.publish(workspaceId, {
+            type: 'conversation.updated',
+            conversationId: params.id,
+          })
+          return { feedback: row }
+        },
+        {
+          auth: 'agent',
+          params: z.object({ id: z.string() }),
+          body: z.object({
+            targetType: feedbackTargetTypeSchema,
+            targetId: z.string(),
+            rating: feedbackRatingSchema,
+            reason: feedbackReasonSchema.nullish(),
+            note: z.string().max(1000).nullish(),
+          }),
+        },
+      )
+
+      /**
+       * Withdraw one's own rating. Reviewing is not undone by it: the conversation was
+       * still read, and putting it back in the queue for a changed mind would be noise.
+       */
+      .delete(
+        '/:id/feedback/:feedbackId',
+        async ({ workspaceId, params, user, status }) => {
+          const removed = await deleteFeedback(db, {
+            workspaceId,
+            conversationId: params.id,
+            feedbackId: params.feedbackId,
+            userId: user.id,
+          })
+          if (!removed) return status(404, { error: 'Feedback not found' })
+
+          await runtime.publisher.publish(workspaceId, {
+            type: 'conversation.updated',
+            conversationId: params.id,
+          })
+          return { ok: true }
+        },
+        { auth: 'agent', params: z.object({ id: z.string(), feedbackId: z.string() }) },
       )
 
       .post(

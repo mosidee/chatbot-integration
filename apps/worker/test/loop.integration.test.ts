@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { signBodyBase64 } from '@ci/channels'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
-import { schema } from '@ci/db'
+import { newId, schema } from '@ci/db'
 import {
   applyReceipt,
   conversationForReceipt,
+  countReviewQueue,
   createEffectPorts,
   createEntry,
   createSource,
@@ -12,10 +13,13 @@ import {
   indexEntry,
   ingestWebhook,
   loadWorkspaceSettings,
+  markReviewed,
+  markSuggestionSent,
   runRetention,
   storeMessage,
   toWebhookRequest,
   updateConversation,
+  upsertFeedback,
   waitingHumanJobId,
 } from '@ci/infra'
 import { asc, desc, eq } from 'drizzle-orm'
@@ -1312,5 +1316,187 @@ describe('LINE reply tokens', () => {
     // Left in place rather than cleared: it was never presented, and it is already useless.
     const after = await lineConversation(f)
     expect(after.replyToken).toBe('reply-token-stale')
+  })
+})
+
+/**
+ * The review queue, driven by the real loop.
+ *
+ * The infra tests prove the predicate against hand-written rows. These prove the rows the
+ * product actually writes land on the right side of it: an AI that answered alone is
+ * queued, a conversation a person touched never is, and reviewing is only good until the
+ * AI speaks again.
+ */
+describe('the review queue', () => {
+  test('an AI answer with nobody watching is queued, and reviewing clears it', async () => {
+    const provider = mock([{ kind: 'text', text: 'คำตอบแรกค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'คำถามแรก')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    expect(await countReviewQueue(f.runtime.db, f.workspaceId)).toBe(1)
+
+    const reviewedAt = await markReviewed(f.runtime.db, f.workspaceId, conversation.id, f.userId)
+    expect(reviewedAt).not.toBeNull()
+    expect(await countReviewQueue(f.runtime.db, f.workspaceId)).toBe(0)
+  })
+
+  test('rating the AI’s reply is itself a review', async () => {
+    const provider = mock([{ kind: 'text', text: 'คำตอบที่ผิดค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'คำถาม')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    const aiMessage = (await messagesOf(f, conversation.id)).find((m) => m.senderType === 'ai')
+
+    const row = await upsertFeedback(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      targetType: 'message',
+      targetId: aiMessage?.id ?? '',
+      userId: f.userId,
+      rating: 'down',
+      reason: 'missing_knowledge',
+    })
+    expect(row).not.toBeNull()
+
+    await markReviewed(f.runtime.db, f.workspaceId, conversation.id, f.userId)
+    expect(await countReviewQueue(f.runtime.db, f.workspaceId)).toBe(0)
+  })
+
+  test('the AI answering again after a review puts it back', async () => {
+    const provider = mock([
+      { kind: 'text', text: 'คำตอบแรกค่ะ' },
+      { kind: 'text', text: 'คำตอบที่สองค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'คำถามแรก')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    await markReviewed(f.runtime.db, f.workspaceId, conversation.id, f.userId)
+    expect(await countReviewQueue(f.runtime.db, f.workspaceId)).toBe(0)
+
+    await customerSays(f, 'คำถามที่สอง', { eventId: 'evt-second' })
+    await runQueuedWork(f)
+
+    expect(await countReviewQueue(f.runtime.db, f.workspaceId)).toBe(1)
+  })
+
+  test('a conversation a person answered in is never queued', async () => {
+    const provider = mock([{ kind: 'text', text: 'คำตอบค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'คำถาม')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+    const settings = await loadWorkspaceSettings(f.runtime.db, f.workspaceId)
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'outbound',
+      senderType: 'human',
+      senderUserId: f.userId,
+      message: { kind: 'text', text: 'ขอโทษค่ะ เดี๋ยวช่วยดูให้' },
+      status: 'sent',
+      redaction: settings.redaction,
+    })
+
+    expect(await countReviewQueue(f.runtime.db, f.workspaceId)).toBe(0)
+  })
+
+  test('a draft an agent sent is linked to the message it became', async () => {
+    const provider = mock([
+      { kind: 'text', text: 'ข้อความแรก' },
+      { kind: 'text', text: 'ร่างคำตอบ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'คำถามแรก')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+    await customerSays(f, 'คำถามที่สอง', { eventId: 'evt-draft' })
+    await runQueuedWork(f)
+
+    const suggestions = await f.runtime.db
+      .select()
+      .from(schema.suggestions)
+      .where(eq(schema.suggestions.conversationId, conversation.id))
+    const suggestion = suggestions[0]
+    expect(suggestion).toBeDefined()
+
+    // The agent edited the draft before sending it, which is the interesting case.
+    const settings = await loadWorkspaceSettings(f.runtime.db, f.workspaceId)
+    const sent = await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'outbound',
+      senderType: 'human',
+      senderUserId: f.userId,
+      message: { kind: 'text', text: `${suggestion?.messageText ?? ''} เพิ่มเติมนิดหนึ่งค่ะ` },
+      status: 'sent',
+      redaction: settings.redaction,
+    })
+
+    expect(
+      await markSuggestionSent(
+        f.runtime.db,
+        f.workspaceId,
+        conversation.id,
+        suggestion?.id ?? '',
+        sent.id,
+      ),
+    ).toBe(true)
+
+    const [after] = await f.runtime.db
+      .select()
+      .from(schema.suggestions)
+      .where(eq(schema.suggestions.id, suggestion?.id ?? ''))
+    expect(after?.status).toBe('sent')
+    expect(after?.sentMessageId).toBe(sent.id)
+    // Comparing the two texts is what says the agent rewrote it; no column records that.
+    expect(after?.messageText).not.toBe(sent.text)
+  })
+
+  test('another workspace cannot mark this one’s draft sent', async () => {
+    const provider = mock([{ kind: 'text', text: 'คำตอบค่ะ' }])
+    const mine = await fixture({ providerBaseUrl: provider.url })
+    const theirs = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(mine, 'คำถาม')
+    await runQueuedWork(mine)
+    const conversation = await onlyConversation(mine)
+    const suggestionId = newId()
+    await mine.runtime.db.insert(schema.suggestions).values({
+      id: suggestionId,
+      workspaceId: mine.workspaceId,
+      conversationId: conversation.id,
+      messageText: 'a draft',
+    })
+
+    expect(
+      await markSuggestionSent(
+        theirs.runtime.db,
+        theirs.workspaceId,
+        conversation.id,
+        suggestionId,
+        newId(),
+      ),
+    ).toBe(false)
   })
 })

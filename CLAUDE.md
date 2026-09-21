@@ -177,6 +177,13 @@ without spending money.
   rest cannot be reached. Its arrow is also hidden until hover. Where every option must be
   visible, as in the model field, use a `<select>` and give it an entry that switches to
   free text for values the list does not carry.
+- `conversations.reviewed_at` is set with the database's `now()`, never a Date from the API
+  process. It is compared against `messages.created_at`, which `defaultNow()` writes on the
+  database clock, and two clocks a second apart would either mark AI replies reviewed before
+  they were written or leave a conversation stuck in the review queue.
+- A popover inside the message thread is clipped by its scroll container, so its bounding box
+  can extend over the header and the click lands on the header instead. Panels that open from
+  a bubble go in the normal flow and let the thread grow.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 
