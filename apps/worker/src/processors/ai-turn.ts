@@ -22,6 +22,7 @@ import {
   recordTrace,
   resolveExternalRetrieval,
   storeMessage,
+  suggestMergesFor,
   updateConversation,
   usableSlot,
   workspaceHasKnowledge,
@@ -140,12 +141,23 @@ export async function processAiTurn(
 
   const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)
 
-  await mergeCustomerFields(
+  const changedFields = await mergeCustomerFields(
     db,
     job.workspaceId,
     conversation.customerId,
     result.customerFieldUpdates,
   )
+  // A newly learned phone or account id may be one we already hold under another name.
+  // This only proposes; joining the two records is a person's decision, never ours.
+  const proposed = await suggestMergesFor(
+    db,
+    job.workspaceId,
+    conversation.customerId,
+    changedFields,
+  )
+  if (proposed > 0) {
+    logger.info('merge suggested', { customerId: conversation.customerId, proposed })
+  }
   await addConversationTags(db, job.workspaceId, job.conversationId, result.tagsToAdd)
 
   if (result.handoff) {

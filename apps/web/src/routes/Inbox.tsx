@@ -11,6 +11,7 @@ import { DeliveryTicks } from '../components/DeliveryTicks'
 import { EraseCustomer } from '../components/EraseCustomer'
 import { FeedbackControls } from '../components/FeedbackControls'
 import { Lightbox } from '../components/Lightbox'
+import { MergeSuggestions } from '../components/MergeSuggestions'
 import {
   Button,
   cn,
@@ -786,18 +787,35 @@ function AiSidebar({
               <dd className="truncate">{value}</dd>
             </div>
           ))}
-          {detail.identity ? (
-            <div className="flex gap-2">
-              <dt className="text-[var(--text-muted)]">id</dt>
-              <dd className="truncate font-mono text-[11px]">{detail.identity.externalId}</dd>
-            </div>
-          ) : null}
         </dl>
+        {/* Every channel this person is known on. After a merge, two lines appear here,
+            which is the only visible proof that the two records became one. */}
+        {detail.identities.length > 0 ? (
+          <div className="mt-2">
+            <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+              {t('sidebar.identities')}
+            </p>
+            <ul data-testid="customer-identities">
+              {detail.identities.map((identity) => (
+                <li
+                  key={identity.id}
+                  className="truncate font-mono text-[11px] text-[var(--text-muted)]"
+                >
+                  {identity.externalId}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {detail.customer?.summary ? (
           <p className="mt-2 text-[13px] text-[var(--text-muted)]">{detail.customer.summary}</p>
         ) : null}
         <EraseCustomer conversationId={detail.conversation.id} onErased={onErased} />
       </section>
+
+      {detail.customer ? (
+        <MergeSuggestions customerId={detail.customer.id} canWrite={canWrite} onMerged={onErased} />
+      ) : null}
 
       <section>
         <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">

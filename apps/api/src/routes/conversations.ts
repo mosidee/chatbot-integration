@@ -201,43 +201,67 @@ export function conversationRoutes(ctx: ApiContext) {
           const loaded = await loadState(workspaceId, params.id)
           if (!loaded) return status(404, { error: 'Conversation not found' })
 
-          const [messages, notes, suggestions, customerRows, identityRows, feedback, needsReview] =
-            await Promise.all([
-              db
-                .select()
-                .from(schema.messages)
-                .where(eq(schema.messages.conversationId, params.id))
-                .orderBy(schema.messages.createdAt)
-                .limit(200),
-              db
-                .select()
-                .from(schema.internalNotes)
-                .where(eq(schema.internalNotes.conversationId, params.id))
-                .orderBy(schema.internalNotes.createdAt),
-              db
-                .select()
-                .from(schema.suggestions)
-                .where(
-                  and(
-                    eq(schema.suggestions.conversationId, params.id),
-                    eq(schema.suggestions.status, 'pending'),
-                  ),
-                )
-                .orderBy(desc(schema.suggestions.createdAt))
-                .limit(5),
-              db
-                .select()
-                .from(schema.customers)
-                .where(eq(schema.customers.id, loaded.row.customerId))
-                .limit(1),
-              db
-                .select()
-                .from(schema.channelIdentities)
-                .where(eq(schema.channelIdentities.id, loaded.row.channelIdentityId))
-                .limit(1),
-              listFeedback(db, workspaceId, params.id),
-              isInReviewQueue(db, workspaceId, params.id),
-            ])
+          const [
+            messages,
+            notes,
+            suggestions,
+            customerRows,
+            identityRows,
+            feedback,
+            needsReview,
+            allIdentities,
+          ] = await Promise.all([
+            db
+              .select()
+              .from(schema.messages)
+              .where(eq(schema.messages.conversationId, params.id))
+              .orderBy(schema.messages.createdAt)
+              .limit(200),
+            db
+              .select()
+              .from(schema.internalNotes)
+              .where(eq(schema.internalNotes.conversationId, params.id))
+              .orderBy(schema.internalNotes.createdAt),
+            db
+              .select()
+              .from(schema.suggestions)
+              .where(
+                and(
+                  eq(schema.suggestions.conversationId, params.id),
+                  eq(schema.suggestions.status, 'pending'),
+                ),
+              )
+              .orderBy(desc(schema.suggestions.createdAt))
+              .limit(5),
+            db
+              .select()
+              .from(schema.customers)
+              .where(eq(schema.customers.id, loaded.row.customerId))
+              .limit(1),
+            db
+              .select()
+              .from(schema.channelIdentities)
+              .where(eq(schema.channelIdentities.id, loaded.row.channelIdentityId))
+              .limit(1),
+            listFeedback(db, workspaceId, params.id),
+            isInReviewQueue(db, workspaceId, params.id),
+            // Every channel this person is known on, not only the one they are writing
+            // from. After two records are merged, this is where that becomes visible.
+            db
+              .select({
+                id: schema.channelIdentities.id,
+                channelId: schema.channelIdentities.channelId,
+                externalId: schema.channelIdentities.externalId,
+                displayName: schema.channelIdentities.displayName,
+              })
+              .from(schema.channelIdentities)
+              .where(
+                and(
+                  eq(schema.channelIdentities.workspaceId, workspaceId),
+                  eq(schema.channelIdentities.customerId, loaded.row.customerId),
+                ),
+              ),
+          ])
 
           await db
             .update(schema.conversations)
@@ -253,6 +277,7 @@ export function conversationRoutes(ctx: ApiContext) {
             suggestions,
             feedback,
             inReviewQueue: needsReview,
+            identities: allIdentities,
           }
         },
         { auth: 'viewer', params: z.object({ id: z.string() }) },

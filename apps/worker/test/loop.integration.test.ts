@@ -3,8 +3,10 @@ import { signBodyBase64 } from '@ci/channels'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import {
+  acceptMergeSuggestion,
   applyReceipt,
   conversationForReceipt,
+  countPendingMerges,
   countReviewQueue,
   createEffectPorts,
   createEntry,
@@ -12,6 +14,7 @@ import {
   eraseCustomer,
   indexEntry,
   ingestWebhook,
+  listMergeSuggestions,
   loadWorkspaceSettings,
   markReviewed,
   markSuggestionSent,
@@ -1498,5 +1501,122 @@ describe('the review queue', () => {
         newId(),
       ),
     ).toBe(false)
+  })
+})
+
+/**
+ * Merge suggestions arising from the real loop.
+ *
+ * The infra tests prove the matching and the merge itself against hand-written rows. These
+ * prove the part only the running product can show: that a customer volunteering their
+ * phone number on a second channel is noticed, proposed, and never acted on by itself.
+ */
+describe('merge suggestions', () => {
+  /**
+   * A reply script for two turns, each recording a phone number.
+   *
+   * Each turn costs the mock two replies: the tool call, then the answer written once the
+   * tool has returned. The server repeats its last reply forever, so a script that is too
+   * short silently turns the second turn into a plain answer that records nothing.
+   */
+  const givesPhones = (first: string, second: string): Parameters<typeof mock>[0] => [
+    {
+      kind: 'tool_calls',
+      toolCalls: [{ name: 'set_customer_field', arguments: { key: 'phone', value: first } }],
+    },
+    { kind: 'text', text: 'รับทราบค่ะ' },
+    {
+      kind: 'tool_calls',
+      toolCalls: [{ name: 'set_customer_field', arguments: { key: 'phone', value: second } }],
+    },
+    { kind: 'text', text: 'รับทราบค่ะ' },
+  ]
+
+  test('the same number from two identities is proposed, not merged', async () => {
+    // Written two ways on two channels, as the same person naturally would.
+    const provider = mock(givesPhones('081-234-5678', '+66812345678'))
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'เบอร์ผมคือ 081-234-5678', { externalId: 'person-line' })
+    await runQueuedWork(f)
+
+    await customerSays(f, 'เบอร์เดิมนะคะ +66812345678', {
+      externalId: 'person-widget',
+      eventId: 'evt-second-channel',
+    })
+    await runQueuedWork(f)
+
+    const customers = await f.runtime.db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.workspaceId, f.workspaceId))
+    // Still two people as far as the database is concerned. Nothing merged itself.
+    expect(customers).toHaveLength(2)
+
+    expect(await countPendingMerges(f.runtime.db, f.workspaceId)).toBe(1)
+  })
+
+  test('accepting one joins the two histories under the older record', async () => {
+    const provider = mock(givesPhones('0812345678', '0812345678'))
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'เบอร์ 0812345678', { externalId: 'person-line' })
+    await runQueuedWork(f)
+    await customerSays(f, 'เบอร์ 0812345678', {
+      externalId: 'person-widget',
+      eventId: 'evt-other',
+    })
+    await runQueuedWork(f)
+
+    const before = await f.runtime.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    expect(before).toHaveLength(2)
+
+    const customers = await f.runtime.db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.workspaceId, f.workspaceId))
+    const older = customers.map((c) => c.id).sort()[0] ?? ''
+    const [suggestion] = await listMergeSuggestions(f.runtime.db, f.workspaceId, older)
+    expect(suggestion).toBeDefined()
+
+    const merged = await acceptMergeSuggestion(
+      f.runtime.db,
+      f.workspaceId,
+      suggestion?.id ?? '',
+      f.userId,
+    )
+    expect(merged?.survivorId).toBe(older)
+
+    // Both conversations survive, now belonging to one person on two channels.
+    const after = await f.runtime.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.customerId, older))
+    expect(after).toHaveLength(2)
+
+    const identities = await f.runtime.db
+      .select({ id: schema.channelIdentities.id })
+      .from(schema.channelIdentities)
+      .where(eq(schema.channelIdentities.customerId, older))
+    expect(identities).toHaveLength(2)
+  })
+
+  test('repeating a number we already hold proposes nothing new', async () => {
+    const provider = mock(givesPhones('0812345678', '0812345678'))
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'เบอร์ 0812345678', { externalId: 'person-line' })
+    await runQueuedWork(f)
+    // The same identity, so the same customer: nothing to merge with.
+    await customerSays(f, 'เบอร์เดิม 0812345678', {
+      externalId: 'person-line',
+      eventId: 'evt-again',
+    })
+    await runQueuedWork(f)
+
+    expect(await countPendingMerges(f.runtime.db, f.workspaceId)).toBe(0)
   })
 })

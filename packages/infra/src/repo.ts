@@ -449,25 +449,37 @@ export async function enrichIdentityProfile(
   }
 }
 
+/**
+ * Record identifiers the customer has given, and report which ones actually changed.
+ *
+ * The caller needs that list because a changed identifier is what can make this customer
+ * look like one we already know. Re-hearing a phone number we already had is not news, and
+ * scanning for a twin on every turn that merely repeats it would be work for nothing.
+ */
 export async function mergeCustomerFields(
   db: Database,
   workspaceId: string,
   customerId: string,
   updates: Record<string, string>,
-): Promise<void> {
-  if (Object.keys(updates).length === 0) return
+): Promise<string[]> {
+  if (Object.keys(updates).length === 0) return []
   const rows = await db
     .select()
     .from(schema.customers)
     .where(and(eq(schema.customers.id, customerId), eq(schema.customers.workspaceId, workspaceId)))
     .limit(1)
   const current = rows[0]
-  if (!current) return
+  if (!current) return []
+
+  const changed = Object.keys(updates).filter((key) => current.fields[key] !== updates[key])
+  if (changed.length === 0) return []
 
   await db
     .update(schema.customers)
     .set({ fields: { ...current.fields, ...updates }, updatedAt: new Date() })
     .where(eq(schema.customers.id, customerId))
+
+  return changed
 }
 
 export async function addConversationTags(
