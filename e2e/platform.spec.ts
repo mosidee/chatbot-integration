@@ -49,7 +49,11 @@ test.describe('the platform page', () => {
       timeout: 15_000,
     })
 
-    // Delete: the button stays disabled until the slug is typed exactly.
+    // Delete sits behind one click, so the most destructive control on the installation is
+    // not part of the furniture on every row.
+    await page.getByTestId(`tenant-delete-reveal-${slug}`).click()
+
+    // And then the button stays disabled until the slug is typed exactly.
     const deleteButton = page.getByTestId(`tenant-delete-${slug}`)
     await expect(deleteButton).toBeDisabled()
     await page.getByTestId(`tenant-delete-slug-${slug}`).fill(slug.slice(0, -1))

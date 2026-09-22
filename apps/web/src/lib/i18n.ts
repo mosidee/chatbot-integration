@@ -25,6 +25,8 @@ const th = {
     password: 'รหัสผ่าน',
     signIn: 'เข้าสู่ระบบ',
     failed: 'เข้าสู่ระบบไม่สำเร็จ',
+    unreachable: 'ติดต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง',
+    forgotHint: 'ลืมรหัสผ่าน? ขอลิงก์ตั้งรหัสใหม่จากผู้ดูแลพื้นที่ทำงานของคุณ',
   },
   dashboard: {
     title: 'ภาพรวม',
@@ -247,6 +249,18 @@ const th = {
     workspace: 'พื้นที่ทำงาน',
     providers: 'ผู้ให้บริการ AI',
     taskSlots: 'รุ่นที่ใช้ในแต่ละงาน',
+    tasks: {
+      agent_chat: { label: 'ตอบลูกค้า', purpose: 'ใช้ตอบทุกข้อความ ถ้าไม่ตั้งค่า AI จะส่งต่อให้คนทันที' },
+      vision: { label: 'อ่านรูปภาพ', purpose: 'อธิบายรูปที่ลูกค้าส่งมา ถ้าไม่ตั้งค่าจะส่งต่อให้คน' },
+      suggestion_for_human: { label: 'ร่างให้เจ้าหน้าที่', purpose: 'ร่างคำตอบในแถบข้างให้เจ้าหน้าที่เลือกใช้' },
+      summarize: { label: 'สรุปบทสนทนา', purpose: 'สรุปเมื่อปิดบทสนทนา เพื่อจำลูกค้าไว้ครั้งหน้า' },
+      classify_intent_and_handoff: {
+        label: 'จัดหมวดและตัดสินใจส่งต่อ',
+        purpose: 'ตั้งค่าได้ แต่ยังไม่มีส่วนใดเรียกใช้',
+      },
+      embed: { label: 'ค้นคลังความรู้', purpose: 'ถ้าไม่ตั้งค่า จะค้นได้เฉพาะตามคำเท่านั้น' },
+      rerank: { label: 'จัดอันดับผลค้นหา', purpose: 'ไม่บังคับ ช่วยให้เลือกความรู้ได้ตรงขึ้น' },
+    },
     channels: 'ช่องทาง',
     members: 'ผู้ใช้งาน',
     persona: 'บุคลิกและคำสั่งของ AI',
@@ -318,7 +332,10 @@ const th = {
     toolNameHint: 'ตัวพิมพ์เล็ก ตัวเลข และขีดล่าง เช่น check_plan',
     toolDescription: 'อธิบายให้ AI รู้ว่าใช้เมื่อไหร่',
     toolUrl: 'URL',
-    toolUrlHint: 'ใส่ {{ชื่อ}} ในเส้นทางเพื่อแทนค่าอาร์กิวเมนต์หรือค่าที่ระบบผูกให้',
+    // The braces are the thing being explained, so they arrive as a value rather than
+    // being written into the sentence, where i18next would read them as its own and
+    // substitute an empty string for a variable nobody passed.
+    toolUrlHint: 'ใส่ {{placeholder}} ในเส้นทางเพื่อแทนค่าอาร์กิวเมนต์หรือค่าที่ระบบผูกให้',
     toolMethod: 'เมธอด',
     toolEffect: 'ชนิด',
     toolEffectRead: 'อ่านอย่างเดียว',
@@ -382,6 +399,7 @@ const th = {
     expires: 'หมดอายุ',
     invitedBy: 'เชิญโดย',
     self: 'คุณ',
+    demoteSelfConfirm: 'ลดสิทธิ์ของตัวเองใช่หรือไม่ คุณจะเข้าหน้านี้ไม่ได้อีกและต้องให้ผู้ดูแลคนอื่นคืนสิทธิ์ให้',
     noInvitations: 'ไม่มีคำเชิญที่รออยู่',
   },
   platform: {
@@ -416,6 +434,7 @@ const th = {
     name: 'ชื่อของคุณ',
     password: 'รหัสผ่าน',
     passwordHint: 'อย่างน้อย 8 ตัวอักษร',
+    needName: 'กรุณากรอกชื่อของคุณ',
     accept: 'เข้าร่วม',
     join: 'เข้าร่วมพื้นที่ทำงานนี้',
     signInFirst: 'บัญชีนี้มีอยู่แล้ว กรุณาเข้าสู่ระบบก่อนเพื่อรับคำเชิญ',
@@ -483,6 +502,8 @@ const en: typeof th = {
     password: 'Password',
     signIn: 'Sign in',
     failed: 'Sign in failed',
+    unreachable: 'Could not reach the server. Try again.',
+    forgotHint: 'Forgotten your password? Ask your workspace admin for a reset link.',
   },
   dashboard: {
     title: 'Overview',
@@ -705,6 +726,33 @@ const en: typeof th = {
     workspace: 'Workspace',
     providers: 'AI providers',
     taskSlots: 'Model per task',
+    tasks: {
+      agent_chat: {
+        label: 'Answering customers',
+        purpose: 'Every reply. Without it the AI hands off immediately.',
+      },
+      vision: {
+        label: 'Reading images',
+        purpose: 'Describes pictures customers send. Without it they go to a person.',
+      },
+      suggestion_for_human: {
+        label: 'Drafting for an agent',
+        purpose: 'The suggested reply in the sidebar.',
+      },
+      summarize: {
+        label: 'Summarising a conversation',
+        purpose: 'Runs on resolve, so the next conversation remembers this one.',
+      },
+      classify_intent_and_handoff: {
+        label: 'Classifying intent',
+        purpose: 'Configurable, and nothing reads it yet.',
+      },
+      embed: {
+        label: 'Searching the knowledge base',
+        purpose: 'Without it only word search is available.',
+      },
+      rerank: { label: 'Ranking search results', purpose: 'Optional. Sharpens what is found.' },
+    },
     channels: 'Channels',
     members: 'People',
     persona: 'AI persona and instructions',
@@ -778,7 +826,7 @@ const en: typeof th = {
     toolNameHint: 'Lowercase letters, digits and underscores, such as check_plan.',
     toolDescription: 'Tell the AI when to use it',
     toolUrl: 'URL',
-    toolUrlHint: 'Put {{name}} in the path to substitute an argument or a bound value.',
+    toolUrlHint: 'Put {{placeholder}} in the path to substitute an argument or a bound value.',
     toolMethod: 'Method',
     toolEffect: 'Kind',
     toolEffectRead: 'Reads only',
@@ -845,6 +893,8 @@ const en: typeof th = {
     expires: 'Expires',
     invitedBy: 'Invited by',
     self: 'You',
+    demoteSelfConfirm:
+      'Lower your own role? You will lose this page, and another admin has to give it back.',
     noInvitations: 'No invitations waiting',
   },
   platform: {
@@ -879,6 +929,7 @@ const en: typeof th = {
     name: 'Your name',
     password: 'Password',
     passwordHint: 'At least 8 characters',
+    needName: 'Your name is needed.',
     accept: 'Join',
     join: 'Join this workspace',
     signInFirst: 'That address already has an account. Sign in to accept the invitation.',

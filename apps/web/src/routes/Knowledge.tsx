@@ -105,10 +105,13 @@ function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: ()
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
+          aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className="min-w-0 flex-1 text-left"
         >
-          <span className="truncate text-sm font-medium">{source.title}</span>
+          {/* `block`, so truncation works at all: an inline span has no width to truncate
+              against, and a long PDF name wrapped across the row instead. */}
+          <span className="block truncate text-sm font-medium">{source.title}</span>
         </button>
         <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] uppercase text-[var(--text-muted)]">
           {source.kind}

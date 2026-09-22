@@ -2,8 +2,10 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
+  type Ref,
   type TextareaHTMLAttributes,
   useEffect,
+  useRef,
   useState,
 } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -38,9 +40,14 @@ export function Button({ variant = 'secondary', size = 'md', className, ...props
   return <button className={cn(base, sizes[size], variants[variant], className)} {...props} />
 }
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({
+  className,
+  ref,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   return (
     <input
+      ref={ref}
       className={cn(
         'h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-brand-500)] focus:outline-none',
         className,
@@ -335,12 +342,33 @@ export function CopyOnce({
   testId?: string
 }) {
   const [copied, setCopied] = useState(false)
+  const field = useRef<HTMLInputElement>(null)
+
+  /**
+   * Go to it, and select it.
+   *
+   * This renders at the top of its page while the form that produces it sits at the bottom
+   * of the last card. Somebody pressing Invite saw the email field empty and nothing else:
+   * the link — shown once, because only its hash is stored — was off screen above them.
+   */
+  useEffect(() => {
+    field.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    field.current?.select()
+  }, [])
 
   return (
     <div className="space-y-1.5 rounded-lg border border-[var(--color-brand-500)] bg-[var(--surface-muted)] p-2.5">
-      <p className="text-[12px] text-[var(--text-muted)]">{hint}</p>
+      <p role="status" className="text-[12px] text-[var(--text-muted)]">
+        {hint}
+      </p>
       <div className="flex items-center gap-2">
-        <Input readOnly value={value} data-testid={testId} className="font-mono text-[12px]" />
+        <Input
+          ref={field}
+          readOnly
+          value={value}
+          data-testid={testId}
+          className="font-mono text-[12px]"
+        />
         <Button
           size="sm"
           onClick={async () => {

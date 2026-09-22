@@ -421,23 +421,32 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
         </div>
       ))}
 
+      {/* Labels, not placeholders. A placeholder disappears the moment somebody types, so
+          the field stops saying what it is exactly when the answer matters. */}
       <div className="grid gap-2 sm:grid-cols-3">
-        <Input
-          placeholder={t('settings.name')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Input
-          placeholder={t('settings.baseUrl')}
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-        />
-        <Input
-          type="password"
-          placeholder={t('settings.apiKey')}
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
+        <div>
+          <Label htmlFor="provider-name">{t('settings.name')}</Label>
+          <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="provider-url">{t('settings.baseUrl')}</Label>
+          <Input
+            id="provider-url"
+            type="url"
+            placeholder="https://api.example.com/v1"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label htmlFor="provider-key">{t('settings.apiKey')}</Label>
+          <Input
+            id="provider-key"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </div>
       </div>
       {error ? <ErrorNote message={error} /> : null}
       <Button
@@ -492,7 +501,9 @@ function SlotTargetRow({
 
   return (
     <div className="mt-1.5">
-      <div className="flex min-w-0 items-center gap-1.5">
+      {/* Stacked on a phone. Two selects and a fixed-width button in one row left each
+          select about ninety pixels, so `gemini/gemini-3.8-flash` truncated to nothing. */}
+      <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center">
         <select
           className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
           data-testid={`${testId}-provider`}
@@ -592,7 +603,15 @@ function TaskSlotsCard({
         const slot = slots.find((s) => s.task === task)
         return (
           <div key={task} className="rounded-lg border border-[var(--border)] p-2.5">
-            <div className="mb-1.5 font-mono text-[12px] font-medium">{task}</div>
+            {/* The identifier was all there was, so a salon owner read `agent_chat` and
+                `classify_intent_and_handoff` with no way to tell which one answers
+                customers and which one nothing reads yet. */}
+            <div className="mb-1.5">
+              <div className="text-[13px] font-medium">{t(`settings.tasks.${task}.label`)}</div>
+              <div className="text-[11px] text-[var(--text-muted)]">
+                {t(`settings.tasks.${task}.purpose`)}
+              </div>
+            </div>
             <SlotTargetRow
               testId={`slot-${task}-primary`}
               task={task}
@@ -1261,7 +1280,9 @@ function ToolEditor({
             value={config.url}
             onChange={(e) => patchConfig({ url: e.target.value })}
           />
-          <p className="text-[11px] text-[var(--text-muted)]">{t('settings.toolUrlHint')}</p>
+          <p className="text-[11px] text-[var(--text-muted)]">
+            {t('settings.toolUrlHint', { placeholder: '{{name}}' })}
+          </p>
         </div>
       </div>
 
