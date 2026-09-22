@@ -50,10 +50,31 @@ describe('customer message routing', () => {
     expect(effects).toEqual([{ type: 'run_suggestion' }])
   })
 
-  test('a resolved conversation reopens when the customer writes again', () => {
-    const { patch } = transition(state({ mode: 'ai', status: 'resolved' }), {
+  /**
+   * Reopening happens before this point, in `resolveConversation`, which also puts the
+   * conversation back into the mode a new one would start in. It has to: a thread an agent
+   * resolved is left in `human`, where the AI may only suggest, so reopening without
+   * resetting the mode would leave the customer's new question waiting for somebody who
+   * already considers it finished.
+   *
+   * The rule lives in one place. This asserts that the state machine does not quietly hold
+   * a second, weaker copy of it, which is what it did until the repository started
+   * reopening: the patch was written, tested here, and could never run.
+   */
+  test('does not reopen by itself, because the repository already did', () => {
+    const { patch, effects } = transition(state({ mode: 'ai', status: 'resolved' }), {
       type: 'customer_message',
       at: AT,
+    })
+    expect(patch.status).toBeUndefined()
+    expect(types(effects)).toContain('run_ai_turn')
+  })
+
+  test('an agent writing into a resolved conversation does reopen it', () => {
+    const { patch } = transition(state({ mode: 'ai', status: 'resolved' }), {
+      type: 'human_message',
+      at: AT,
+      userId: 'u1',
     })
     expect(patch.status).toBe('open')
   })

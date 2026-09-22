@@ -30,7 +30,7 @@ import {
   upsertFeedback,
   waitingHumanJobId,
 } from '@ci/infra'
-import { asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import {
   type MockServer,
   startMockOpenAI,
@@ -2295,10 +2295,13 @@ describe('the verification link', () => {
 describe('the account owner', () => {
   /**
    * The owner is a default, not a label. Somebody who looks after a customer should find
-   * their next conversation already theirs rather than having to claim it, which is the
-   * whole difference between an assignment that means something and one that only sorts.
+   * their conversation already theirs rather than having to claim it.
+   *
+   * The path that matters is reopening, not creating: a conversation is now made only for
+   * an identity that has never written before, so a returning customer picks up an owner
+   * assigned since their last message when the thread starts again.
    */
-  test('is inherited by the next conversation that customer starts', async () => {
+  test('is put on the conversation when the customer comes back', async () => {
     const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
     const f = await fixture({ providerBaseUrl: server.url })
 
@@ -2309,9 +2312,11 @@ describe('the account owner', () => {
       .select({ id: schema.conversations.id, customerId: schema.conversations.customerId })
       .from(schema.conversations)
       .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    const conversationId = first[0]?.id ?? ''
     const customerId = first[0]?.customerId ?? ''
 
-    // Somebody takes the customer on, and the conversation they are in is left alone.
+    // Somebody takes the customer on. The conversation in flight is left alone, because
+    // reassigning an owner must not pull a thread from whoever is answering it.
     await f.runtime.db
       .update(schema.customers)
       .set({ assigneeUserId: f.userId })
@@ -2320,28 +2325,121 @@ describe('the account owner', () => {
     const untouched = await f.runtime.db
       .select({ assigneeUserId: schema.conversations.assigneeUserId })
       .from(schema.conversations)
-      .where(eq(schema.conversations.id, first[0]?.id ?? ''))
+      .where(eq(schema.conversations.id, conversationId))
     expect(untouched[0]?.assigneeUserId).toBeNull()
 
-    // Resolve it, so the next message opens a new conversation rather than reusing this one.
-    await f.runtime.db
-      .update(schema.conversations)
-      .set({ status: 'resolved' })
-      .where(eq(schema.conversations.id, first[0]?.id ?? ''))
-
+    // It is finished, and then they come back.
+    await updateConversation(f.runtime.db, f.workspaceId, conversationId, { status: 'resolved' })
     await customerSays(f, 'คำถามที่สอง', { externalId: 'owned-customer' })
 
-    const fresh = await f.runtime.db
+    const reopened = await f.runtime.db
       .select({
         id: schema.conversations.id,
+        status: schema.conversations.status,
         assigneeUserId: schema.conversations.assigneeUserId,
       })
       .from(schema.conversations)
       .where(eq(schema.conversations.customerId, customerId))
-      .orderBy(desc(schema.conversations.createdAt))
-      .limit(1)
 
-    expect(fresh[0]?.id).not.toBe(first[0]?.id)
-    expect(fresh[0]?.assigneeUserId).toBe(f.userId)
+    // Still one conversation, open again, and now the owner's.
+    expect(reopened).toHaveLength(1)
+    expect(reopened[0]?.id).toBe(conversationId)
+    expect(reopened[0]?.status).toBe('open')
+    expect(reopened[0]?.assigneeUserId).toBe(f.userId)
+  })
+})
+
+describe('a customer who comes back after being resolved', () => {
+  /**
+   * The customer sees one unbroken chat in LINE or Messenger. Splitting it at the moment a
+   * colleague decided they were finished gave the agent a fragment of what the customer was
+   * looking at, and the console filled with the same name several times over.
+   */
+  test('carries on in the same conversation rather than starting another', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await customerSays(f, 'คำถามแรก', { externalId: 'returning-customer' })
+    await runQueuedWork(f)
+
+    const before = await f.runtime.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    expect(before).toHaveLength(1)
+    const conversationId = before[0]?.id ?? ''
+
+    // An agent takes it, answers, and marks it finished.
+    await updateConversation(f.runtime.db, f.workspaceId, conversationId, {
+      mode: 'human',
+      status: 'resolved',
+      assigneeUserId: f.userId,
+      handoffReason: 'ai_requested',
+    })
+
+    await customerSays(f, 'ขอถามอีกเรื่องค่ะ', { externalId: 'returning-customer' })
+
+    const after = await f.runtime.db
+      .select({
+        id: schema.conversations.id,
+        status: schema.conversations.status,
+        mode: schema.conversations.mode,
+        handoffReason: schema.conversations.handoffReason,
+      })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+
+    expect(after).toHaveLength(1)
+    expect(after[0]?.id).toBe(conversationId)
+    expect(after[0]?.status).toBe('open')
+
+    /**
+     * Back in the mode a new conversation would have started in. Left in `human` the AI may
+     * only suggest, so the question would sit unanswered in front of an agent who had
+     * already closed it.
+     */
+    expect(after[0]?.mode).toBe('ai')
+    expect(after[0]?.handoffReason).toBeNull()
+
+    // And both questions are in the one thread, which is what the customer sees.
+    const texts = await f.runtime.db
+      .select({ text: schema.messages.text })
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversationId))
+    expect(texts.map((row) => row.text)).toContain('คำถามแรก')
+    expect(texts.map((row) => row.text)).toContain('ขอถามอีกเรื่องค่ะ')
+  })
+
+  test('and the AI answers it, rather than waiting for the agent who closed it', async () => {
+    const server = mock([{ kind: 'text', text: 'ยินดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await customerSays(f, 'คำถามแรก', { externalId: 'returning-again' })
+    await runQueuedWork(f)
+
+    const rows = await f.runtime.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    const conversationId = rows[0]?.id ?? ''
+
+    await updateConversation(f.runtime.db, f.workspaceId, conversationId, {
+      mode: 'human',
+      status: 'resolved',
+    })
+
+    await customerSays(f, 'สวัสดีอีกครั้ง', { externalId: 'returning-again' })
+    await runQueuedWork(f)
+
+    const ai = await f.runtime.db
+      .select({ id: schema.messages.id })
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, conversationId),
+          eq(schema.messages.senderType, 'ai'),
+        ),
+      )
+    expect(ai.length).toBeGreaterThan(1)
   })
 })

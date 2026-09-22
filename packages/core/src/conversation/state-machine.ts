@@ -218,14 +218,22 @@ function onCustomerMessage(
   event: Extract<ConversationEvent, { type: 'customer_message' }>,
   opts: TransitionOptions,
 ): TransitionResult {
-  const reopened: Partial<ConversationState> = state.status === 'resolved' ? { status: 'open' } : {}
+  /**
+   * A customer message never arrives at a resolved conversation.
+   *
+   * `resolveConversation` reopens one before the message is stored, because deciding what
+   * mode a conversation starts in is its job and beginning again is the same decision. This
+   * used to carry a `status: 'open'` patch of its own, which could not run and quietly said
+   * the opposite of what the repository did.
+   *
+   * An agent writing into a resolved conversation does reopen it; see `human_message`.
+   */
 
   switch (state.mode) {
     case 'ai': {
       if (event.isMedia && opts.handoffOnUnsupportedMedia) {
         return {
           patch: {
-            ...reopened,
             mode: 'waiting_human',
             handoffReason: 'unsupported_media',
             waitingHumanSince: event.at,
@@ -240,18 +248,18 @@ function onCustomerMessage(
           ],
         }
       }
-      return { patch: reopened, effects: [{ type: 'run_ai_turn', deliver: 'send' }] }
+      return { patch: {}, effects: [{ type: 'run_ai_turn', deliver: 'send' }] }
     }
 
     case 'ai_supervised':
-      return { patch: reopened, effects: [{ type: 'run_ai_turn', deliver: 'draft' }] }
+      return { patch: {}, effects: [{ type: 'run_ai_turn', deliver: 'draft' }] }
 
     case 'human':
       // The AI may only suggest here. This is the invariant the product depends on.
-      return { patch: reopened, effects: [{ type: 'run_suggestion' }] }
+      return { patch: {}, effects: [{ type: 'run_suggestion' }] }
 
     case 'waiting_human':
       // Already queued for a human: produce a suggestion so whoever picks it up has a head start.
-      return { patch: reopened, effects: [{ type: 'run_suggestion' }] }
+      return { patch: {}, effects: [{ type: 'run_suggestion' }] }
   }
 }
