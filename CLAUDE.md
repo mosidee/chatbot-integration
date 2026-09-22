@@ -49,6 +49,19 @@ no helper that adds it: put an explicit `eq(table.workspaceId, workspaceId)` in 
 WHERE, and add `workspace_id` to every new tenant-owned table. A lookup keyed by a row
 id alone is acceptable only when that id was itself loaded under a workspace check.
 
+**A workspace's status is checked wherever its work happens.** `active`, `suspended` or
+`deleting`, on the `workspaces` row. The authenticated path gets it free: `loadMemberships`
+joins it, so the role and the status are one query and cannot disagree. Queued jobs ask
+`workspaceIsWorkable` and drop with a log line rather than failing. Public paths each answer
+in the way their caller can cope with: webhooks acknowledge and discard, the widget says the
+workspace is suspended, and anything `deleting` reads as gone. A new processor or public
+route without this check is a way for a suspended tenant to keep working.
+
+**Authority over tenants is not a role.** A role lives inside one workspace. Creating,
+suspending and deleting tenants is a row in `platform_admins`, behind the `platform: true`
+guard, which resolves no workspace at all. Do not add an optional `workspaceId` to that
+path: an optional workspace in scope is the ambient tenant this codebase refuses to have.
+
 **Redact before you persist.** Card numbers and Thai national IDs are masked before anything
 reaches the database or a model. `storeMessage` does this; do not write message rows by hand.
 
@@ -234,6 +247,42 @@ without spending money.
 - A tool whose promise only the `send` path can keep must not be offered on the `draft`
   path. `request_identity_verification` was, so a supervised workspace could approve a
   draft saying a link had been sent when nothing would ever send it.
+- Better Auth's `setPassword` refuses an account that already has a password, which is every
+  account a reset link is ever issued for. Go through `auth.$context` and the internal
+  adapter — `password.hash`, `findCredentialAccount`, `updatePassword`, then
+  `deleteUserSessions` — which is what its own reset flow does.
+- The API holds a **second auth instance** (`ctx.authSignUp`) that allows sign-up, and it is
+  never mounted. `disableSignUp` is checked inside Better Auth's handler, per instance, so
+  this is what lets an invitation create an account while the public API stays invite-only.
+  Do not pass it to `authHandler`, and do not reach for it outside the accept route.
+- Spending an invitation and writing the membership share a transaction. Apart, a failure
+  between them leaves somebody with an account, no membership, and a link that will never
+  work again — the one outcome with no way out but an admin issuing another.
+- Two Elysia plugins each carrying a `.as('global')` macro do not merge in the type: a route
+  can only see the macros of one of them. All three guards live in one `.macro()` call for
+  that reason. None of them branches on its own parameter either: a macro only runs for a
+  route that names it, and returning `{}` for `false` widens every handler's type until
+  `user` is no longer known to be there.
+- Drizzle wraps a driver error in `DrizzleQueryError`, which carries the query and the
+  parameters but not the code. `isUniqueViolation` walks the `cause` chain; a check on
+  `error.code` alone silently turns a duplicate slug into a 500.
+- A suspended workspace's queued AI turn is **dropped**, which contradicts "the AI never goes
+  silent" everywhere else. It is deliberate and commented at the call site: there is no
+  colleague to hand off to, because every agent in the tenant is locked out too.
+- A webhook for a suspended tenant answers **200 and discards**. Erroring would be more
+  honest and would cost the operator their webhook registration: LINE and Meta disable an
+  endpoint that keeps failing, and a suspension is meant to be reversible in an afternoon.
+- `eraseWorkspace` refuses to delete anything unless a `workspace_erasures` row says the
+  deletion was asked for, and saves the media keys onto that row **before** the rows go.
+  After the cascade there is nothing left to read them from, so a retry would otherwise
+  leave every object behind. It collects `knowledge_sources.storage_key` as well as message
+  attachments; `mediaKeysOf` only knows about the latter.
+- The seed grants platform admin to `SEED_ADMIN_EMAIL`. An installation seeded before M6
+  must re-run `bun run db:seed`, or the platform page is invisible to everybody and no
+  second tenant can ever be created.
+- `session.activeOrganizationId` is plain text with no foreign key. It survives being
+  removed from a workspace and survives that workspace being deleted, so `chooseMembership`
+  falls back rather than trusting it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 
@@ -260,6 +309,11 @@ offered through `createHttpToolSource`.
 it to the list the worker passes to `runAgentTurn`. The agent takes sources rather than
 tools precisely so this needs no change to the turn. The internal source is merged first and
 wins any name clash.
+
+**A tenant-owned table:** add `workspace_id` with `onDelete: 'cascade'`, and ask whether it
+holds anything a person would want to keep. If it does, it goes on the repoint list in
+`packages/infra/src/merge.ts`. If it points at stored media, its key column goes into
+`eraseWorkspace`, because blobs do not cascade.
 
 **A migration:** edit `packages/db/src/schema/app.ts`, run `bun run db:generate`, review the
 generated SQL, then `bun run db:migrate`.

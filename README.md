@@ -17,7 +17,7 @@ owed is worse than a reply that says "let me fetch someone".
 
 ## What works today
 
-Milestones one to five are delivered, and one to four are running in a pilot on the operator's own product.
+Milestones one to six are delivered, and one to four are running in a pilot on the operator's own product.
 
 | | |
 |---|---|
@@ -29,14 +29,22 @@ Milestones one to five are delivered, and one to four are running in a pilot on 
 | Tools | Tenant-defined HTTP tools the AI can call, with restricted egress and proved identity |
 | Quality | Thumbs and reasons on AI replies, and a review queue of conversations nobody has read |
 | Privacy | Card and national-ID redaction before storage, retention sweeps, erasure on request |
+| People | Invite a colleague with a single-use link, change roles, reset a password they lost |
+| Tenants | Create, suspend, restore and erase a whole workspace, from a page only a platform admin sees |
 
 Milestone five added tools: an admin describes an endpoint of their own, and the AI can
 call it during a conversation. What the model fills in and what the system supplies are
 separate parts of the definition, so a model can never choose whose account to read, and a
 tool that needs a proved identity is not offered in a conversation where nobody proved one.
 
+Milestone six made the product multi-tenant in practice rather than only in the schema. An
+admin adds colleagues themselves, with a link they pass on; a platform admin creates and
+deletes whole workspaces; and a workspace can be suspended, which locks its people out and
+quietly drops its queued work while keeping every row.
+
 Still to come: an MCP client, so a tenant can connect their own server and bring a whole
-tool set without us shipping anything.
+tool set without us shipping anything. Billing, self-service sign-up and emailed invitations
+are deliberately absent.
 
 ## Requirements
 

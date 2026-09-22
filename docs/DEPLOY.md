@@ -64,9 +64,18 @@ docker compose exec api bun run packages/db/src/seed.ts
 **Use `--build`.** Plain `docker compose up -d` reuses whatever image exists, so a pull that
 changed the Dockerfile silently runs the old code.
 
-The seed creates the workspace, the admin user and the test and web channels. Change the
-admin password after first sign-in. Migrations run automatically when the API container
-starts.
+The seed creates the workspace, the admin user and the test and web channels, and grants
+that admin **platform admin**, which is what makes the Platform page visible and is the only
+way a second tenant can ever be created: nothing in the running API can sign anybody up.
+
+Change the admin password after first sign-in, from People → the reset link beside your own
+row. The seed is idempotent, so **an installation that predates M6 must run it again** to
+receive the platform-admin grant; re-running it changes nothing else.
+
+Migrations run automatically when the API container starts.
+
+Everybody after that first admin is added from the console: People → invite, which produces
+a single-use link the admin copies and sends. Nothing is emailed, by design; see ADR 0005.
 
 ## Nginx Proxy Manager
 

@@ -28,17 +28,20 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 14 | Dev/test | Internal **test channel** (simulator) from sprint 1 → grows into **web widget with signed-token identification** of logged-in salon-saas users. Staging on VPS for real webhooks; fixture-based adapter tests | Pilot can start on widget before Meta approval |
 | 15 | Languages | GUI Thai + English (i18n, Thai default). AI matches customer's dominant language, workspace default Thai. Per-language knowledge variants. Trigram search for Thai | Thai has no word spaces |
 | 16 | Quality loop | Thumbs feedback + implicit corrections (draft vs sent), review queue for unsupervised AI conversations, full per-turn trace in v1; automatic grading next; regression evals once knowledge stabilises | Pilot must end with numbers |
-| 17 | Phasing | M1 skeleton+loop → M2 knowledge+memory → M3 real channels → M4 pilot readiness → M5 salon-saas tools. v1 = M1–M4 | Architecture proven before features pile on |
+| 17 | Phasing | M1 skeleton+loop → M2 knowledge+memory → M3 real channels → M4 pilot readiness → M5 salon-saas tools → M6 tenant and user management. v1 = M1–M4 | Architecture proven before features pile on |
 | 18 | Tool extensibility | The agent takes tool **sources**, not tools. `http_tool` (one configured endpoint) and an **MCP client** (a connected server's whole set) are two sources behind one interface; both are **tenant-facing**, configured per workspace by an admin. `http_tool` first | `http_tool` is the low floor: any tenant with an endpoint, no server to run. MCP is the ceiling: the tenant owns the definitions and adds tools without us shipping. A source interface from the start keeps the agent loop untouched when the second arrives |
 | 19 | Tool identity | A tool definition separates **arguments the model fills** from **values the system binds** (verified customer, workspace, conversation). The model can neither name nor override a bound value, and a tool needing identity cannot run in a conversation where identity was never proven | Letting a model choose whose account to read is the cross-customer leak in a new place. `get_customer_profile` already does this with an empty input schema; the config format promotes it |
 | 20 | Tenant-defined egress | A tenant-defined tool is fetched through a **restricted client**: HTTPS only, hostname resolved and the resolved address checked, loopback / private / link-local / CGNAT refused, re-checked on redirect. Operator-level provider config keeps the unrestricted client | A tenant typing a URL gets a request origin inside our network: the worker shares a network with Postgres, Redis and MinIO, and the model gateway answers on a private address. Checking the hostname alone survives neither a name that resolves inward nor one that changes answer after the check |
 | 21 | Identity proofs | Two ways to prove who a customer is, each switched on and off separately: a **widget token** the host application signs, and a **one-time verification link** the person follows and confirms inside that application. A proof that is switched off still identifies a returning visitor, but binds no tool | They are not equivalent, and a tenant should be able to accept one and not the other: a signed token is worth what the application signing it is worth, and a link is worth whatever login sits behind it. Keeping "who is this" separate from "what was proved" is what lets continuity survive turning a proof off |
+| 22 | Platform admin | Who may create and delete tenants is a row in **`platform_admins`**, not a role on a membership. It carries no workspace, and a platform admin reads a tenant's conversations only by inviting themselves into it like anybody else | A role lives inside one tenant; this authority is over tenants, so expressing it as a role would make the word "admin" mean two things and put an ambient cross-tenant path into every permission check. The platform tables also have to outlive a tenant: a workspace's own `audit_log` cascades with it, so it cannot be the record of its own deletion |
+| 23 | Adding a person | An admin issues a **single-use link** and passes it on themselves. Only its hash is stored, it expires, and the same mechanism issues a password reset. Accounts are created by a second auth instance the public API never mounts | There is no mail transport here, and adding one — provider, domain, deliverability, queue — before the first colleague can be invited is the wrong order. The security property is identical either way: the link is the credential, works once, and expires. Keeping sign-up disabled on the mounted instance is what keeps the product invite-only |
+| 24 | Tenant lifecycle | A workspace has a **status**: `active`, `suspended` or `deleting`. Suspended locks members out, drops queued work and acknowledges webhooks without acting; deleting is set before the erasure job runs and is not reversible. Deleting is confirmed by typing the slug | A suspension has to be reversible and cheap, and must not cost the operator their webhook registration: LINE and Meta disable an endpoint that keeps failing, so a suspended tenant answers 200 and discards. Setting the status before the erasure is what stops new rows arriving while the job collects what to delete |
 
 Pilot success metrics: share of conversations fully handled by AI with no negative rating and no repeat question within 24 h; median first-response time.
 
 ## 3. Feature list
 
-Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[next]** the milestone after, **[later]** backlog.
+Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** milestone 6, **[next]** the milestone after, **[later]** backlog.
 
 ### 3.1 Channels
 - [v1] Normalised message model; every adapter translates to/from it
@@ -116,7 +119,10 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[next]** the mi
 - [M5] Settings: **Proving who a customer is**, one switch per identity proof plus the verification link's URL, secret and lifetime
 - [M5] Conversation sidebar: whether this customer was proved, what the proof carried, and a button to send them a verification link
 - [v1] Review queue for unsupervised AI conversations
-- [v1] Roles `admin` / `agent` / `viewer`; email+password. (Google sign-in is wired in the auth config and has no control on the login page; invitations have a table and no endpoint, so members are added by seed or by hand)
+- [v1] Roles `admin` / `agent` / `viewer`; email+password. (Google sign-in is wired in the auth config and still has no control on the login page)
+- [M6] **People**: an admin invites a colleague with a single-use link, changes a role, renames somebody, removes a membership, and issues a password-reset link for anyone locked out. The last admin can be neither demoted nor removed
+- [M6] **Platform**: a platform admin creates, renames, suspends, restores and deletes tenants, and grants or revokes other platform admins. Deleting asks for the slug to be typed
+- [M6] Workspace switcher for anybody who belongs to more than one, and a locked screen naming the reason when the current workspace is suspended or being deleted
 - [v1] Thai + English i18n; mobile-friendly responsive layout
 - [later] Charts dashboard; agent performance; CSAT survey to customer
 
@@ -129,11 +135,13 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[next]** the mi
 ### 3.8 Platform / ops
 - [v1] Bun workspaces monorepo: `apps/api`, `apps/worker`, `apps/web`, `apps/widget`, `packages/core` (framework-free domain), `packages/channels`, `packages/db`, `packages/infra`, `packages/shared`, `packages/config`
 - [v1] Docker Compose: api, worker, web (static via nginx or served by api), postgres+pgvector, redis, minio; `.env.example`
-- [v1] Drizzle migrations; seed script for a workspace, admin user, test channel
+- [v1] Drizzle migrations; seed script for a workspace, admin user, test channel. [M6] The seed also grants the admin platform admin, since nothing in the running API can create an account
 - [v1] Stateless API, BullMQ queues, S3-compatible storage client, PgBouncer-ready connection handling
 - [v1] Staging on VPS behind Nginx Proxy Manager (WebSocket enabled)
 - [v1] CI: typecheck, lint, unit tests incl. webhook fixture replay
-- [later] Multi-workspace UI, billing, Cloudflare Containers / Fly.io deployment recipes
+- [M6] Tenant lifecycle: `active` / `suspended` / `deleting` on the workspace, enforced on every authenticated request, every webhook, the widget, the identity link and every queued job
+- [M6] Queued tenant erasure: rows by cascade, stored media by a list saved before the rows go, recorded in `platform_audit_log` and `workspace_erasures`, both of which outlive the tenant
+- [later] Billing, Cloudflare Containers / Fly.io deployment recipes
 
 ## 3.9 Milestone status
 
@@ -295,6 +303,31 @@ Not built, on purpose: the MCP client (next; the interface is waiting for it), s
 account lookup (blocked on a read-only support credential on their side), and ticket
 creation (a conversation here already is one).
 
+**M6 is built.** A tenant can be created, staffed, suspended and erased from the console,
+without anybody touching the database. Delivered:
+
+- **`platform_admins`**, a table rather than a role. The seed grants it to
+  `SEED_ADMIN_EMAIL`, because nothing in the running API can create an account and a fresh
+  installation would otherwise have no way to reach the platform page at all.
+- **Invitations as single-use links.** An admin issues one and passes it on themselves;
+  only the hash is stored. A new person sets a name and a password on the page and is signed
+  in by the response; somebody who already has an account signs in and is added, which is
+  how one person comes to hold two memberships. The same table issues password-reset links.
+- **Roles editable in place**, with the last admin protected from being demoted or removed
+  by a check that locks the whole admin set rather than the row being changed.
+- **A workspace status** — `active`, `suspended`, `deleting` — read on every authenticated
+  request in the same query as the membership, and honoured by every webhook, the widget,
+  the identity link and all eight queued job types.
+- **Queued erasure** with a record written before anything is destroyed, so a retry knows
+  which stored objects are left and a job with no record deletes nothing. It collects
+  knowledge files as well as message attachments, which the existing media sweep never saw.
+- **A workspace switcher**, which finally writes `session.activeOrganizationId`: the field
+  was read in two places and written in none, so a person in two workspaces landed in
+  whichever one Postgres returned first.
+
+Not built, on purpose: billing, a self-service sign-up, email delivery of invitations, and
+restoring a deleted tenant.
+
 ## 3.10 M5 design intent
 
 Decisions 18 to 21 carry the short form; this is the reasoning that produced them, written
@@ -357,6 +390,58 @@ evaluates a session, deliberately, so it needs a narrow read-only support creden
 salon-saas side. Ticket creation has nothing to call, and should not be built: a conversation
 in this console already has an assignee, a status, tags, notes and a history, which is what a
 ticket is.
+
+## 3.11 M6 design intent
+
+Decisions 22 to 24 carry the short form; this is the reasoning behind them.
+
+**A platform admin is not a role.** Every role in this product is held inside a workspace
+and means something there. The authority to create and delete tenants is held over
+workspaces, so writing it as a fourth role would make `admin` mean two different things
+depending on which table it was read from, and would put a cross-tenant path into a
+permission check that currently has none. It is a row in its own table, resolved by its own
+guard, and that guard resolves no workspace at all — an optional `workspaceId` in scope is
+exactly the ambient tenant this codebase refuses to have.
+
+It follows that a platform admin can see no conversation anywhere. To read one they invite
+themselves into the tenant, which leaves a membership its own admins can see in their member
+list. That is a deliberate trade: support work costs an audit trail rather than being
+invisible.
+
+**The link is the credential.** There is no mail transport here, and adding one — a
+provider, a domain, deliverability, a queue, a bounce story — before the first colleague can
+be invited is the wrong order to build in. So the console shows the link once and the admin
+sends it however they already talk to that person. What matters is unchanged: it is
+unguessable, single-use, short-lived, and only its hash is stored, for the same reason every
+other credential here is encrypted.
+
+Creating the account needs sign-up, which is disabled on purpose. Rather than flipping the
+flag, the API holds a second auth instance that allows it and never mounts it: the
+capability exists at exactly one call site, reached only after a valid token has been
+spent. The spend and the membership share a transaction, because a failure between them
+would leave somebody with an account, no membership, and a link that will never work again.
+
+**Suspension is not deletion, and neither is a flag somebody checks.** The status lives on
+the workspace and is read in the same query that resolves the membership, so a request
+cannot be judged against a role read now and a status read a moment later. A suspended
+tenant answers its webhooks with 200 and discards the payload, which looks dishonest and is
+not: LINE and Meta disable an endpoint that keeps failing, so erroring would cost the
+operator their webhook registration and a support conversation to get it back, for a state
+that is meant to be reversible in an afternoon.
+
+Dropping a queued AI turn is the one deliberate exception to the rule that a turn never ends
+in silence. Everywhere else, going quiet is the bug that rule exists to prevent. Here there
+is no colleague to hand off to, because every agent in the tenant is locked out of the
+console too, and sending on behalf of a suspended operator is the worse outcome. It is
+commented as an exception at the call site so the next reader does not take it for the bug.
+
+**Erasing a tenant is staged because it has to be.** The rows cascade from one delete and
+the stored media does not, so the keys are collected while the rows that name them still
+exist and the objects are removed afterwards. What makes the job safe to retry is a record
+written before any of it: the processor refuses to delete a workspace it finds no record
+for, saves the key list onto that record, and shrinks it to whatever failed. The record has
+no foreign key and the audit entry goes to a table with no `workspace_id`, because a
+workspace's own audit log cascades with the very deletion it would be the record of.
 
 ## 4. Open questions / to refine
 - Expected conversation volume at launch (assumed low hundreds/day)
