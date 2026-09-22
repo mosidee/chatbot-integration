@@ -226,6 +226,7 @@ const th = {
     send: 'ส่งข้อความ',
     attachImage: 'แนบรูปภาพ',
     noChannel: 'ยังไม่มีช่องทางทดสอบ',
+    sentCount: 'ส่งแล้ว {{count}} ข้อความ',
   },
   settings: {
     title: 'ตั้งค่า',
@@ -255,6 +256,7 @@ const th = {
     thaiNationalId: 'เลขบัตรประชาชน',
     save: 'บันทึก',
     saved: 'บันทึกแล้ว',
+    saveFailed: 'บันทึกไม่สำเร็จ',
     addProvider: 'เพิ่มผู้ให้บริการ',
     name: 'ชื่อ',
     baseUrl: 'ที่อยู่ API',
@@ -439,6 +441,7 @@ const th = {
   },
   common: {
     loading: 'กำลังโหลด...',
+    saving: 'กำลังบันทึก...',
     error: 'เกิดข้อผิดพลาด',
     retry: 'ลองใหม่',
     edit: 'แก้ไข',
@@ -673,6 +676,7 @@ const en: typeof th = {
     send: 'Send message',
     attachImage: 'Attach image',
     noChannel: 'No test channel configured',
+    sentCount: 'Sent {{count}}',
   },
   settings: {
     title: 'Settings',
@@ -703,6 +707,7 @@ const en: typeof th = {
     thaiNationalId: 'Thai national ID',
     save: 'Save',
     saved: 'Saved',
+    saveFailed: 'Not saved',
     addProvider: 'Add provider',
     name: 'Name',
     baseUrl: 'Base URL',
@@ -891,6 +896,7 @@ const en: typeof th = {
   },
   common: {
     loading: 'Loading...',
+    saving: 'Saving...',
     error: 'Something went wrong',
     retry: 'Try again',
     edit: 'Edit',

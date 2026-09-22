@@ -6,6 +6,7 @@ import {
   useEffect,
   useState,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 
 /**
  * Small presentational primitives.
@@ -356,5 +357,70 @@ export function CopyOnce({
         </Button>
       </div>
     </div>
+  )
+}
+
+/**
+ * Whether the last thing somebody changed was saved, said where they changed it.
+ *
+ * The console autosaves on blur and on change, so there is no Save button to watch. The
+ * only confirmation used to be one word beside the page heading for two seconds: editing a
+ * channel at the bottom of a long page, nobody ever saw it, and a failure showed nothing at
+ * all — the box kept the typed text while the server kept the old value.
+ *
+ * `role="status"` rather than a toast, so it is announced and so it sits next to the thing
+ * it is talking about.
+ */
+export type SaveState =
+  | { status: 'idle' }
+  | { status: 'saving' }
+  | { status: 'saved'; at: number }
+  | { status: 'failed'; message: string }
+
+export function useSaveState(): {
+  state: SaveState
+  /** Hand these to `useMutation` to have it drive the line. */
+  handlers: {
+    onMutate: () => void
+    onSuccess: () => void
+    onError: (error: unknown) => void
+  }
+} {
+  const [state, setState] = useState<SaveState>({ status: 'idle' })
+
+  return {
+    state,
+    handlers: {
+      onMutate: () => setState({ status: 'saving' }),
+      onSuccess: () => setState({ status: 'saved', at: Date.now() }),
+      onError: (error: unknown) =>
+        setState({
+          status: 'failed',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+    },
+  }
+}
+
+export function SaveStatus({ state, className }: { state: SaveState; className?: string }) {
+  const { t, i18n } = useTranslation()
+  if (state.status === 'idle') return null
+
+  if (state.status === 'failed') {
+    // A failure is not a status line. It stays until something else happens, and it says
+    // what went wrong rather than only that something did.
+    return (
+      <p role="alert" className={cn('text-[12px] text-red-700 dark:text-red-300', className)}>
+        {t('settings.saveFailed')}: {state.message}
+      </p>
+    )
+  }
+
+  return (
+    <p role="status" className={cn('text-[12px] text-[var(--text-muted)]', className)}>
+      {state.status === 'saving'
+        ? t('common.saving')
+        : `${t('settings.saved')} ${formatTime(new Date(state.at).toISOString(), i18n.language)}`}
+    </p>
   )
 }

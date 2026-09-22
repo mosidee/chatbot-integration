@@ -26,6 +26,7 @@ export function Simulator() {
   const [displayName, setDisplayName] = useState('Nok')
   const [text, setText] = useState('')
   const [sentCount, setSentCount] = useState(0)
+  const [sendError, setSendError] = useState<string | null>(null)
   const [attachment, setAttachment] = useState<UploadResult | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -77,7 +78,11 @@ export function Simulator() {
       setAttachment(null)
       if (fileInput.current) fileInput.current.value = ''
       setSentCount((n) => n + 1)
+      setSendError(null)
     },
+    // Without this a send that failed cleared nothing and said nothing, so the only way to
+    // tell was that the counter had not moved.
+    onError: (caught) => setSendError(caught instanceof Error ? caught.message : String(caught)),
   })
 
   if (channels.isLoading) {
@@ -172,9 +177,12 @@ export function Simulator() {
             {upload.isPending ? t('common.loading') : t('simulator.attachImage')}
           </Button>
           {sentCount > 0 ? (
-            <span className="text-sm text-[var(--text-muted)]">{sentCount}</span>
+            <span className="text-sm text-[var(--text-muted)]">
+              {t('simulator.sentCount', { count: sentCount })}
+            </span>
           ) : null}
         </div>
+        {sendError ? <ErrorNote message={sendError} /> : null}
       </Card>
     </div>
   )

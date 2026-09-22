@@ -28,8 +28,10 @@ import {
   ErrorNote,
   Input,
   Label,
+  SaveStatus,
   Spinner,
   Textarea,
+  useSaveState,
 } from '../components/ui'
 import { WidgetPanel } from '../components/WidgetPanel'
 import {
@@ -80,8 +82,6 @@ export function Settings() {
   const tab = useRouterState({
     select: (state) => (state.location.search as { tab?: SettingsTab }).tab,
   })
-  const [savedNote, setSavedNote] = useState<string | null>(null)
-
   const workspace = useQuery({
     queryKey: ['workspace-settings'],
     queryFn: () => api.settings.workspace(),
@@ -91,17 +91,15 @@ export function Settings() {
   const channels = useQuery({ queryKey: ['channels'], queryFn: () => api.settings.channels() })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
 
-  const flash = () => {
-    setSavedNote(t('settings.saved'))
-    setTimeout(() => setSavedNote(null), 2000)
-  }
+  const workspaceSave = useSaveState()
 
   const saveWorkspace = useMutation({
     mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) =>
       api.settings.updateWorkspace(patch),
+    ...workspaceSave.handlers,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['workspace-settings'] })
-      flash()
+      workspaceSave.handlers.onSuccess()
     },
   })
 
@@ -124,12 +122,7 @@ export function Settings() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-12">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">{t('settings.title')}</h1>
-        {savedNote ? (
-          <span className="text-sm text-emerald-600 dark:text-emerald-400">{savedNote}</span>
-        ) : null}
-      </div>
+      <h1 className="text-lg font-semibold">{t('settings.title')}</h1>
 
       <div className="flex gap-1 overflow-x-auto border-b border-[var(--border)]">
         {tabs.map((key) => (
@@ -154,7 +147,10 @@ export function Settings() {
       {active === 'general' ? (
         <>
           <Card className="space-y-3">
-            <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+            <div className="flex items-baseline gap-3">
+              <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+              <SaveStatus state={workspaceSave.state} />
+            </div>
 
             <div>
               <Label htmlFor="persona">{t('settings.persona')}</Label>
@@ -242,10 +238,7 @@ export function Settings() {
       {active === 'channels' ? (
         <ChannelsCard
           channels={channels.data?.channels ?? []}
-          onChange={() => {
-            void queryClient.invalidateQueries({ queryKey: ['channels'] })
-            flash()
-          }}
+          onChange={() => void queryClient.invalidateQueries({ queryKey: ['channels'] })}
         />
       ) : null}
 
@@ -253,19 +246,13 @@ export function Settings() {
         <>
           <ProvidersCard
             providers={providers.data?.providers ?? []}
-            onChange={() => {
-              void queryClient.invalidateQueries({ queryKey: ['providers'] })
-              flash()
-            }}
+            onChange={() => void queryClient.invalidateQueries({ queryKey: ['providers'] })}
           />
 
           <TaskSlotsCard
             slots={slots.data?.slots ?? []}
             providers={providers.data?.providers ?? []}
-            onChange={() => {
-              void queryClient.invalidateQueries({ queryKey: ['task-slots'] })
-              flash()
-            }}
+            onChange={() => void queryClient.invalidateQueries({ queryKey: ['task-slots'] })}
           />
         </>
       ) : null}
@@ -381,6 +368,7 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const save = useSaveState()
 
   const create = useMutation({
     mutationFn: () => api.settings.createProvider({ name, baseUrl, apiKey: apiKey || undefined }),
@@ -396,12 +384,19 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
 
   const remove = useMutation({
     mutationFn: (id: string) => api.settings.deleteProvider(id),
-    onSuccess: onChange,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      onChange()
+    },
   })
 
   return (
     <Card className="space-y-3">
-      <h2 className="text-sm font-semibold">{t('settings.providers')}</h2>
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold">{t('settings.providers')}</h2>
+        <SaveStatus state={save.state} />
+      </div>
 
       {providers.map((provider) => (
         <div
@@ -537,10 +532,16 @@ function TaskSlotsCard({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
+  const status = useSaveState()
+
   const save = useMutation({
     mutationFn: ({ task, body }: { task: string; body: SlotBody }) =>
       api.settings.setTaskSlot(task, body),
-    onSuccess: onChange,
+    ...status.handlers,
+    onSuccess: () => {
+      status.handlers.onSuccess()
+      onChange()
+    },
   })
 
   /** A slot is stored whole, so every edit resends the fields it did not touch. */
@@ -566,7 +567,10 @@ function TaskSlotsCard({
   return (
     <Card className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">{t('settings.taskSlots')}</h2>
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-sm font-semibold">{t('settings.taskSlots')}</h2>
+          <SaveStatus state={status.state} />
+        </div>
         <Button
           size="sm"
           variant="ghost"
@@ -695,14 +699,23 @@ function CannedResponsesCard() {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   })
 
+  const save = useSaveState()
+
   const remove = useMutation({
     mutationFn: (id: string) => api.settings.deleteCannedResponse(id),
-    onSuccess: refresh,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      refresh()
+    },
   })
 
   return (
     <Card className="space-y-3">
-      <h2 className="text-sm font-semibold">{t('settings.cannedResponses')}</h2>
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold">{t('settings.cannedResponses')}</h2>
+        <SaveStatus state={save.state} />
+      </div>
       <p className="text-[13px] text-[var(--text-muted)]">{t('settings.cannedHint')}</p>
 
       {(responses.data?.responses ?? []).map((response) => (
@@ -800,9 +813,13 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
   const [check, setCheck] = useState<CredentialCheck | null>(null)
   const [expanded, setExpanded] = useState(false)
 
+  const status = useSaveState()
+
   const save = useMutation({
     mutationFn: () => api.settings.updateChannel(channel.id, { config: values }),
+    ...status.handlers,
     onSuccess: () => {
+      status.handlers.onSuccess()
       setValues({})
       onChange()
     },
@@ -811,6 +828,10 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
   const runCheck = useMutation({
     mutationFn: () => api.settings.checkChannel(channel.id),
     onSuccess: setCheck,
+    // A check that throws used to re-enable its button and say nothing, which reads as a
+    // channel that is fine.
+    onError: (caught) =>
+      setCheck({ ok: false, detail: caught instanceof Error ? caught.message : String(caught) }),
   })
 
   const needsCredentials = channel.requiredFields.length > 0
@@ -845,6 +866,8 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
           </Button>
         </div>
       </div>
+
+      <SaveStatus state={status.state} className="mt-1" />
 
       {check ? (
         <p
@@ -979,22 +1002,35 @@ function ToolsCard() {
     setEditing(null)
   }
 
+  const save = useSaveState()
+
   const remove = useMutation({
     mutationFn: (id: string) => api.settings.deleteTool(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['tools'] }),
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      void queryClient.invalidateQueries({ queryKey: ['tools'] })
+    },
   })
 
   const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       api.settings.updateTool(id, { enabled }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['tools'] }),
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      void queryClient.invalidateQueries({ queryKey: ['tools'] })
+    },
   })
 
   const list = tools.data?.tools ?? []
 
   return (
     <Card className="space-y-3" data-testid="tools-card">
-      <h2 className="text-sm font-semibold">{t('settings.tools')}</h2>
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold">{t('settings.tools')}</h2>
+        <SaveStatus state={save.state} />
+      </div>
       <p className="text-[11px] text-[var(--text-muted)]">{t('settings.toolsHint')}</p>
 
       {list.length === 0 && editing === null ? (

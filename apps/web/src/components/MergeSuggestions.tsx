@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { api, type MergeParty } from '../lib/api'
-import { Button, ConfirmButton } from './ui'
+import { Button, ConfirmButton, SaveStatus, useSaveState } from './ui'
 
 /**
  * "These two might be the same person."
@@ -61,9 +61,13 @@ export function MergeSuggestions({
     void queryClient.invalidateQueries({ queryKey: ['conversations'] })
   }
 
+  const save = useSaveState()
+
   const accept = useMutation({
     mutationFn: (suggestionId: string) => api.customers.acceptMerge(customerId, suggestionId),
+    ...save.handlers,
     onSuccess: () => {
+      save.handlers.onSuccess()
       invalidate()
       onMerged()
     },
@@ -71,7 +75,11 @@ export function MergeSuggestions({
 
   const reject = useMutation({
     mutationFn: (suggestionId: string) => api.customers.rejectMerge(customerId, suggestionId),
-    onSuccess: invalidate,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      invalidate()
+    },
   })
 
   const rows = suggestions.data?.suggestions ?? []
@@ -129,6 +137,7 @@ export function MergeSuggestions({
               deciding whether these are the same person should read what it costs to be
               wrong before they reach for the control, not after. */}
           <p className="text-[11px] text-[var(--text-muted)]">{t('merge.hint')}</p>
+          <SaveStatus state={save.state} />
         </div>
       ))}
     </section>
