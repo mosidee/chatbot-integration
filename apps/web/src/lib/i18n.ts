@@ -87,6 +87,7 @@ const th = {
     noMessages: 'ยังไม่มีข้อความ',
     handoffReason: 'เหตุผลที่ส่งต่อ',
     selectPrompt: 'เลือกบทสนทนาเพื่อเริ่ม',
+    loadOlder: 'ดูข้อความก่อนหน้า',
   },
   sidebar: {
     identityVerified: 'ยืนยันตัวตนแล้ว',
@@ -487,6 +488,7 @@ const en: typeof th = {
     noMessages: 'No messages yet',
     handoffReason: 'Handoff reason',
     selectPrompt: 'Choose a conversation to start',
+    loadOlder: 'Show earlier messages',
   },
   sidebar: {
     identityVerified: 'Verified',

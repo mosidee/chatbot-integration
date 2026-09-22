@@ -280,6 +280,15 @@ without spending money.
 - The seed grants platform admin to `SEED_ADMIN_EMAIL`. An installation seeded before M6
   must re-run `bun run db:seed`, or the platform page is invisible to everybody and no
   second tenant can ever be created.
+- The conversation panel loads the **most recent** thirty messages and widens the window as
+  somebody scrolls up. It used to take the first two hundred, which showed a long thread's
+  opening and hid everything an agent needed. Paging widens the window rather than walking a
+  cursor backwards, so a reply arriving while somebody reads history cannot open a gap in
+  the middle of what they are looking at.
+- Finding or creating a conversation happens under a row lock on the channel identity, and
+  the identity insert tolerates a conflict. Inbound runs ten jobs at a time, so two messages
+  typed in quick succession are two jobs: without both, one burst of typing became two
+  conversations, or the second job failed on the unique index.
 - The inbox order lives in SQL and the browser must not re-sort it. It used to lift
   `waiting_human` to the top client-side, which was right when the whole queue arrived in
   one page; the order now depends on who owns each customer, which only the database knows,

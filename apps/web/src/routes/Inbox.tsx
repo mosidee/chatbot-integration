@@ -4,7 +4,7 @@ import type {
   FeedbackReason,
   FeedbackTargetType,
 } from '@ci/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CustomerAssignee } from '../components/CustomerAssignee'
@@ -35,6 +35,9 @@ import { useRealtime } from '../lib/ws'
  * On a phone the three panes become one at a time, because an agent replying from their
  * phone needs the thread full-width, not a squeezed column.
  */
+/** How many messages the thread asks for at a time, and grows by on scroll. */
+const MESSAGE_PAGE = 30
+
 export function Inbox() {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
@@ -271,14 +274,44 @@ function ConversationPane({
   const [showSidebar, setShowSidebar] = useState(false)
   const [promoting, setPromoting] = useState<Message | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * How much of the thread to ask for. Raised as somebody scrolls up.
+   *
+   * A window rather than the whole conversation: a customer coming back reopens their
+   * conversation now, so a thread can run for months, and the panel needs the last page of
+   * it rather than the first. Asking for a bigger window keeps the newest message at the
+   * end, so a reply arriving while somebody reads history cannot leave a hole in the middle.
+   */
+  const [messageWindow, setMessageWindow] = useState(MESSAGE_PAGE)
+  /**
+   * Set while a larger window is in flight, so scrolling does not ask again on every pixel.
+   *
+   * Its own state rather than the query's `isFetching`, which is also true for the ordinary
+   * background refetch that happens whenever a message arrives: the button would flicker
+   * disabled under somebody trying to press it.
+   */
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const restoreScrollRef = useRef<number | null>(null)
+
+  // A different conversation starts at the bottom of its own thread.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resetting is the point
+  useEffect(() => {
+    setMessageWindow(MESSAGE_PAGE)
+    setLoadingOlder(false)
+  }, [conversationId])
 
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
   // Viewers see every opinion and hold none. The routes enforce this; here it is courtesy.
   const canWrite = me.data?.role === 'admin' || me.data?.role === 'agent'
 
   const detail = useQuery({
-    queryKey: ['conversation', conversationId],
-    queryFn: () => api.conversations.detail(conversationId),
+    queryKey: ['conversation', conversationId, messageWindow],
+    queryFn: () => api.conversations.detail(conversationId, messageWindow),
+    // Without this the thread empties while a larger window is fetched, which reads as the
+    // conversation vanishing under the person reading it.
+    placeholderData: keepPreviousData,
   })
 
   const canned = useQuery({
@@ -295,12 +328,40 @@ function ConversationPane({
     return found ? `${found.body} ` : value
   }
 
-  // Follow the thread as messages arrive. Nothing to scroll to while it is empty.
-  const messageCount = detail.data?.messages.length ?? 0
+  /**
+   * Follow the thread as messages arrive, keyed on the newest message rather than on how
+   * many there are. Counting would also fire when older ones are loaded above, yanking
+   * somebody back to the bottom the moment they scrolled up to read.
+   */
+  const newestMessageId = detail.data?.messages.at(-1)?.id ?? null
   useEffect(() => {
-    if (messageCount === 0) return
+    if (!newestMessageId) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messageCount])
+  }, [newestMessageId])
+
+  /**
+   * Put the reader back where they were after older messages are added above them.
+   *
+   * Prepending content moves everything down by however tall it is, so without this the
+   * thread jumps and the message they were reading is somewhere off screen.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the wider window lands
+  useEffect(() => {
+    setLoadingOlder(false)
+    const thread = threadRef.current
+    const previousHeight = restoreScrollRef.current
+    if (!thread || previousHeight === null) return
+    restoreScrollRef.current = null
+    thread.scrollTop = thread.scrollHeight - previousHeight
+  }, [detail.data?.messages.length])
+
+  const loadOlder = () => {
+    if (!detail.data?.hasMoreMessages || loadingOlder) return
+    const thread = threadRef.current
+    if (thread) restoreScrollRef.current = thread.scrollHeight
+    setLoadingOlder(true)
+    setMessageWindow((current) => current + MESSAGE_PAGE)
+  }
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
@@ -439,7 +500,29 @@ function ConversationPane({
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" data-testid="message-thread">
+        <div
+          ref={threadRef}
+          className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3"
+          data-testid="message-thread"
+          onScroll={(event) => {
+            // Near the top rather than exactly at it: a thread that only loads at zero never
+            // loads at all on a trackpad that stops a pixel short.
+            if (event.currentTarget.scrollTop < 80) loadOlder()
+          }}
+        >
+          {data.hasMoreMessages ? (
+            <div className="flex justify-center py-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="load-older-messages"
+                disabled={loadingOlder}
+                onClick={loadOlder}
+              >
+                {loadingOlder ? t('common.loading') : t('conversation.loadOlder')}
+              </Button>
+            </div>
+          ) : null}
           {data.messages.length === 0 ? (
             <EmptyState title={t('conversation.noMessages')} />
           ) : (

@@ -1,7 +1,7 @@
 import type { ChannelAdapter, InboundEvent } from '@ci/channels'
 import type { Logger } from '@ci/core'
 import { type RedactionOptions, redactMessage } from '@ci/core'
-import { type Database, newId, schema } from '@ci/db'
+import { type Database, type Executor, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import type {
   ConversationMode,
@@ -118,7 +118,7 @@ export type ResolvedConversation = {
 
 /** Who looks after this customer, if anybody. Null when nobody has claimed them. */
 async function customerOwner(
-  db: Database,
+  db: Executor,
   workspaceId: string,
   customerId: string,
 ): Promise<string | null> {
@@ -197,8 +197,32 @@ export async function resolveConversation(
             }
           : {}),
       })
+      /**
+       * Two messages arriving together both get here, and only one may win: the channel and
+       * external id are unique together. The loser takes what the winner made rather than
+       * failing the job, because the customer simply typed twice.
+       */
+      .onConflictDoNothing()
       .returning()
     identity = inserted[0]
+
+    if (!identity) {
+      const raced = await db
+        .select()
+        .from(schema.channelIdentities)
+        .where(
+          and(
+            eq(schema.channelIdentities.workspaceId, workspaceId),
+            eq(schema.channelIdentities.channelId, channelId),
+            eq(schema.channelIdentities.externalId, event.externalId),
+          ),
+        )
+        .limit(1)
+      identity = raced[0]
+
+      // The customer made a moment ago belongs to nobody now; the winner brought their own.
+      await db.delete(schema.customers).where(eq(schema.customers.id, customerId))
+    }
   } else {
     const patch: Partial<typeof schema.channelIdentities.$inferInsert> = {}
     if (event.profile?.displayName && identity.displayName !== event.profile.displayName) {
@@ -232,120 +256,138 @@ export async function resolveConversation(
   if (!identity) throw new Error('failed to resolve channel identity')
 
   /**
-   * The most recent conversation this person has on this channel, whatever state it is in.
+   * Finding the conversation and creating one are a single decision, so they happen under a
+   * lock on the identity.
    *
-   * A resolved conversation is reopened rather than replaced. The customer sees one
-   * unbroken chat in LINE or Messenger, and splitting it at the moment a colleague decided
-   * they were finished gives the agent a fragment of what the customer is looking at.
-   * Resolving means done for now, not closed for good.
+   * Two messages arriving together are two jobs, and inbound runs ten at a time. Without
+   * this they both look, both find nothing, and both insert: the customer ends up with two
+   * conversations from one burst of typing, which is exactly the fragmentation this is
+   * meant to prevent. Locking the identity row serialises the pair, and the second one then
+   * finds what the first made.
    */
-  const openConversation = await db
-    .select()
-    .from(schema.conversations)
-    .where(eq(schema.conversations.channelIdentityId, identity.id))
-    .orderBy(desc(schema.conversations.lastMessageAt))
-    .limit(1)
-
-  const windowExpiresAt =
-    input.messagingWindowHours === null
-      ? null
-      : new Date(event.timestamp.getTime() + input.messagingWindowHours * 3600_000)
-
-  const existing = openConversation[0]
-  if (existing) {
-    /**
-     * Coming back after it was resolved starts the conversation again, in the mode a new
-     * one would have started in.
-     *
-     * Keeping the old mode would be worse than splitting: a thread an agent resolved is
-     * left in `human`, so the AI may only suggest, and the customer's new question waits
-     * for somebody who already considers this finished. The handoff reason goes with it,
-     * because it belonged to the episode that ended.
-     *
-     * This is why the state machine never sees a resolved conversation on a customer
-     * message: the decision about what mode a conversation begins in is made here, and
-     * beginning again is the same decision.
-     */
-    const reopening = existing.status === 'resolved'
+  return db.transaction(async (tx) => {
+    await tx
+      .select({ id: schema.channelIdentities.id })
+      .from(schema.channelIdentities)
+      .where(eq(schema.channelIdentities.id, identity.id))
+      .for('update')
 
     /**
-     * A conversation beginning again belongs to whoever owns the customer.
+     * The most recent conversation this person has on this channel, whatever state it is in.
      *
-     * Looked up only when reopening, which is rare, rather than on every inbound message.
-     * Without this the owner would be almost meaningless at the conversation level: a
-     * conversation is now created only for an identity that has never written before, so a
-     * returning customer would never pick up an owner assigned since their last message.
+     * A resolved conversation is reopened rather than replaced. The customer sees one
+     * unbroken chat in LINE or Messenger, and splitting it at the moment a colleague decided
+     * they were finished gives the agent a fragment of what the customer is looking at.
+     * Resolving means done for now, not closed for good.
      */
-    const owner = reopening ? await customerOwner(db, workspaceId, existing.customerId) : null
+    const openConversation = await tx
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.channelIdentityId, identity.id))
+      .orderBy(desc(schema.conversations.lastMessageAt))
+      .limit(1)
 
-    await db
-      .update(schema.conversations)
-      .set({
-        lastMessageAt: event.timestamp,
-        lastCustomerMessageAt: event.timestamp,
-        messagingWindowExpiresAt: windowExpiresAt,
-        unreadCount: sql`${schema.conversations.unreadCount} + 1`,
-        ...(reopening
-          ? {
-              status: 'open' as const,
-              mode: input.defaultMode,
-              handoffReason: null,
-              waitingHumanSince: null,
-              // Only when there is one: a customer nobody owns leaves the conversation with
-              // whoever last handled it, who is the best guess available.
-              ...(owner ? { assigneeUserId: owner } : {}),
-            }
-          : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.conversations.id, existing.id))
+    const windowExpiresAt =
+      input.messagingWindowHours === null
+        ? null
+        : new Date(event.timestamp.getTime() + input.messagingWindowHours * 3600_000)
+
+    const existing = openConversation[0]
+    if (existing) {
+      /**
+       * Coming back after it was resolved starts the conversation again, in the mode a new
+       * one would have started in.
+       *
+       * Keeping the old mode would be worse than splitting: a thread an agent resolved is
+       * left in `human`, so the AI may only suggest, and the customer's new question waits
+       * for somebody who already considers this finished. The handoff reason goes with it,
+       * because it belonged to the episode that ended.
+       *
+       * This is why the state machine never sees a resolved conversation on a customer
+       * message: the decision about what mode a conversation begins in is made here, and
+       * beginning again is the same decision.
+       */
+      const reopening = existing.status === 'resolved'
+
+      /**
+       * A conversation beginning again belongs to whoever owns the customer.
+       *
+       * Looked up only when reopening, which is rare, rather than on every inbound message.
+       * Without this the owner would be almost meaningless at the conversation level: a
+       * conversation is now created only for an identity that has never written before, so a
+       * returning customer would never pick up an owner assigned since their last message.
+       */
+      const owner = reopening ? await customerOwner(tx, workspaceId, existing.customerId) : null
+
+      await tx
+        .update(schema.conversations)
+        .set({
+          lastMessageAt: event.timestamp,
+          lastCustomerMessageAt: event.timestamp,
+          messagingWindowExpiresAt: windowExpiresAt,
+          unreadCount: sql`${schema.conversations.unreadCount} + 1`,
+          ...(reopening
+            ? {
+                status: 'open' as const,
+                mode: input.defaultMode,
+                handoffReason: null,
+                waitingHumanSince: null,
+                // Only when there is one: a customer nobody owns leaves the conversation with
+                // whoever last handled it, who is the best guess available.
+                ...(owner ? { assigneeUserId: owner } : {}),
+              }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.conversations.id, existing.id))
+
+      return {
+        conversationId: existing.id,
+        customerId: existing.customerId,
+        channelIdentityId: identity.id,
+        mode: reopening ? input.defaultMode : existing.mode,
+        isNew: false,
+      }
+    }
+
+    /**
+     * A new conversation starts with the customer's owner, if they have one.
+     *
+     * This is what makes the owner a default rather than a label: somebody who looks after a
+     * customer finds their next conversation already theirs, without anybody claiming it by
+     * hand. A colleague can still take this one thread afterwards, and doing so does not
+     * change who owns the relationship.
+     *
+     * Rare in practice, because a brand-new identity brings a brand-new customer with nobody
+     * looking after them yet. It matters once an existing customer is reached on a channel
+     * they have not used before.
+     */
+    const newOwner = await customerOwner(tx, workspaceId, identity.customerId)
+
+    const conversationId = newId()
+    await tx.insert(schema.conversations).values({
+      id: conversationId,
+      workspaceId,
+      channelId,
+      customerId: identity.customerId,
+      channelIdentityId: identity.id,
+      assigneeUserId: newOwner,
+      mode: input.defaultMode,
+      status: 'open',
+      lastMessageAt: event.timestamp,
+      lastCustomerMessageAt: event.timestamp,
+      messagingWindowExpiresAt: windowExpiresAt,
+      unreadCount: 1,
+    })
 
     return {
-      conversationId: existing.id,
-      customerId: existing.customerId,
+      conversationId,
+      customerId: identity.customerId,
       channelIdentityId: identity.id,
-      mode: reopening ? input.defaultMode : existing.mode,
-      isNew: false,
+      mode: input.defaultMode,
+      isNew: true,
     }
-  }
-
-  /**
-   * A new conversation starts with the customer's owner, if they have one.
-   *
-   * This is what makes the owner a default rather than a label: somebody who looks after a
-   * customer finds their next conversation already theirs, without anybody claiming it by
-   * hand. A colleague can still take this one thread afterwards, and doing so does not
-   * change who owns the relationship.
-   *
-   * Rare in practice, because a brand-new identity brings a brand-new customer with nobody
-   * looking after them yet. It matters once an existing customer is reached on a channel
-   * they have not used before.
-   */
-  const newOwner = await customerOwner(db, workspaceId, identity.customerId)
-
-  const conversationId = newId()
-  await db.insert(schema.conversations).values({
-    id: conversationId,
-    workspaceId,
-    channelId,
-    customerId: identity.customerId,
-    channelIdentityId: identity.id,
-    assigneeUserId: newOwner,
-    mode: input.defaultMode,
-    status: 'open',
-    lastMessageAt: event.timestamp,
-    lastCustomerMessageAt: event.timestamp,
-    messagingWindowExpiresAt: windowExpiresAt,
-    unreadCount: 1,
   })
-
-  return {
-    conversationId,
-    customerId: identity.customerId,
-    channelIdentityId: identity.id,
-    mode: input.defaultMode,
-    isNew: true,
-  }
 }
 
 /** Store a message, redacting it first. Nothing sensitive is ever written. */

@@ -204,6 +204,8 @@ export type ConversationDetail = {
   /** Whether the workspace has a verification link to offer, for the sidebar button. */
   canSendVerificationLink: boolean
   messages: Message[]
+  /** Whether older messages exist above the window that was returned. */
+  hasMoreMessages: boolean
   notes: InternalNote[]
   suggestions: Suggestion[]
   feedback: Feedback[]
@@ -523,7 +525,11 @@ export const api = {
         `/v1/conversations${qs ? `?${qs}` : ''}`,
       )
     },
-    detail: (id: string) => get<ConversationDetail>(`/v1/conversations/${id}`),
+    /** `messages` is how many of the most recent to fetch; the console raises it on scroll. */
+    detail: (id: string, messages?: number) =>
+      get<ConversationDetail>(
+        `/v1/conversations/${id}${messages === undefined ? '' : `?messages=${messages}`}`,
+      ),
     send: (id: string, message: NormalizedMessage, suggestionId?: string) =>
       post<{ messageId: string }>(`/v1/conversations/${id}/messages`, { message, suggestionId }),
     takeOver: (id: string) => post<{ mode: ConversationMode }>(`/v1/conversations/${id}/take-over`),

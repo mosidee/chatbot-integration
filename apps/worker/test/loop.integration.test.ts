@@ -2443,3 +2443,63 @@ describe('a customer who comes back after being resolved', () => {
     expect(ai.length).toBeGreaterThan(1)
   })
 })
+
+describe('messages arriving at the same moment', () => {
+  /**
+   * Inbound runs ten jobs at a time. Two messages typed in quick succession are two jobs,
+   * and without a lock they both look for a conversation, both find none, and both make
+   * one: a single burst of typing becomes two threads in the console.
+   */
+  test('still produce exactly one conversation', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+    const externalId = 'simultaneous-customer'
+
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    const events = await Promise.all(
+      ['หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า'].map(async (text) => {
+        const outcome = await ingestWebhook(
+          f.runtime,
+          f.runtime.db,
+          f.channelId,
+          toWebhookRequest(
+            JSON.stringify({
+              externalId,
+              displayName: externalId,
+              message: { kind: 'text', text },
+              eventId: `evt-${crypto.randomUUID()}`,
+            }),
+            {},
+            {},
+          ),
+        )
+        if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
+        return outcome.inboundEventId
+      }),
+    )
+
+    // All five processed at once, the way the worker would run them.
+    await Promise.all(
+      events.map((inboundEventId) =>
+        processInbound(f.runtime, ports, f.runtime.logger, {
+          workspaceId: f.workspaceId,
+          channelId: f.channelId,
+          inboundEventId,
+        }),
+      ),
+    )
+
+    const conversations = await f.runtime.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    expect(conversations).toHaveLength(1)
+
+    // And every message landed in it.
+    const messages = await f.runtime.db
+      .select({ id: schema.messages.id })
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversations[0]?.id ?? ''))
+    expect(messages.length).toBeGreaterThanOrEqual(5)
+  })
+})

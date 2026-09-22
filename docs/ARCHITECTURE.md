@@ -58,6 +58,11 @@ Ordered in SQL, and nothing re-sorts it in the browser. Three groups, by who own
 
 Ownership deliberately outranks urgency: a colleague's overdue conversation sits below your quiet one, because the person who owns a relationship is the one who should answer it. `customers.assignee_user_id` is that owner and outlives every conversation; `conversations.assignee_user_id` owns one thread, is inherited from the customer when a new conversation opens, and can be handed to somebody else without changing the relationship. `before` is a cutoff on the last message rather than a cursor, since the order is no longer that column alone.
 
+## Conversation continuity (packages/infra/src/repo.ts)
+One conversation per channel identity, found or created under a row lock on that identity because inbound runs ten jobs at a time. A resolved conversation is reopened by the customer's next message rather than replaced, in the mode a new one would have started in and carrying the customer's owner: the customer sees one unbroken chat on their phone, and splitting it where a colleague decided they were finished gave the agent a fragment of it. The state machine therefore never observes a resolved conversation on a customer message; an agent writing into one still reopens it there.
+
+The panel loads the most recent thirty messages and widens the window on scroll, rather than paging backwards with a cursor, so the newest message is always the end of what is shown.
+
 ## Review queue (packages/infra/src/review.ts)
 One SQL fragment, `inReviewQueue()`, correlated on the `conversations` row of whatever query uses it, so the inbox list, the tab's count badge and the dashboard all ask the identical question. It reads: no handoff reason, no message with `sender_type = 'human'`, and some message with `sender_type = 'ai'` newer than `conversations.reviewed_at`. `reviewed_at` is written with the database's `now()`, because it is compared against `messages.created_at`, which `defaultNow()` writes on the same clock. Feedback rows hang off the conversation and cascade with it, which is how retention and erasure reach them.
 

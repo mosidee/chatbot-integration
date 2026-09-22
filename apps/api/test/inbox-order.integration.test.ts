@@ -254,3 +254,81 @@ describe('assigning a customer', () => {
     expect(rows[0]?.assigneeUserId).toBeNull()
   })
 })
+
+describe('the message window', () => {
+  /**
+   * The thread used to take the first two hundred messages, so a long conversation showed
+   * its opening and hid everything an agent needed. Conversations live longer now that a
+   * returning customer reopens one, which turned that from an edge case into the normal one.
+   */
+  const seedMessages = async (conversationId: string, count: number) => {
+    for (let index = 0; index < count; index += 1) {
+      await ctx.db.insert(schema.messages).values({
+        id: newId(),
+        workspaceId: fixture.workspaceId,
+        conversationId,
+        direction: 'inbound',
+        senderType: 'customer',
+        content: { kind: 'text', text: `message ${index}` },
+        text: `message ${index}`,
+        status: 'sent',
+        createdAt: new Date(Date.now() - (count - index) * 60_000),
+      })
+    }
+  }
+
+  const windowOf = async (conversationId: string, size?: number) => {
+    const path = `/api/v1/conversations/${conversationId}${size ? `?messages=${size}` : ''}`
+    const response = await fixture.as(fixture.admin, path)
+    expect(response.status).toBe(200)
+    return (await response.json()) as {
+      messages: { text: string | null }[]
+      hasMoreMessages: boolean
+    }
+  }
+
+  test('returns the newest thirty, oldest first, and says there is more', async () => {
+    const { conversationId } = await seed({
+      name: 'long-thread',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+    await seedMessages(conversationId, 45)
+
+    const body = await windowOf(conversationId)
+    expect(body.messages).toHaveLength(30)
+    expect(body.hasMoreMessages).toBe(true)
+
+    // The newest end of the thread, read in the order a person reads it.
+    expect(body.messages[0]?.text).toBe('message 15')
+    expect(body.messages.at(-1)?.text).toBe('message 44')
+  })
+
+  test('reaches further back when asked, and stops claiming there is more', async () => {
+    const { conversationId } = await seed({
+      name: 'long-thread-2',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+    await seedMessages(conversationId, 45)
+
+    const sixty = await windowOf(conversationId, 60)
+    expect(sixty.messages).toHaveLength(45)
+    expect(sixty.hasMoreMessages).toBe(false)
+    expect(sixty.messages[0]?.text).toBe('message 0')
+    expect(sixty.messages.at(-1)?.text).toBe('message 44')
+  })
+
+  test('says there is nothing more when the thread is short', async () => {
+    const { conversationId } = await seed({
+      name: 'short-thread',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+    await seedMessages(conversationId, 4)
+
+    const body = await windowOf(conversationId)
+    expect(body.messages).toHaveLength(4)
+    expect(body.hasMoreMessages).toBe(false)
+  })
+})

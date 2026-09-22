@@ -36,6 +36,9 @@ import type { ApiContext } from '../context'
  * Human actions go through the same state machine the worker uses, so "take over" behaves
  * identically whether it was triggered by an agent's click or by the AI handing off.
  */
+/** Enough to fill the panel without fetching a year of history to show the last sentence. */
+const DEFAULT_MESSAGE_WINDOW = 30
+
 export function conversationRoutes(ctx: ApiContext) {
   const { db, runtime } = ctx
   const ports = createEffectPorts(runtime, runtime.logger)
@@ -260,11 +263,25 @@ export function conversationRoutes(ctx: ApiContext) {
         { auth: 'viewer' },
       )
 
+      /**
+       * One conversation, with the most recent slice of its messages.
+       *
+       * A window rather than the whole thread. It used to take the first two hundred
+       * messages, which for a long conversation showed the beginning and hid everything the
+       * agent needed; a customer coming back reopens their conversation now, so threads
+       * live longer and that became the common case rather than the extreme one.
+       *
+       * Paging works by asking for a larger window rather than by walking a cursor
+       * backwards. The window always ends at the newest message, so a reply arriving while
+       * somebody reads history cannot open a gap in the middle of what they are looking at.
+       */
       .get(
         '/:id',
-        async ({ workspaceId, params, status }) => {
+        async ({ workspaceId, params, query, status }) => {
           const loaded = await loadState(workspaceId, params.id)
           if (!loaded) return status(404, { error: 'Conversation not found' })
+
+          const messageLimit = query.messages ?? DEFAULT_MESSAGE_WINDOW
 
           const [
             messages,
@@ -276,12 +293,14 @@ export function conversationRoutes(ctx: ApiContext) {
             needsReview,
             allIdentities,
           ] = await Promise.all([
+            // Newest first so the limit takes the right end, then reversed for display.
+            // One more than asked for, which is how the caller learns there is more above.
             db
               .select()
               .from(schema.messages)
               .where(eq(schema.messages.conversationId, params.id))
-              .orderBy(schema.messages.createdAt)
-              .limit(200),
+              .orderBy(desc(schema.messages.createdAt), desc(schema.messages.id))
+              .limit(messageLimit + 1),
             db
               .select()
               .from(schema.internalNotes)
@@ -354,7 +373,13 @@ export function conversationRoutes(ctx: ApiContext) {
             canSendVerificationLink:
               settingsForIdentity.identity.verificationLink.enabled &&
               settingsForIdentity.identity.verificationLink.url !== null,
-            messages,
+            /**
+             * Oldest first, which is how a thread reads. The extra row fetched above is
+             * dropped here; its only job was to answer whether there is more.
+             */
+            messages: messages.slice(0, messageLimit).reverse(),
+            /** True when older messages exist above the window the caller was given. */
+            hasMoreMessages: messages.length > messageLimit,
             notes,
             suggestions,
             feedback,
@@ -362,7 +387,18 @@ export function conversationRoutes(ctx: ApiContext) {
             identities: allIdentities,
           }
         },
-        { auth: 'viewer', params: z.object({ id: z.string() }) },
+        {
+          auth: 'viewer',
+          params: z.object({ id: z.string() }),
+          query: z.object({
+            /**
+             * How many of the most recent messages to return. The console asks for more as
+             * somebody scrolls up. Capped, because past a few hundred the answer is a
+             * different feature rather than a bigger number.
+             */
+            messages: z.coerce.number().int().min(1).max(500).optional(),
+          }),
+        },
       )
 
       /**
