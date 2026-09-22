@@ -38,6 +38,8 @@ export type DashboardSummary = {
   }
   /** Seconds from a customer's first message to the first reply. Null with no data yet. */
   firstResponse: { medianSeconds: number | null; conversations: number }
+  /** Median wait from a handoff to the first thing a colleague said, per handoff event. */
+  handoffWait: { medianSeconds: number | null; events: number }
   handoffReasons: { reason: string; conversations: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number
@@ -79,6 +81,7 @@ export async function loadDashboard(
     messagesPerDay,
     tracesPerDay,
     firstResponse,
+    handoffWait,
     handoffsPerDay,
     reasons,
     channels,
@@ -134,6 +137,38 @@ export async function loadDashboard(
                count(*)::int AS conversations
         FROM bounds
         WHERE asked IS NOT NULL AND answered IS NOT NULL AND answered >= asked
+      `),
+    /**
+     * How long people wait for a person, which is the number the first-response figure
+     * above cannot answer.
+     *
+     * That one counts any outbound message, and the AI replies in seconds, so it reads
+     * "four seconds" on a week where three customers waited overnight for a colleague.
+     * This measures each handoff to the first thing a human said after it.
+     *
+     * Per event rather than per conversation: one thread can be handed off more than once,
+     * and a second wait is a second wait. The `>= 0` guard is the same one the query above
+     * needs — `occurred_at` comes from the application clock and `created_at` from the
+     * database's, so a handoff and the reply to it can cross by milliseconds.
+     */
+    db.execute<{ median: number | null; events: number }>(sql`
+        WITH waits AS (
+          SELECT h.id,
+                 extract(epoch FROM (
+                   (SELECT min(m.created_at)
+                    FROM ${schema.messages} m
+                    WHERE m.conversation_id = h.conversation_id
+                      AND m.sender_type = 'human'
+                      AND m.created_at >= h.occurred_at)
+                   - h.occurred_at
+                 )) AS seconds
+          FROM ${schema.handoffEvents} h
+          WHERE h.workspace_id = ${workspaceId} AND h.occurred_at >= ${sinceIso}::timestamptz
+        )
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS median,
+               count(*)::int AS events
+        FROM waits
+        WHERE seconds IS NOT NULL AND seconds >= 0
       `),
     db.execute<{ day: string; count: number }>(sql`
         SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
@@ -236,6 +271,10 @@ export async function loadDashboard(
       cost: allTraces.reduce((sum, row) => sum + Number(row.cost ?? 0), 0),
       tokensIn: allTraces.reduce((sum, row) => sum + (row.tokens_in ?? 0), 0),
       tokensOut: allTraces.reduce((sum, row) => sum + (row.tokens_out ?? 0), 0),
+    },
+    handoffWait: {
+      medianSeconds: [...handoffWait][0]?.median ?? null,
+      events: [...handoffWait][0]?.events ?? 0,
     },
     firstResponse: {
       medianSeconds: [...firstResponse][0]?.median ?? null,

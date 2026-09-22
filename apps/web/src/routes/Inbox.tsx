@@ -6,6 +6,7 @@ import type {
   NormalizedMessage,
 } from '@ci/shared'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CustomerAssignee } from '../components/CustomerAssignee'
@@ -77,6 +78,10 @@ function messageToSend(text: string, attachment: UploadResult | null): Normalize
   }
 }
 
+/** Which queue the inbox is showing. Lives in the address so it can be linked to. */
+export const INBOX_TABS = ['open', 'waiting', 'review', 'resolved'] as const
+export type InboxTab = (typeof INBOX_TABS)[number]
+
 /** How many messages the thread asks for at a time, and grows by on scroll. */
 const MESSAGE_PAGE = 30
 
@@ -94,9 +99,22 @@ export function Inbox() {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | undefined>('open')
-  const [modeFilter, setModeFilter] = useState<ConversationMode | undefined>(undefined)
-  const [reviewFilter, setReviewFilter] = useState(false)
+  const navigate = useNavigate()
+  /**
+   * Which queue is showing, taken from the address.
+   *
+   * So the dashboard's "three are waiting" can be the way to go and read them, and so a
+   * reload keeps somebody on the tab they were working through.
+   */
+  const tab = useRouterState({
+    select: (state) => (state.location.search as { tab?: InboxTab }).tab ?? 'open',
+  })
+  const setTab = (next: InboxTab) => void navigate({ to: '/', search: { tab: next } })
+
+  const statusFilter = tab === 'open' || tab === 'resolved' ? tab : undefined
+  const modeFilter: ConversationMode | undefined = tab === 'waiting' ? 'waiting_human' : undefined
+  // Review cuts across status: a resolved conversation still needs reading.
+  const reviewFilter = tab === 'review'
 
   /**
    * Who owns each customer, so a row can say so.
@@ -174,34 +192,15 @@ export function Inbox() {
               { key: 'review', label: t('inbox.review') },
               { key: 'resolved', label: t('inbox.filters.resolved') },
             ] as const
-          ).map((tab) => {
-            const active = reviewFilter
-              ? tab.key === 'review'
-              : tab.key === 'waiting'
-                ? modeFilter === 'waiting_human'
-                : tab.key !== 'review' && statusFilter === tab.key && modeFilter === undefined
+          ).map((item) => {
+            const active = tab === item.key
             const waitingToReview = reviewCount.data?.count ?? 0
             return (
               <button
-                key={tab.key}
+                key={item.key}
                 type="button"
-                data-testid={`inbox-tab-${tab.key}`}
-                onClick={() => {
-                  if (tab.key === 'waiting') {
-                    setReviewFilter(false)
-                    setModeFilter('waiting_human')
-                    setStatusFilter(undefined)
-                  } else if (tab.key === 'review') {
-                    // Review cuts across status: a resolved conversation still needs reading.
-                    setReviewFilter(true)
-                    setModeFilter(undefined)
-                    setStatusFilter(undefined)
-                  } else {
-                    setReviewFilter(false)
-                    setModeFilter(undefined)
-                    setStatusFilter(tab.key)
-                  }
-                }}
+                data-testid={`inbox-tab-${item.key}`}
+                onClick={() => setTab(item.key)}
                 className={cn(
                   'flex flex-1 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors',
                   active
@@ -209,8 +208,8 @@ export function Inbox() {
                     : 'text-[var(--text-muted)] hover:text-[var(--text)]',
                 )}
               >
-                {tab.label}
-                {tab.key === 'review' && waitingToReview > 0 ? (
+                {item.label}
+                {item.key === 'review' && waitingToReview > 0 ? (
                   <span
                     data-testid="review-tab-count"
                     className="rounded-full bg-amber-500/20 px-1.5 text-[11px] font-semibold tabular-nums text-amber-600 dark:text-amber-300"
@@ -1229,6 +1228,23 @@ function AiSidebar({
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+        {/* What the AI noticed, kept apart from the identifiers above. Those five keys are
+            what an agent scans to check they have the right person; these are context. */}
+        {Object.entries(detail.customer?.notes ?? {}).length > 0 ? (
+          <div className="mt-2">
+            <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+              {t('sidebar.aiNoted')}
+            </p>
+            <dl className="space-y-1 text-[13px]" data-testid="customer-notes">
+              {Object.entries(detail.customer?.notes ?? {}).map(([key, value]) => (
+                <div key={key} className="flex gap-2">
+                  <dt className="w-24 shrink-0 text-[var(--text-muted)]">{key}</dt>
+                  <dd className="min-w-0 flex-1 break-words">{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
         ) : null}
         {detail.customer?.summary ? (

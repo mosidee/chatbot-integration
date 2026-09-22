@@ -526,7 +526,9 @@ test('the dashboard reports what the pilot is doing', async ({ page, request }) 
 
   // And the figures an operator acts on are present rather than blank panels.
   await expect(page.getByTestId('figure-answered')).toBeVisible()
-  await expect(page.getByTestId('figure-first-response')).toBeVisible()
+  // The wait for a person, which is what the first-reply median could never answer: the
+  // AI replies in seconds, so that figure read "four seconds" on a week of overnight waits.
+  await expect(page.getByTestId('figure-handoff-wait')).toBeVisible()
   await expect(page.getByTestId('figure-cost')).toBeVisible()
 })
 

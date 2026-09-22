@@ -17,7 +17,7 @@ import { Layout } from './components/Layout'
 import { NotFound } from './components/NotFound'
 import { Admin } from './routes/Admin'
 import { Dashboard } from './routes/Dashboard'
-import { Inbox } from './routes/Inbox'
+import { INBOX_TABS, Inbox, type InboxTab } from './routes/Inbox'
 import { Invite } from './routes/Invite'
 import { Knowledge } from './routes/Knowledge'
 import { Login } from './routes/Login'
@@ -131,7 +131,15 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   inviteRoute,
   appRoute.addChildren([
-    createRoute({ getParentRoute: () => appRoute, path: '/', component: Inbox }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/',
+      component: Inbox,
+      // Which queue is showing, so the dashboard can link straight into one.
+      validateSearch: (search: Record<string, unknown>): { tab: InboxTab } => ({
+        tab: INBOX_TABS.includes(search.tab as InboxTab) ? (search.tab as InboxTab) : 'open',
+      }),
+    }),
     createRoute({ getParentRoute: () => appRoute, path: '/dashboard', component: Dashboard }),
     createRoute({ getParentRoute: () => appRoute, path: '/knowledge', component: Knowledge }),
     createRoute({ getParentRoute: () => appRoute, path: '/simulator', component: Simulator }),

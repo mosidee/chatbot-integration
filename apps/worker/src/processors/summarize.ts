@@ -127,9 +127,19 @@ export async function processSummarize(
         .update(schema.customers)
         .set({
           summary: rendered,
-          // Facts the model extracted are merged under what a human or tool already set,
-          // because a person correcting a detail should outrank the model re-deriving it.
-          fields: { ...result.summary.facts, ...customer.fields },
+          /**
+           * Into `notes`, not `fields`.
+           *
+           * `fields` holds identifiers — the five keys `set_customer_field` may write, which
+           * merge matching reads and an agent scans to check they have the right person.
+           * The model's facts are free-form and keyed however it felt that turn, and
+           * merging them in put a paragraph about somebody's plan in the same list as their
+           * phone number.
+           *
+           * Still merged under what is already there: a person correcting a detail should
+           * outrank the model re-deriving it.
+           */
+          notes: { ...result.summary.facts, ...customer.notes },
           summaryUpdatedAt: new Date(),
           updatedAt: new Date(),
         })

@@ -179,6 +179,34 @@ describe('merging two customers', () => {
     expect(survivor?.fields.email).toBe('owner@salon.test')
   })
 
+  test('what the AI noted about either of them survives', async () => {
+    // `notes` is a column on `customers`, so the repoint list does not cover it: without
+    // being named in the survivor-wins block it dies with the absorbed row.
+    const f = await setup()
+    const { older, newer } = olderOf(f)
+    await f.db
+      .update(schema.customers)
+      .set({ notes: { plan: 'Starter', city: 'Chiang Mai' } })
+      .where(eq(schema.customers.id, older))
+    await f.db
+      .update(schema.customers)
+      .set({ notes: { plan: 'Growth', staff: '3' } })
+      .where(eq(schema.customers.id, newer))
+
+    await mergeCustomers(f.db, {
+      workspaceId: f.workspaceId,
+      survivorId: older,
+      absorbedId: newer,
+    })
+
+    const [survivor] = await f.db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.id, older))
+    // Survivor wins per key, absorbed fills the gaps.
+    expect(survivor?.notes).toEqual({ plan: 'Starter', city: 'Chiang Mai', staff: '3' })
+  })
+
   test('an audit entry survives both the merge and the suggestion', async () => {
     const f = await setup()
     const userId = await makeUser(f, 'agent')

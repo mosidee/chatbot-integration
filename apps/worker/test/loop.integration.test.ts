@@ -1016,7 +1016,13 @@ describe('customer memory', () => {
 
     expect(customers[0]?.summary).toContain('เชียงใหม่')
     expect(customers[0]?.summary).toContain('ยังไม่ได้ตัดสินใจสมัคร')
-    expect(customers[0]?.fields).toMatchObject({ city: 'Chiang Mai' })
+    /**
+     * Into `notes`, not `fields`. A city is something the model noticed, not one of the
+     * five identifiers merge matching compares, and mixing the two put a paragraph about
+     * somebody's plan in the same list as their phone number.
+     */
+    expect(customers[0]?.notes).toMatchObject({ city: 'Chiang Mai' })
+    expect(customers[0]?.fields).toEqual({})
     expect(customers[0]?.summaryUpdatedAt).not.toBeNull()
 
     // The history keeps what it said before, so a wrong summary can be traced.
