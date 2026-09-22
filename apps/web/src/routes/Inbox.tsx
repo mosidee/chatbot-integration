@@ -38,6 +38,16 @@ import { useRealtime } from '../lib/ws'
 /** How many messages the thread asks for at a time, and grows by on scroll. */
 const MESSAGE_PAGE = 30
 
+/**
+ * The most the thread will ever show, matching the cap the endpoint enforces.
+ *
+ * Held here as well so the button disappears on reaching it rather than going dead: without
+ * the clamp the window would keep growing past what the server honours, and pressing would
+ * quietly do nothing. A conversation longer than this is a different feature, not a bigger
+ * number, and one that only matters now that a thread is never closed for good.
+ */
+const MAX_MESSAGE_WINDOW = 500
+
 export function Inbox() {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
@@ -355,12 +365,14 @@ function ConversationPane({
     thread.scrollTop = thread.scrollHeight - previousHeight
   }, [detail.data?.messages.length])
 
+  const canLoadOlder = Boolean(detail.data?.hasMoreMessages) && messageWindow < MAX_MESSAGE_WINDOW
+
   const loadOlder = () => {
-    if (!detail.data?.hasMoreMessages || loadingOlder) return
+    if (!canLoadOlder || loadingOlder) return
     const thread = threadRef.current
     if (thread) restoreScrollRef.current = thread.scrollHeight
     setLoadingOlder(true)
-    setMessageWindow((current) => current + MESSAGE_PAGE)
+    setMessageWindow((current) => Math.min(current + MESSAGE_PAGE, MAX_MESSAGE_WINDOW))
   }
 
   const invalidate = () => {
@@ -510,7 +522,7 @@ function ConversationPane({
             if (event.currentTarget.scrollTop < 80) loadOlder()
           }}
         >
-          {data.hasMoreMessages ? (
+          {canLoadOlder ? (
             <div className="flex justify-center py-1">
               <Button
                 size="sm"

@@ -46,6 +46,21 @@ test.describe('a long conversation', () => {
      * number sent and one window does not cover it.
      */
     await expect(page.getByTestId('load-older-messages')).toBeVisible()
+
+    /**
+     * Where the reader is looking, so the next assertion can prove they stay there.
+     * Prepending content pushes everything down, and without restoring the scroll position
+     * the message being read jumps off screen.
+     */
+    const anchor = thread.getByText('ข้อความที่ 33', { exact: true })
+    await page.getByTestId('load-older-messages').click()
+    await page.waitForTimeout(600)
+
+    // Not thrown to the top, and the thread did not silently reset to the bottom either.
+    const scrollTop = await thread.evaluate((element) => element.scrollTop)
+    expect(scrollTop).toBeGreaterThan(0)
+    await expect(anchor).toBeVisible()
+
     for (let press = 0; press < 8; press += 1) {
       const button = page.getByTestId('load-older-messages')
       if ((await button.count()) === 0) break
