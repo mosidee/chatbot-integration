@@ -380,3 +380,254 @@ export async function countPendingMerges(db: Database, workspaceId: string): Pro
     )
   return rows[0]?.count ?? 0
 }
+
+// ---------------------------------------------------------------------------
+// Joining conversations that should have been one
+// ---------------------------------------------------------------------------
+
+/**
+ * A person's conversations on one channel, when there is more than one of them.
+ *
+ * These exist because a resolved conversation used to be final: the customer's next message
+ * started a new one, so a single unbroken chat on their phone became several rows here.
+ * That no longer happens, and this is for the history it left behind.
+ */
+export type SplitConversations = {
+  channelIdentityId: string
+  externalId: string
+  displayName: string | null
+  /** The one future messages will reopen: the most recently active. */
+  survivorId: string
+  absorbedIds: string[]
+  messages: number
+}
+
+export async function findSplitConversations(
+  db: Database,
+  workspaceId: string,
+): Promise<SplitConversations[]> {
+  const rows = await db
+    .select({
+      id: schema.conversations.id,
+      channelIdentityId: schema.conversations.channelIdentityId,
+      externalId: schema.channelIdentities.externalId,
+      displayName: schema.customers.displayName,
+      lastMessageAt: schema.conversations.lastMessageAt,
+      createdAt: schema.conversations.createdAt,
+    })
+    .from(schema.conversations)
+    .innerJoin(
+      schema.channelIdentities,
+      eq(schema.channelIdentities.id, schema.conversations.channelIdentityId),
+    )
+    .innerJoin(schema.customers, eq(schema.customers.id, schema.conversations.customerId))
+    .where(eq(schema.conversations.workspaceId, workspaceId))
+
+  const byIdentity = new Map<string, typeof rows>()
+  for (const row of rows) {
+    const group = byIdentity.get(row.channelIdentityId) ?? []
+    group.push(row)
+    byIdentity.set(row.channelIdentityId, group)
+  }
+
+  const split: SplitConversations[] = []
+  for (const [channelIdentityId, group] of byIdentity) {
+    if (group.length < 2) continue
+
+    /**
+     * The survivor is the most recently active, because that is the one the next inbound
+     * message reopens. Merging into anything else would leave the thread the customer is
+     * about to continue separate from the history just moved.
+     */
+    const ordered = [...group].sort(
+      (a, b) =>
+        (b.lastMessageAt?.getTime() ?? b.createdAt.getTime()) -
+        (a.lastMessageAt?.getTime() ?? a.createdAt.getTime()),
+    )
+    const survivor = ordered[0]
+    if (!survivor) continue
+
+    const ids = ordered.map((row) => row.id)
+    const counted = await db
+      .select({ id: schema.messages.id })
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.workspaceId, workspaceId),
+          inArray(schema.messages.conversationId, ids),
+        ),
+      )
+
+    split.push({
+      channelIdentityId,
+      externalId: survivor.externalId,
+      displayName: survivor.displayName,
+      survivorId: survivor.id,
+      absorbedIds: ordered.slice(1).map((row) => row.id),
+      messages: counted.length,
+    })
+  }
+
+  return split
+}
+
+export type ConversationMergeResult = {
+  messages: number
+  notes: number
+  suggestions: number
+  feedback: number
+  handoffEvents: number
+  traces: number
+  embeddings: number
+  verifications: number
+  absorbed: number
+}
+
+/**
+ * Fold several conversations into one.
+ *
+ * Every table that hangs off a conversation cascades on delete, so the order here is the
+ * same one `mergeCustomers` takes and for the same reason: repoint everything first, delete
+ * the emptied rows last. Deleting before repointing would take the messages, the notes, the
+ * traces and the feedback with them, and say nothing about it.
+ *
+ * The survivor keeps its own status, mode and owner — it is the live thread — and takes the
+ * earliest creation date, because the conversation now starts where the oldest message does.
+ */
+export async function mergeConversations(
+  db: Database,
+  input: {
+    workspaceId: string
+    survivorId: string
+    absorbedIds: string[]
+    userId?: string | null
+  },
+): Promise<ConversationMergeResult | null> {
+  const absorbedIds = input.absorbedIds.filter((id) => id !== input.survivorId)
+  if (absorbedIds.length === 0) return null
+
+  const rows = await db
+    .select()
+    .from(schema.conversations)
+    .where(
+      and(
+        eq(schema.conversations.workspaceId, input.workspaceId),
+        inArray(schema.conversations.id, [input.survivorId, ...absorbedIds]),
+      ),
+    )
+  const survivor = rows.find((row) => row.id === input.survivorId)
+  if (!survivor || rows.length !== absorbedIds.length + 1) return null
+
+  return db.transaction(async (tx) => {
+    const repoint = async (
+      table:
+        | typeof schema.messages
+        | typeof schema.internalNotes
+        | typeof schema.suggestions
+        | typeof schema.feedback
+        | typeof schema.handoffEvents
+        | typeof schema.aiTraces
+        | typeof schema.conversationEmbeddings
+        | typeof schema.identityVerifications,
+    ) => {
+      const moved = await tx
+        .update(table)
+        .set({ conversationId: input.survivorId })
+        .where(
+          and(eq(table.workspaceId, input.workspaceId), inArray(table.conversationId, absorbedIds)),
+        )
+        .returning({ id: table.id })
+      return moved.length
+    }
+
+    const messages = await repoint(schema.messages)
+    const notes = await repoint(schema.internalNotes)
+    const suggestions = await repoint(schema.suggestions)
+    const feedback = await repoint(schema.feedback)
+    const handoffEvents = await repoint(schema.handoffEvents)
+    const traces = await repoint(schema.aiTraces)
+    const embeddings = await repoint(schema.conversationEmbeddings)
+    const verifications = await repoint(schema.identityVerifications)
+
+    const absorbedRows = rows.filter((row) => row.id !== input.survivorId)
+    const earliest = [survivor, ...absorbedRows].reduce(
+      (oldest, row) => (row.createdAt < oldest ? row.createdAt : oldest),
+      survivor.createdAt,
+    )
+    const tags = [...new Set([survivor.tags, ...absorbedRows.map((row) => row.tags)].flat())]
+
+    await tx
+      .update(schema.conversations)
+      .set({ createdAt: earliest, tags, updatedAt: new Date() })
+      .where(eq(schema.conversations.id, input.survivorId))
+
+    // Last, and only now that nothing points at them.
+    await tx
+      .delete(schema.conversations)
+      .where(
+        and(
+          eq(schema.conversations.workspaceId, input.workspaceId),
+          inArray(schema.conversations.id, absorbedIds),
+        ),
+      )
+
+    await tx.insert(schema.auditLog).values({
+      id: newId(),
+      workspaceId: input.workspaceId,
+      actorUserId: input.userId ?? null,
+      action: 'conversation.merged',
+      targetType: 'conversation',
+      targetId: input.survivorId,
+      meta: { absorbed: absorbedIds, messages },
+    })
+
+    return {
+      messages,
+      notes,
+      suggestions,
+      feedback,
+      handoffEvents,
+      traces,
+      embeddings,
+      verifications,
+      absorbed: absorbedIds.length,
+    }
+  })
+}
+
+export type WorkspaceSplits = {
+  workspaceId: string
+  slug: string
+  status: string
+  groups: SplitConversations[]
+}
+
+/**
+ * Every workspace that has split conversations, named so a report is readable.
+ *
+ * Here rather than in the script because `scripts/` cannot resolve the query builder, and
+ * because a cross-workspace sweep is the kind of thing worth having in one tested place
+ * rather than written again each time somebody needs it.
+ */
+export async function findAllSplitConversations(db: Database): Promise<WorkspaceSplits[]> {
+  const workspaces = await db
+    .select({
+      workspaceId: schema.workspaces.id,
+      slug: schema.organization.slug,
+      status: schema.workspaces.status,
+    })
+    .from(schema.workspaces)
+    .innerJoin(schema.organization, eq(schema.organization.id, schema.workspaces.id))
+
+  const found: WorkspaceSplits[] = []
+  for (const workspace of workspaces) {
+    // A suspended or deleting tenant is left alone: its data is either frozen on purpose or
+    // about to go, and neither is a moment to rewrite its history.
+    if (workspace.status !== 'active') {
+      found.push({ ...workspace, groups: [] })
+      continue
+    }
+    found.push({ ...workspace, groups: await findSplitConversations(db, workspace.workspaceId) })
+  }
+  return found
+}

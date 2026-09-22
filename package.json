@@ -27,7 +27,8 @@
     "build:widget": "cd apps/widget && bun run build",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "db:reset": "bun run scripts/db-reset.ts"
+    "db:reset": "bun run scripts/db-reset.ts",
+    "conversations:merge": "bun run packages/infra/src/merge-conversations.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

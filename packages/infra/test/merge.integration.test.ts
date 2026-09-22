@@ -6,7 +6,9 @@ import {
   acceptMergeSuggestion,
   countPendingMerges,
   findMergeCandidates,
+  findSplitConversations,
   listMergeSuggestions,
+  mergeConversations,
   mergeCustomers,
   normaliseMatchValue,
   rejectMergeSuggestion,
@@ -482,5 +484,127 @@ describe('proposing a merge', () => {
       await acceptMergeSuggestion(mine.db, mine.workspaceId, suggestion?.id ?? '', userId),
     ).toBeNull()
     expect(await countPendingMerges(theirs.db, theirs.workspaceId)).toBe(1)
+  })
+})
+
+describe('folding split conversations back into one', () => {
+  /**
+   * The same danger as merging customers, one level down: eight tables hang off a
+   * conversation and every one cascades on delete. Repointing before deleting is the whole
+   * operation, and nothing about getting it wrong is visible in a type — the messages, the
+   * notes, the traces and the ratings would simply be gone.
+   */
+  test('moves everything that hangs off the absorbed threads, then removes them', async () => {
+    const f = await setup()
+    const identity = await f.db
+      .select({ id: schema.channelIdentities.id, channelId: schema.channelIdentities.channelId })
+      .from(schema.channelIdentities)
+      .where(eq(schema.channelIdentities.customerId, f.customerA.id))
+      .limit(1)
+    const channelIdentityId = identity[0]?.id ?? ''
+    const channelId = identity[0]?.channelId ?? ''
+
+    // A second, older thread for the same person on the same channel, as the old code left.
+    const olderId = newId()
+    await f.db.insert(schema.conversations).values({
+      id: olderId,
+      workspaceId: f.workspaceId,
+      channelId,
+      customerId: f.customerA.id,
+      channelIdentityId,
+      mode: 'ai',
+      status: 'resolved',
+      tags: ['billing'],
+      createdAt: new Date(Date.now() - 86_400_000),
+      lastMessageAt: new Date(Date.now() - 86_400_000),
+    })
+
+    await say(f, olderId, 'something said last week')
+    await say(f, f.customerA.conversationId, 'something said today')
+
+    await f.db.insert(schema.internalNotes).values({
+      id: newId(),
+      workspaceId: f.workspaceId,
+      conversationId: olderId,
+      authorType: 'human',
+      body: 'a note on the old thread',
+    })
+    await f.db.insert(schema.handoffEvents).values({
+      id: newId(),
+      workspaceId: f.workspaceId,
+      conversationId: olderId,
+      reason: 'ai_requested',
+      occurredAt: new Date(),
+    })
+    await f.db.insert(schema.aiTraces).values({
+      id: newId(),
+      workspaceId: f.workspaceId,
+      conversationId: olderId,
+      task: 'agent_chat',
+      model: 'mock',
+      outcome: 'sent',
+    })
+
+    const found = await findSplitConversations(f.db, f.workspaceId)
+    const group = found.find((row) => row.channelIdentityId === channelIdentityId)
+    expect(group).toBeDefined()
+    // The survivor is the live thread, because that is the one the next message reopens.
+    expect(group?.survivorId).toBe(f.customerA.conversationId)
+    expect(group?.absorbedIds).toEqual([olderId])
+
+    const result = await mergeConversations(f.db, {
+      workspaceId: f.workspaceId,
+      survivorId: f.customerA.conversationId,
+      absorbedIds: [olderId],
+      userId: null,
+    })
+
+    expect(result?.messages).toBe(1)
+    expect(result?.notes).toBe(1)
+    expect(result?.handoffEvents).toBe(1)
+    expect(result?.traces).toBe(1)
+    expect(result?.absorbed).toBe(1)
+
+    // Both sides of the history are in the one thread now.
+    const messages = await f.db
+      .select({ text: schema.messages.text })
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, f.customerA.conversationId))
+    expect(messages.map((row) => row.text)).toContain('something said last week')
+    expect(messages.map((row) => row.text)).toContain('something said today')
+
+    // And nothing was left pointing at a conversation that no longer exists.
+    const gone = await f.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, olderId))
+    expect(gone).toHaveLength(0)
+
+    const orphanedNotes = await f.db
+      .select({ id: schema.internalNotes.id })
+      .from(schema.internalNotes)
+      .where(eq(schema.internalNotes.conversationId, f.customerA.conversationId))
+    expect(orphanedNotes).toHaveLength(1)
+
+    // The thread now begins where its oldest message does, and keeps both sets of tags.
+    const survivor = await f.db
+      .select({ createdAt: schema.conversations.createdAt, tags: schema.conversations.tags })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, f.customerA.conversationId))
+    expect(survivor[0]?.createdAt.getTime()).toBeLessThan(Date.now() - 80_000_000)
+    expect(survivor[0]?.tags).toContain('billing')
+  })
+
+  test('leaves a customer who already has one conversation alone', async () => {
+    const f = await setup()
+    const found = await findSplitConversations(f.db, f.workspaceId)
+    expect(found).toHaveLength(0)
+
+    const nothing = await mergeConversations(f.db, {
+      workspaceId: f.workspaceId,
+      survivorId: f.customerA.conversationId,
+      absorbedIds: [],
+    })
+    expect(nothing).toBeNull()
   })
 })
