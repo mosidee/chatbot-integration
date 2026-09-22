@@ -41,9 +41,17 @@ export const testChannelAdapter: ChannelAdapter<TestChannelConfig> = {
     return configSchema.parse(raw ?? {})
   },
 
+  /**
+   * There is no platform signature to check, and this never admits anything.
+   *
+   * `publicWebhook: false` keeps the simulator off the public route; it reaches ingestion
+   * through `ingestInternal`, behind the console session its route already requires. This
+   * used to return true on the reasoning that the route was session-guarded — which was so
+   * of the simulator route and not of the public one, where the same adapter was reachable
+   * by anybody who knew a channel id.
+   */
   async verifyWebhook() {
-    // The route is behind session auth; there is no platform signature to check.
-    return true
+    return false
   },
 
   parseInbound(request: WebhookRequest): InboundEvent[] {

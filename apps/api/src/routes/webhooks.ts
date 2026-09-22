@@ -1,3 +1,4 @@
+import { getAdapter } from '@ci/channels'
 import { schema } from '@ci/db'
 import { ingestWebhook, toWebhookRequest } from '@ci/infra'
 import { eq } from 'drizzle-orm'
@@ -30,6 +31,11 @@ export function webhookRoutes(ctx: ApiContext) {
             .limit(1)
           const channel = rows[0]
           if (!channel) return status(404, { error: 'Unknown channel' })
+          // Same rule as the POST below: a channel that is not served publicly is not here
+          // to be handshaken with either, and answering differently would confirm its id.
+          if (!getAdapter(channel.type).capabilities.publicWebhook) {
+            return status(404, { error: 'Unknown channel' })
+          }
 
           const challenge = query['hub.challenge']
           const verifyToken = query['hub.verify_token']

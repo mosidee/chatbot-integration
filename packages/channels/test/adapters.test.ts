@@ -72,8 +72,15 @@ describe('test channel adapter', () => {
     expect(events[0]?.message.kind).toBe('image')
   })
 
-  test('needs no signature verification', async () => {
-    expect(await testChannelAdapter.verifyWebhook(request({}), {})).toBe(true)
+  /**
+   * It is not served by the public webhook route at all, so there is nothing for a
+   * signature to admit. This used to return true, on the reasoning that the simulator route
+   * is session-guarded — true of that route, and not of the public one, where the same
+   * adapter was reachable by anybody who knew a channel id.
+   */
+  test('is not reachable publicly, so it verifies nothing', async () => {
+    expect(testChannelAdapter.capabilities.publicWebhook).toBe(false)
+    expect(await testChannelAdapter.verifyWebhook(request({}), {})).toBe(false)
   })
 
   test('returns a platform message id when sending', async () => {
