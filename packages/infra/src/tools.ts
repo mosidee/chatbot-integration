@@ -72,11 +72,10 @@ export async function runPendingWrites(
   writes: PendingWrite[],
   bound: BoundIdentity,
   runtime: Runtime,
-  turnKey: string,
 ): Promise<WriteOutcome> {
   const succeeded: string[] = []
 
-  for (const [index, write] of writes.entries()) {
+  for (const write of writes) {
     const def = definitions.find((d) => d.id === write.toolId)
     if (!def) {
       return {
@@ -92,9 +91,11 @@ export async function runPendingWrites(
         bound,
         { fetch: runtime.toolFetch },
         {
-          // Stable across a retry of the same job, and distinct per write within a turn, so
-          // a retried turn repeats the same keys and the tenant can collapse them.
-          idempotencyKey: `${turnKey}-${index}`,
+          // Decided when the model asked for the write, from the turn, the tool and the
+          // arguments, rather than from the position in this list: a retried turn may ask
+          // for a different set of calls, and a positional key would then hand a second
+          // operation the key the tenant already answered for a first. See `PendingWrite`.
+          idempotencyKey: write.idempotencyKey,
         },
       )
       succeeded.push(write.tool)

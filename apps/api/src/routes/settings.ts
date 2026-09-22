@@ -9,6 +9,7 @@ import {
   newId,
   schema,
 } from '@ci/db'
+import type { WorkspaceSettings } from '@ci/db/schema/app'
 import { withSettingsDefaults } from '@ci/infra'
 import { aiTaskSchema, channelTypeSchema, conversationModeSchema, languageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
@@ -37,6 +38,40 @@ const REQUIRED_FIELDS: Record<string, { key: string; label: string; secret: bool
   ],
   test: [],
   web: [{ key: 'visitorTokenSecret', label: 'Visitor token secret', secret: true }],
+}
+
+/**
+ * Workspace settings as the browser is allowed to see them.
+ *
+ * Credentials are reported as present and never returned, here and in every response that
+ * carries settings: a viewer can read this, and an admin has no reason to be handed back a
+ * secret they just wrote. One function rather than two, because the two drifted apart once
+ * already and the reply to a write is the easier of the pair to forget.
+ */
+function publicSettings(raw: WorkspaceSettings) {
+  const { externalRetrieval, identity, ...rest } = withSettingsDefaults(raw)
+  return {
+    ...rest,
+    identity: {
+      widgetToken: identity.widgetToken,
+      verificationLink: {
+        enabled: identity.verificationLink.enabled,
+        url: identity.verificationLink.url,
+        ttlMinutes: identity.verificationLink.ttlMinutes,
+        hasSecret: Boolean(identity.verificationLink.secretEncrypted),
+      },
+    },
+    externalRetrieval: externalRetrieval
+      ? {
+          kind: externalRetrieval.kind,
+          baseUrl: externalRetrieval.baseUrl,
+          datasetId: externalRetrieval.datasetId,
+          topK: externalRetrieval.topK,
+          scoreThreshold: externalRetrieval.scoreThreshold,
+          hasApiKey: Boolean(externalRetrieval.apiKeyEncrypted),
+        }
+      : null,
+  }
 }
 
 export function settingsRoutes(ctx: ApiContext) {
@@ -76,33 +111,7 @@ export function settingsRoutes(ctx: ApiContext) {
           const workspace = rows[0]
           if (!workspace) return status(404, { error: 'Workspace not found' })
 
-          // A viewer can read settings, so every credential in them is reported as present
-          // rather than returned, exactly as provider keys are.
-          const { externalRetrieval, ...rest } = withSettingsDefaults(workspace.settings)
-          return {
-            settings: {
-              ...rest,
-              identity: {
-                widgetToken: rest.identity.widgetToken,
-                verificationLink: {
-                  enabled: rest.identity.verificationLink.enabled,
-                  url: rest.identity.verificationLink.url,
-                  ttlMinutes: rest.identity.verificationLink.ttlMinutes,
-                  hasSecret: Boolean(rest.identity.verificationLink.secretEncrypted),
-                },
-              },
-              externalRetrieval: externalRetrieval
-                ? {
-                    kind: externalRetrieval.kind,
-                    baseUrl: externalRetrieval.baseUrl,
-                    datasetId: externalRetrieval.datasetId,
-                    topK: externalRetrieval.topK,
-                    scoreThreshold: externalRetrieval.scoreThreshold,
-                    hasApiKey: Boolean(externalRetrieval.apiKeyEncrypted),
-                  }
-                : null,
-            },
-          }
+          return { settings: publicSettings(workspace.settings) }
         },
         { auth: 'viewer' },
       )
@@ -187,7 +196,9 @@ export function settingsRoutes(ctx: ApiContext) {
             .update(schema.workspaces)
             .set({ settings: merged, updatedAt: new Date() })
             .where(eq(schema.workspaces.id, workspaceId))
-          return { settings: merged }
+          // Through the same projection the GET uses. Returning `merged` directly handed
+          // the stored ciphertext of both credentials straight back to the browser.
+          return { settings: publicSettings(merged) }
         },
         {
           auth: 'admin',

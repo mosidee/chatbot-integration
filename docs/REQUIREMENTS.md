@@ -18,7 +18,7 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 4 | Stack | **Elysia on Bun**, Drizzle ORM, Postgres + pgvector, Redis (BullMQ + pub/sub), MinIO (S3 API), **Vite React SPA** with Tailwind and hand-rolled components, Bun workspaces monorepo, **Zod** schemas shared, hand-written typed `fetch` client | Team preference; thin HTTP layer keeps core framework-free. shadcn/ui, TypeBox and Eden Treaty were in the original plan and not adopted: Eden's route inference slowed the browser typecheck and tied it to the server's |
 | 5 | Customer identity | Contact per channel identity → `customers` record; **merge suggested** by shared phone / order ID, **human confirms**; never auto-merge | Avoid leaking one customer's history to another |
 | 6 | Conversation modes | `ai` (default for pilot), `ai_supervised`, `human`, `waiting_human`; selectable per workspace / channel / conversation. **AI never sends while mode is `human`** | Trusted pilot partner; supervised mode ready for later |
-| 7 | AI capabilities | **Tool-using agent, internal tools now**, registry designed for HTTP tools + MCP later. Fallback to answer-only for models without function calling | Option 3 is "register another tool" |
+| 7 | AI capabilities | **Tool-using agent**: internal tools first, the registry designed for HTTP tools and MCP later. Both halves happened — see rows 18 to 20. Fallback to answer-only for models without function calling | Option 3 is "register another tool" |
 | 8 | Knowledge sources | Q&A entries, articles, PDF/DOCX upload (parser behind interface), promote human replies to knowledge, external-retrieval adapter; website crawl later. **Hybrid search** (pgvector + trigram keyword, RRF, optional rerank) | Thai product terms need keyword match |
 | 9 | Memory & retention | Recent window + per-customer rolling summary always on; semantic search over past conversations as a tool. Default retention 2 years, per-workspace; one-job "delete customer". **Redact card numbers and Thai 13-digit ID numbers** before storage and before any model call | PDPA |
 | 10 | Model providers | **Provider profiles + per-task model slots + fallback**. Pilot providers: OpenAI, OpenRouter, operator's self-hosted 9router. Every call logged with provider/model/tokens/latency/cost | Outages must not become silence |
@@ -38,7 +38,7 @@ Pilot success metrics: share of conversations fully handled by AI with no negati
 
 ## 3. Feature list
 
-Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backlog.
+Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[next]** the milestone after, **[later]** backlog.
 
 ### 3.1 Channels
 - [v1] Normalised message model; every adapter translates to/from it
@@ -78,10 +78,11 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [M5] Tool **sources** behind one registry interface, so the agent loop does not know where a tool came from
 - [M5] `http_tool`: one endpoint configured per workspace by an admin — URL, method, model-filled arguments, system-bound values, encrypted credential, timeout
 - [next] MCP client: a tenant connects their own server and brings its whole tool set; per-workspace allowlist, because every exposed tool costs prompt budget. The source interface it plugs into is built
-- [M5] Restricted egress for tenant-defined tools (see decision 20); `tool_error` handoff when a tool fails or times out
-- [M5] A tool that writes records intent and fires after the turn, as every other side effect does. A write that fails holds the reply back, because a customer must never read "done" for something that did not happen
+- [M5] Restricted egress for tenant-defined tools (see decision 20); `tool_error` handoff when a tool cannot be reached, answers with an error status or times out. Arguments the model got wrong go back to it to correct instead, since the endpoint was never called
+- [M5] A tool that writes records intent and fires after the turn, as every other side effect does. A write that fails holds the reply back, because a customer must never read "done" for something that did not happen; a turn that hands off for any other reason abandons its pending writes unfired
 - [M5] Identity proofs: the widget token, and a one-time verification link for LINE and Messenger (decision 21)
 - [M5] salon-saas subscription status, through the widget token's attributes. Account lookup waits on a read-only support credential on the salon-saas side; ticket creation is deliberately not built, because a conversation here already has an assignee, a status, tags, notes and a history
+- [M5] Internal tool `request_identity_verification`, offered only when a verification link is configured and nothing has been proved yet
 - [later] `schedule_follow_up` tool; per-tenant budgets / rate limits; prompt versioning with A/B
 
 ### 3.4 Knowledge (RAG)
@@ -111,6 +112,9 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[later]** backl
 - [v1] Knowledge management screens
 - [v1] Settings: channels, providers + task slots, mode defaults, business hours, retention, redaction, members, canned responses. (Handoff rules: no table, route or screen; see the handoff line in §3.2)
 - [v1] Minimal dashboard: volume per channel, AI vs human handled, handoff reasons, first-response time, cost/day
+- [M5] Settings: **Tools**, where an admin defines an endpoint of their own, tests it against the live rule set, and enables or disables it
+- [M5] Settings: **Proving who a customer is**, one switch per identity proof plus the verification link's URL, secret and lifetime
+- [M5] Conversation sidebar: whether this customer was proved, what the proof carried, and a button to send them a verification link
 - [v1] Review queue for unsupervised AI conversations
 - [v1] Roles `admin` / `agent` / `viewer`; email+password. (Google sign-in is wired in the auth config and has no control on the login page; invitations have a table and no endpoint, so members are added by seed or by hand)
 - [v1] Thai + English i18n; mobile-friendly responsive layout

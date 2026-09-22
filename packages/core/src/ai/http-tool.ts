@@ -97,9 +97,12 @@ function composeRequest(
 ): { url: URL; init: RequestInit } {
   const { config } = def
 
-  const values = new Map<string, string>()
+  // Kept as the model typed them. A query string and a path have to be text, but a JSON
+  // body does not, and an argument declared as a number arriving as "5" fails validation on
+  // any tenant endpoint that checks its types — with nothing to show the tenant why.
+  const values = new Map<string, unknown>()
   for (const [key, value] of Object.entries(args)) {
-    if (value !== undefined) values.set(key, String(value))
+    if (value !== undefined) values.set(key, value)
   }
   for (const binding of config.bindings) {
     const value = boundValue(binding.source, bound)
@@ -112,7 +115,7 @@ function composeRequest(
     const value = values.get(name)
     if (value === undefined) return whole
     consumedByPath.add(name)
-    return encodeURIComponent(value)
+    return encodeURIComponent(String(value))
   })
 
   let url: URL
@@ -137,7 +140,8 @@ function composeRequest(
   }
 
   if (config.method === 'GET') {
-    for (const [name, value] of remaining) url.searchParams.set(name, value)
+    // A query string is text whatever the argument was declared as.
+    for (const [name, value] of remaining) url.searchParams.set(name, String(value))
     return { url, init: { method: 'GET', headers } }
   }
 
@@ -204,16 +208,29 @@ export async function executeHttpTool(
   }
 
   const contentType = response.headers.get('content-type') ?? ''
-  let body: unknown = text.slice(0, MAX_BODY_CHARS)
   if (contentType.includes('json')) {
     try {
-      body = JSON.parse(text)
+      const parsed: unknown = JSON.parse(text)
+      // The cap applies to a parsed answer as much as to a plain one. It used to be
+      // applied to the text and then thrown away by this branch, which is the normal
+      // case, so a large JSON body went into the prompt whole and spent the budget the
+      // model needed to write its reply.
+      const serialised = JSON.stringify(parsed) ?? ''
+      if (serialised.length <= MAX_BODY_CHARS) return { status: response.status, body: parsed }
+      return {
+        status: response.status,
+        body: {
+          truncated: true,
+          note: `The answer was ${serialised.length} characters and has been cut to ${MAX_BODY_CHARS}. Ask for less, or tell the customer what is here.`,
+          text: serialised.slice(0, MAX_BODY_CHARS),
+        },
+      }
     } catch {
       // A wrong content type is the tenant's business; the text still answers the question.
     }
   }
 
-  return { status: response.status, body }
+  return { status: response.status, body: text.slice(0, MAX_BODY_CHARS) }
 }
 
 async function readCapped(response: Response): Promise<string> {
@@ -239,6 +256,23 @@ async function readCapped(response: Response): Promise<string> {
     offset += chunk.byteLength
   }
   return new TextDecoder().decode(joined.slice(0, MAX_BODY_BYTES))
+}
+
+/**
+ * A short, stable fingerprint of the arguments.
+ *
+ * Keys are sorted so that two objects with the same content agree whatever order the model
+ * emitted them in. FNV-1a because this identifies an operation, it does not protect one:
+ * the tenant is trusting the key to be the same across our retries, not to be unguessable.
+ */
+function fingerprint(args: Record<string, unknown>): string {
+  const canonical = JSON.stringify(args, Object.keys(args).sort())
+  let hash = 2166136261
+  for (let i = 0; i < canonical.length; i += 1) {
+    hash ^= canonical.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 /** True when this definition cannot run without an identity nobody has proved. */
@@ -274,6 +308,12 @@ export function createHttpToolSource(
           execute: async (rawInput: unknown) => {
             const parsed = schema.safeParse(rawInput ?? {})
             if (!parsed.success) {
+              // Deliberately not recorded as a tool error. The endpoint was never called
+              // and nothing failed on the tenant's side: the model got the arguments wrong
+              // and has steps left to correct them, which is what a schema complaint is
+              // for. Recording it would hand off a turn the model was about to get right.
+              // A model that gives up and answers anyway is the ordinary
+              // answering-without-knowledge case the system prompt already covers.
               return {
                 error: `invalid arguments: ${parsed.error.issues[0]?.message ?? 'bad input'}`,
               }
@@ -283,7 +323,14 @@ export function createHttpToolSource(
             if (def.config.effect === 'write') {
               // Recorded, not run. The worker fires it once the turn has finished, which is
               // what stops a turn that fails half way leaving a record in somebody's system.
-              ctx.scratchpad.pendingWrites.push({ toolId: def.id, tool: def.name, args })
+              ctx.scratchpad.pendingWrites.push({
+                toolId: def.id,
+                tool: def.name,
+                args,
+                // Same turn, same tool, same arguments means the same operation, whatever
+                // order a retried turn asks for them in.
+                idempotencyKey: `${ctx.turnKey}-${def.name}-${fingerprint(args)}`,
+              })
               return {
                 ok: true,
                 queued: true,

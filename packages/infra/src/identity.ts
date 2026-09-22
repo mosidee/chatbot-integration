@@ -194,6 +194,33 @@ export async function consumeVerificationCode(
   return rows[0] ?? null
 }
 
+/**
+ * What a customer is told, in their own language.
+ *
+ * Both halves live here so they cannot drift: the link and the confirmation that follows it
+ * are one exchange, and it read badly when the link arrived in Thai and the confirmation
+ * came back in English because two files each picked a language their own way.
+ */
+export const CONFIRMED_TEXT: Record<Language, string> = {
+  th: 'ยืนยันตัวตนเรียบร้อยแล้วค่ะ ตอนนี้ดูข้อมูลบัญชีของคุณได้แล้ว',
+  en: 'Thanks, your account is confirmed. I can look up your details now.',
+}
+
+/** The language this customer is answered in, with the workspace default as the fallback. */
+export async function customerLanguage(
+  db: Database,
+  workspaceId: string,
+  customerId: string,
+  fallback: Language,
+): Promise<Language> {
+  const rows = await db
+    .select({ primaryLanguage: schema.customers.primaryLanguage })
+    .from(schema.customers)
+    .where(and(eq(schema.customers.id, customerId), eq(schema.customers.workspaceId, workspaceId)))
+    .limit(1)
+  return rows[0]?.primaryLanguage ?? fallback
+}
+
 const LINK_TEXT: Record<Language, (url: string) => string> = {
   th: (url) => `เพื่อดูข้อมูลบัญชีของคุณ รบกวนกดลิงก์นี้เพื่อยืนยันตัวตนค่ะ ลิงก์ใช้ได้ครั้งเดียว: ${url}`,
   en: (url) =>
@@ -238,16 +265,12 @@ export async function sendVerificationLink(
   const conversation = rows[0]
   if (!conversation) return { ok: false, reason: 'conversation_not_found' }
 
-  const customerRows = await db
-    .select({ primaryLanguage: schema.customers.primaryLanguage })
-    .from(schema.customers)
-    .where(
-      and(
-        eq(schema.customers.id, conversation.customerId),
-        eq(schema.customers.workspaceId, input.workspaceId),
-      ),
-    )
-    .limit(1)
+  const language = await customerLanguage(
+    db,
+    input.workspaceId,
+    conversation.customerId,
+    settings.defaultLanguage,
+  )
 
   const { code } = await mintVerificationCode(db, {
     workspaceId: input.workspaceId,
@@ -259,7 +282,6 @@ export async function sendVerificationLink(
   const url = new URL(link.url)
   url.searchParams.set('code', code)
 
-  const language: Language = customerRows[0]?.primaryLanguage ?? settings.defaultLanguage
   const text = (LINK_TEXT[language] ?? LINK_TEXT.en)(url.toString())
 
   const stored = await storeMessage(db, {

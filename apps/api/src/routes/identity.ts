@@ -1,13 +1,15 @@
 import { verifyVisitorToken } from '@ci/channels'
 import { decryptSecret, schema } from '@ci/db'
 import {
+  CONFIRMED_TEXT,
   consumeVerificationCode,
+  customerLanguage,
   findVerificationCode,
   loadWorkspaceSettings,
   recordVerifiedIdentity,
   storeMessage,
 } from '@ci/infra'
-import { capIdentityAttributes } from '@ci/shared'
+import { attributesFromClaims } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
@@ -66,10 +68,7 @@ export function identityRoutes(ctx: ApiContext) {
         return status(404, { error: 'That link is not valid any more' })
       }
 
-      const attributes = capIdentityAttributes({
-        ...(claims.attributes ?? {}),
-        ...(claims.email ? { email: claims.email } : {}),
-      })
+      const attributes = attributesFromClaims(claims)
 
       await recordVerifiedIdentity(db, {
         workspaceId: consumed.workspaceId,
@@ -78,19 +77,37 @@ export function identityRoutes(ctx: ApiContext) {
       })
 
       // Written into the thread so an agent reading it later can see when this person
-      // became a known account, and so the customer is told it worked.
+      // became a known account, and so the customer is told it worked — in the language the
+      // link itself was written in, which is the customer's and not the workspace's.
+      const rows = await db
+        .select({
+          customerId: schema.conversations.customerId,
+          mode: schema.conversations.mode,
+        })
+        .from(schema.conversations)
+        .where(
+          and(
+            eq(schema.conversations.id, consumed.conversationId),
+            eq(schema.conversations.workspaceId, consumed.workspaceId),
+          ),
+        )
+        .limit(1)
+      const conversation = rows[0]
+      if (!conversation) return status(404, { error: 'That link is not valid any more' })
+
+      const language = await customerLanguage(
+        db,
+        consumed.workspaceId,
+        conversation.customerId,
+        settings.defaultLanguage,
+      )
+
       const stored = await storeMessage(db, {
         workspaceId: consumed.workspaceId,
         conversationId: consumed.conversationId,
         direction: 'outbound',
         senderType: 'system',
-        message: {
-          kind: 'text',
-          text:
-            settings.defaultLanguage === 'th'
-              ? 'ยืนยันตัวตนเรียบร้อยแล้วค่ะ ตอนนี้ดูข้อมูลบัญชีของคุณได้แล้ว'
-              : 'Thanks, your account is confirmed. I can look up your details now.',
-        },
+        message: { kind: 'text', text: CONFIRMED_TEXT[language] ?? CONFIRMED_TEXT.en },
         status: 'queued',
         redaction: settings.redaction,
       })
@@ -109,18 +126,7 @@ export function identityRoutes(ctx: ApiContext) {
       // Whatever the customer asked before proving who they were is still unanswered, so
       // the AI gets another turn with the identity it was missing. The processor re-reads
       // the mode, so a conversation a human has taken over is left alone.
-      const rows = await db
-        .select({ mode: schema.conversations.mode })
-        .from(schema.conversations)
-        .where(
-          and(
-            eq(schema.conversations.id, consumed.conversationId),
-            eq(schema.conversations.workspaceId, consumed.workspaceId),
-          ),
-        )
-        .limit(1)
-
-      if (rows[0]?.mode === 'ai') {
+      if (conversation.mode === 'ai') {
         await runtime.queues.ai_turn.add('run', {
           workspaceId: consumed.workspaceId,
           conversationId: consumed.conversationId,

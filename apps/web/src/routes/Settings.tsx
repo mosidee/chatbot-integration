@@ -1123,7 +1123,7 @@ function ToolEditor({
         {config.args.map((arg, index) => (
           <div
             key={argKeys[index] ?? `arg-${index}`}
-            className="grid gap-1.5 sm:grid-cols-[1fr_90px_1fr_auto]"
+            className="grid gap-1.5 sm:grid-cols-[1fr_90px_1fr_auto_auto]"
           >
             <Input
               placeholder={t('settings.toolArgName')}
@@ -1137,6 +1137,7 @@ function ToolEditor({
               }
             />
             <select
+              aria-label={t('settings.toolArgType')}
               className="h-9 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
               value={arg.type}
               onChange={(e) =>
@@ -1162,6 +1163,21 @@ function ToolEditor({
                 })
               }
             />
+            <label className="flex items-center gap-1 text-[11px] whitespace-nowrap">
+              <input
+                type="checkbox"
+                data-testid={`tool-arg-required-${index}`}
+                checked={arg.required}
+                onChange={(e) =>
+                  patchConfig({
+                    args: config.args.map((a, i) =>
+                      i === index ? { ...a, required: e.target.checked } : a,
+                    ),
+                  })
+                }
+              />
+              {t('settings.toolArgRequired')}
+            </label>
             <Button
               size="sm"
               variant="ghost"

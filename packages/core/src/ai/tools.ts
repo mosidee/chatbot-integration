@@ -17,6 +17,15 @@ export type PendingWrite = {
   toolId: string
   tool: string
   args: Record<string, unknown>
+  /**
+   * Decided here, when the model asks, rather than by position when the writes are fired.
+   *
+   * A retry re-runs the whole turn, and the model may then ask for a different set of
+   * calls or the same ones in a different order. A key built from the position in that
+   * list would give a second operation the key the tenant already answered for a first
+   * one, which is how a refund gets issued twice.
+   */
+  idempotencyKey: string
 }
 
 export type TurnScratchpad = {
@@ -244,8 +253,6 @@ export function createInternalTools(ctx: ToolContext) {
       : {}),
   }
 }
-
-export type InternalTools = ReturnType<typeof createInternalTools>
 
 /**
  * The internal tools as a source.

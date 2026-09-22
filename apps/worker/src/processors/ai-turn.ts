@@ -124,7 +124,17 @@ export async function processAiTurn(
     .find((m) => m.senderType === 'customer')?.text
   const prefetched =
     retrieval.enabled.knowledge && newestCustomerText
-      ? await retrieval.prefetch(newestCustomerText).catch(() => [])
+      ? await retrieval.prefetch(newestCustomerText).catch((error) => {
+          // The turn carries on without pre-fetched knowledge, which is the right call: the
+          // model can still search, and the customer still gets an answer. But a retrieval
+          // outage and an empty knowledge base produce identical turns, so the difference
+          // has to be in the log or nobody will ever find it.
+          logger.warn('pre-fetching knowledge failed; the turn continues without it', {
+            conversationId: job.conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+          return []
+        })
       : []
 
   const input: AgentTurnInput = {
@@ -151,8 +161,12 @@ export async function processAiTurn(
     turnKey,
     logger,
     toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
-    // Only worth offering when a link can actually be sent and nothing is proven yet.
+    // Offered only where it can actually be honoured. `draft` is excluded because that
+    // path ends at a suggestion for a person to approve and never reaches the code below
+    // that sends the link: the model would otherwise write "I've sent you a link", an
+    // agent would approve it, and nothing would arrive.
     identityVerificationAvailable:
+      job.deliver === 'send' &&
       settings.identity.verificationLink.enabled &&
       settings.identity.verificationLink.url !== null &&
       bound.subject === null,
@@ -202,13 +216,7 @@ export async function processAiTurn(
   // stored. A customer must never read "done" for something that then failed, so a failed
   // write discards the reply and fetches a person instead.
   if (result.pendingWrites.length > 0) {
-    const outcome = await runPendingWrites(
-      toolDefinitions,
-      result.pendingWrites,
-      bound,
-      runtime,
-      turnKey,
-    )
+    const outcome = await runPendingWrites(toolDefinitions, result.pendingWrites, bound, runtime)
     if (outcome.failed) {
       logger.warn('a tenant tool write failed; the reply was held back', {
         conversationId: job.conversationId,
@@ -239,7 +247,14 @@ export async function processAiTurn(
       logger,
       job,
       'model_error',
-      'The AI returned nothing at all, so this needs a person. The trace shows what it was asked.',
+      // Names the writes if any already fired. The tool told the model they were queued and
+      // the model then said nothing, so the customer has been told nothing at all while
+      // something in the tenant's system has already changed.
+      result.pendingWrites.length > 0
+        ? `The AI returned nothing at all, so this needs a person. It had already carried out: ${result.pendingWrites
+            .map((w) => w.tool)
+            .join(', ')}. The trace shows what it was asked.`
+        : 'The AI returned nothing at all, so this needs a person. The trace shows what it was asked.',
     )
     return
   }
@@ -286,18 +301,44 @@ export async function processAiTurn(
     messageId: stored.id,
   })
 
-  // Queued after the reply, so the customer reads the answer and then the link, in that
-  // order, rather than being handed a login prompt before being told why.
+  // Queued after the reply so the customer is told why before being handed a login
+  // prompt. Both are separate jobs on the outbound queue, which runs ten at a time, so
+  // this is the order they are enqueued in rather than a guarantee of the order they
+  // arrive in.
   if (result.verificationRequested) {
-    const sent = await sendVerificationLink(runtime, {
-      workspaceId: job.workspaceId,
-      conversationId: job.conversationId,
-    })
-    if (!sent.ok) {
+    // Everything above has already happened: the reply is stored and queued. A throw here
+    // would fail the job, and BullMQ would re-run the whole turn — a second model call, a
+    // second reply to the customer and a second pass over the writes. Whatever goes wrong
+    // with the link, it must not undo work that succeeded.
+    let sent: Awaited<ReturnType<typeof sendVerificationLink>> | null = null
+    try {
+      sent = await sendVerificationLink(runtime, {
+        workspaceId: job.workspaceId,
+        conversationId: job.conversationId,
+      })
+    } catch (error) {
+      logger.error('sending a verification link threw', {
+        conversationId: job.conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    if (!sent?.ok) {
+      // The customer has just been told a link is coming. Leaving it at a log line is the
+      // one way out of an AI turn that leaves somebody waiting with nobody told, which is
+      // the rule this product is built around.
       logger.warn('the AI asked for a verification link that could not be sent', {
         conversationId: job.conversationId,
-        reason: sent.reason,
+        reason: sent?.reason ?? 'threw',
       })
+      await handOff(
+        runtime,
+        ports,
+        logger,
+        job,
+        'tool_error',
+        'The AI told this customer a verification link was on its way, and it could not be sent. They are waiting for it.',
+      )
     }
   }
 }

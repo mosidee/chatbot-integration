@@ -206,6 +206,63 @@ describe('executeHttpTool', () => {
     expect(body.value).toEqual({ note: 'called back', conversation: 'conv1' })
   })
 
+  test('keeps a declared number a number in a JSON body', async () => {
+    // A tenant endpoint that validates its own types would reject "5" and the tenant would
+    // have no way of knowing why.
+    const body = capture<Record<string, unknown>>()
+    const base = local(async (request) => {
+      body.value = (await request.json()) as Record<string, unknown>
+      return Response.json({})
+    })
+
+    await executeHttpTool(
+      definition({
+        config: config({
+          method: 'POST',
+          url: `${base}/x`,
+          args: [
+            { name: 'amount', type: 'number', description: 'How much', required: true },
+            { name: 'urgent', type: 'boolean', description: 'Rush it', required: true },
+          ],
+        }),
+      }),
+      { amount: 5, urgent: true },
+      bound(),
+      { fetch },
+    )
+
+    expect(body.value).toEqual({ amount: 5, urgent: true })
+  })
+
+  test('truncates a large JSON answer rather than spending the reply budget on it', async () => {
+    // Comfortably over the 8 KB the model is shown and under the 64 KB we read at all, so
+    // this exercises the truncation rather than the read cap.
+    const big = { items: Array.from({ length: 800 }, (_, i) => ({ id: i, name: `row ${i}` })) }
+    const base = local(() => Response.json(big))
+
+    const outcome = await executeHttpTool(
+      definition({ config: config({ url: `${base}/x` }) }),
+      {},
+      bound(),
+      { fetch },
+    )
+
+    const body = outcome.body as { truncated?: boolean; text?: string }
+    expect(body.truncated).toBe(true)
+    expect(body.text?.length).toBeLessThanOrEqual(8 * 1024)
+  })
+
+  test('leaves a JSON answer that fits exactly as it is', async () => {
+    const base = local(() => Response.json({ plan: 'pro', renewsOn: '2026-10-01' }))
+    const outcome = await executeHttpTool(
+      definition({ config: config({ url: `${base}/x` }) }),
+      {},
+      bound(),
+      { fetch },
+    )
+    expect(outcome.body).toEqual({ plan: 'pro', renewsOn: '2026-10-01' })
+  })
+
   test('substitutes and encodes a placeholder in the path', async () => {
     const path = capture<string>()
     const base = local((request) => {
@@ -445,8 +502,79 @@ describe('a writing tool during the turn', () => {
     expect(calls).toBe(0)
     expect(result).toMatchObject({ queued: true })
     expect(ctx.scratchpad.pendingWrites).toEqual([
-      { toolId: 'tool-1', tool: 'check_plan', args: { reason: 'too expensive' } },
+      {
+        toolId: 'tool-1',
+        tool: 'check_plan',
+        args: { reason: 'too expensive' },
+        idempotencyKey: expect.stringContaining('turn-1-check_plan-'),
+      },
     ])
+  })
+})
+
+describe('the key a write carries', () => {
+  function writeSource(name: string) {
+    return createHttpToolSource(
+      [
+        definition({
+          id: `id-${name}`,
+          name,
+          config: config({
+            method: 'POST',
+            effect: 'write',
+            // Declared, or the schema would strip them and every call would look alike.
+            args: [
+              { name: 'id', type: 'string', description: 'Which one', required: false },
+              { name: 'text', type: 'string', description: 'Any text', required: false },
+              { name: 'amount', type: 'number', description: 'How much', required: false },
+            ],
+          }),
+        }),
+      ],
+      { fetch },
+    )
+  }
+
+  async function recordWrite(ctx: ToolContext, name: string, args: Record<string, unknown>) {
+    const tool = writeSource(name).tools(ctx)[name]
+    await tool?.execute?.(args, { toolCallId: 't', messages: [] } as never)
+  }
+
+  test('is the same for the same turn, tool and arguments, whatever the order', async () => {
+    // What a retried turn must produce: the model may ask for the same operations in a
+    // different order, and a key that moved with the position would let one of them
+    // through twice.
+    const first = context()
+    await recordWrite(first, 'refund', { id: 'A' })
+    await recordWrite(first, 'note', { text: 'B' })
+
+    const second = context()
+    await recordWrite(second, 'note', { text: 'B' })
+    await recordWrite(second, 'refund', { id: 'A' })
+
+    const keyFor = (ctx: ToolContext, tool: string) =>
+      ctx.scratchpad.pendingWrites.find((w) => w.tool === tool)?.idempotencyKey
+
+    expect(keyFor(first, 'refund')).toBe(keyFor(second, 'refund') as string)
+    expect(keyFor(first, 'note')).toBe(keyFor(second, 'note') as string)
+  })
+
+  test('does not depend on the order the model wrote the arguments in', async () => {
+    const a = context()
+    await recordWrite(a, 'refund', { id: 'A', amount: 1 })
+    const b = context()
+    await recordWrite(b, 'refund', { amount: 1, id: 'A' })
+    expect(a.scratchpad.pendingWrites[0]?.idempotencyKey).toBe(
+      b.scratchpad.pendingWrites[0]?.idempotencyKey as string,
+    )
+  })
+
+  test('differs for different arguments, so two real operations stay apart', async () => {
+    const ctx = context()
+    await recordWrite(ctx, 'refund', { id: 'A' })
+    await recordWrite(ctx, 'refund', { id: 'B' })
+    const [one, two] = ctx.scratchpad.pendingWrites
+    expect(one?.idempotencyKey).not.toBe(two?.idempotencyKey)
   })
 })
 

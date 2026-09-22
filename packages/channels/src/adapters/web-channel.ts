@@ -1,5 +1,5 @@
 import {
-  capIdentityAttributes,
+  attributesFromClaims,
   identityAttributesSchema,
   normalizedMessageSchema,
   type VerifiedIdentity,
@@ -115,10 +115,7 @@ export async function resolveWebVisitor(
   if (input.token && config.visitorTokenSecret) {
     try {
       const claims = await verifyVisitorToken(input.token, config.visitorTokenSecret, now)
-      const attributes = capIdentityAttributes({
-        ...(claims.attributes ?? {}),
-        ...(claims.email ? { email: claims.email } : {}),
-      })
+      const attributes = attributesFromClaims(claims)
       return {
         externalId: `host:${claims.sub}`,
         identified: true,

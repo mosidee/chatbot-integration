@@ -1088,12 +1088,18 @@ function IdentityBadge({ detail, canWrite }: { detail: ConversationDetail; canWr
   const queryClient = useQueryClient()
   const [sent, setSent] = useState(false)
 
+  const [error, setError] = useState<string | null>(null)
+
   const sendLink = useMutation({
     mutationFn: () => api.conversations.sendVerificationLink(detail.conversation.id),
     onSuccess: () => {
       setSent(true)
+      setError(null)
       void queryClient.invalidateQueries({ queryKey: ['conversation', detail.conversation.id] })
     },
+    // The route refuses when the link is switched off or has no URL. Without this the
+    // button simply re-enables itself and the agent presses it again.
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   })
 
   const identity = detail.identity
@@ -1138,6 +1144,8 @@ function IdentityBadge({ detail, canWrite }: { detail: ConversationDetail; canWr
           {sent ? t('sidebar.verificationLinkSent') : t('sidebar.sendVerificationLink')}
         </Button>
       ) : null}
+
+      {error ? <ErrorNote message={error} /> : null}
     </div>
   )
 }

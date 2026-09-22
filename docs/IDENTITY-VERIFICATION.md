@@ -173,12 +173,16 @@ and back.
 again gets a fresh link, and asking for one invalidates any earlier link for that person,
 so two live links can never bind two different accounts to one conversation.
 
-**Keep the attributes small and current.** They are read into the prompt on every turn and
-re-read on every message, so a customer who upgrades mid-conversation is answered from the
-new plan and a customer with a large user record is paying for it all day.
+**Attributes are a snapshot, not a live read.** What you sign is stored and read into the
+prompt on every turn, but it is only refreshed when a new proof arrives. For a verification
+link that means the moment of confirmation and not again, so an account that changes plan an
+hour later is still answered from the plan it had when the link was followed. If a value
+matters more than that, do not put it in the token: give the AI a tool that reads it, which
+is what tools are for. Keep what you do send small, since it is in the prompt all day.
 
 **What the AI may do with this.** The verified account is bound into tool calls by us; the
 model can neither name it nor override it, and a tool that needs it is not offered at all in
 a conversation where nobody proved anything. See
+[TOOLS.md](TOOLS.md) for defining one, and
 [adr/0004-restricted-egress-for-tenant-tools.md](adr/0004-restricted-egress-for-tenant-tools.md)
-for what a tool may reach once it is called.
+for what it may reach once it is called.

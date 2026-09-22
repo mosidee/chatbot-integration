@@ -85,6 +85,10 @@ export async function resolveConversation(
     .from(schema.channelIdentities)
     .where(
       and(
+        // The workspace term is redundant — the channel already belongs to one — and it is
+        // here anyway. This row now carries the proof of who a customer is, and that is the
+        // last place to rely on an invariant enforced two files away.
+        eq(schema.channelIdentities.workspaceId, workspaceId),
         eq(schema.channelIdentities.channelId, channelId),
         eq(schema.channelIdentities.externalId, event.externalId),
       ),
@@ -130,8 +134,10 @@ export async function resolveConversation(
     if (event.profile?.displayName && identity.displayName !== event.profile.displayName) {
       patch.displayName = event.profile.displayName
     }
-    // Re-recorded on every message a proof accompanies, so a customer who changes plan is
-    // not answered from the plan they were on when they first wrote.
+    // Re-recorded whenever a proof accompanies a message. That is how a changed plan
+    // reaches us, but only once the channel presents a fresh proof: a widget session
+    // carries the attributes it was minted with for its whole twelve hours, so what
+    // arrives here is unchanged until the page is loaded again.
     if (event.verified) {
       patch.verifiedSubject = event.verified.subject
       patch.verifiedAttributes = event.verified.attributes
@@ -143,7 +149,12 @@ export async function resolveConversation(
       await db
         .update(schema.channelIdentities)
         .set(patch)
-        .where(eq(schema.channelIdentities.id, identity.id))
+        .where(
+          and(
+            eq(schema.channelIdentities.id, identity.id),
+            eq(schema.channelIdentities.workspaceId, workspaceId),
+          ),
+        )
       identity = { ...identity, ...patch } as typeof identity
     }
   }

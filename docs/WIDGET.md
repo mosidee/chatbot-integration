@@ -63,8 +63,11 @@ account to read. That is worth exploiting before writing any tool at all. Put `p
 `paidUntil` in `attributes` and the AI can answer "what plan am I on?" from
 `get_customer_profile`, with no endpoint and no credential anywhere.
 
-Re-read on every message, so a customer who upgrades mid-conversation is not answered from
-the plan they were on when they opened the widget.
+These are a snapshot taken when the session is minted, not a live read. A session lasts
+twelve hours, so a customer who upgrades mid-conversation is still answered from the plan
+they had when the widget started, until the page is loaded again and a fresh token is
+presented. For anything that has to be current at the moment of asking, give the AI a tool
+that reads it rather than putting it in the token.
 
 Whether the token counts as proof is a workspace setting (**Settings → Proving who a
 customer is**). Switching it off leaves identification working — the same person still keeps

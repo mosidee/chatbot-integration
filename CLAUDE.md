@@ -230,10 +230,14 @@ compile. Where it does not, say so in the test file rather than letting composed
 as authoritative. Implement `fetchMedia` if the platform sends references rather than bytes,
 and `checkCredentials` so settings can verify a token without waiting for a customer.
 
-**An AI tool:** add it to `createInternalTools` in `packages/core/src/ai/tools.ts`. Tools
-record intent on the scratchpad and never write to the database, so a failed turn leaves no
-partial side effects. A tool a *tenant* defines is not code: it is a `tools` row an admin
-writes in settings, offered through `createHttpToolSource`.
+**An AI tool:** add it to `createInternalTools` in `packages/core/src/ai/tools.ts` **and to
+`RESERVED_TOOL_NAMES` in `packages/shared/src/tools.ts`**. Both: the reserved list is what
+stops a tenant defining a tool of the same name, which the settings route would otherwise
+accept and `mergeToolSources` would then silently drop, leaving the built-in one missing
+from that workspace with nothing logged at definition time. Tools record intent on the
+scratchpad and never write to the database, so a failed turn leaves no partial side effects.
+A tool a *tenant* defines is not code: it is a `tools` row an admin writes in settings,
+offered through `createHttpToolSource`.
 
 **A tool source:** implement `ToolSource` from `packages/core/src/ai/tool-source.ts` and add
 it to the list the worker passes to `runAgentTurn`. The agent takes sources rather than

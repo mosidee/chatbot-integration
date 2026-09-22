@@ -2248,6 +2248,36 @@ describe('the verification link', () => {
     expect(await consumeVerificationCode(f.runtime.db, sent.code)).toBeNull()
   })
 
+  test('is not offered while the AI is only drafting, since nothing would send it', async () => {
+    // The draft path ends at a suggestion for a person to approve and never reaches the
+    // code that sends a link. Offering the tool there lets the model write "I've sent you
+    // a link", an agent approve it, and nothing arrive.
+    const server = mock([{ kind: 'text', text: 'ขอตรวจสอบให้นะคะ' }])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        defaultMode: 'ai_supervised',
+        identity: {
+          widgetToken: { enabled: true },
+          verificationLink: {
+            enabled: true,
+            url: 'https://salon.example.com/verify',
+            secretEncrypted: null,
+            ttlMinutes: 15,
+          },
+        },
+      },
+    })
+
+    await customerSays(f, 'ขอดูข้อมูลบัญชีของฉัน')
+    await runQueuedWork(f)
+
+    const offered = (
+      (server.requests[0] as { tools?: { function?: { name?: string } }[] }).tools ?? []
+    ).map((t) => t.function?.name)
+    expect(offered).not.toContain('request_identity_verification')
+  })
+
   test('the tool is not offered when no link is configured', async () => {
     const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
     const f = await fixture({ providerBaseUrl: server.url })

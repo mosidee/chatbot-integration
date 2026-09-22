@@ -61,6 +61,23 @@ export function capIdentityAttributes(attributes: Record<string, string>): Recor
   return kept
 }
 
+/**
+ * The attributes a signed token asserts, as we store them.
+ *
+ * Both proofs sign the same claim shape and both need the same projection: the free-form
+ * attributes, with the email folded in, capped. Two copies of this drifted apart once
+ * already, so there is one.
+ */
+export function attributesFromClaims(claims: {
+  attributes?: Record<string, string> | undefined
+  email?: string | undefined
+}): Record<string, string> {
+  return capIdentityAttributes({
+    ...(claims.attributes ?? {}),
+    ...(claims.email ? { email: claims.email } : {}),
+  })
+}
+
 export type VerifiedIdentity = {
   subject: string
   attributes: Record<string, string>

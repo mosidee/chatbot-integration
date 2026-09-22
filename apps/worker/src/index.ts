@@ -70,7 +70,6 @@ function makeWorker<T>(
       const startedAt = Date.now()
       await handler(runtime, ports, logger, job.data, {
         jobId: job.id ?? `${name}-${job.timestamp}`,
-        attempt: job.attemptsMade,
       })
       logger.info('job completed', { queue: name, jobId: job.id, ms: Date.now() - startedAt })
     },

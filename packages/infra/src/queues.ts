@@ -32,7 +32,6 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
  */
 export type JobMeta = {
   jobId: string
-  attempt: number
 }
 
 export type InboundJob = {

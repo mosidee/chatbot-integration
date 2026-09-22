@@ -12,11 +12,12 @@ owed is worse than a reply that says "let me fetch someone".
 - **How it is put together**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Decisions taken while building**: [docs/adr/](docs/adr/)
 - **Running it on a server**: [docs/DEPLOY.md](docs/DEPLOY.md)
+- **Giving the AI a tool of your own**: [docs/TOOLS.md](docs/TOOLS.md)
 - **Letting the AI read a customer's account**: [docs/IDENTITY-VERIFICATION.md](docs/IDENTITY-VERIFICATION.md)
 
 ## What works today
 
-Milestones one to four are delivered and running in a pilot on the operator's own product.
+Milestones one to five are delivered, and one to four are running in a pilot on the operator's own product.
 
 | | |
 |---|---|

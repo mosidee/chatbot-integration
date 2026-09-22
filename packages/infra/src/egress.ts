@@ -40,17 +40,80 @@ function isPrivateV4(address: string): boolean {
   return false
 }
 
+/**
+ * Expand an IPv6 address into its eight groups, or null if it cannot be read.
+ *
+ * Written out rather than pattern-matched on the text because the same address has many
+ * spellings. `::ffff:127.0.0.1` and `::ffff:7f00:1` are the same host, and a check that
+ * only recognised the dotted one let the hex one reach loopback.
+ */
+function expandV6(address: string): number[] | null {
+  let text = address
+  const groups: number[] = []
+
+  // A trailing dotted quad, as in ::ffff:127.0.0.1, is two more groups.
+  const dotted = /(\d+\.\d+\.\d+\.\d+)$/.exec(text)
+  let tail: number[] = []
+  if (dotted?.[1]) {
+    const parts = dotted[1].split('.').map(Number)
+    if (parts.length !== 4 || parts.some((p) => Number.isNaN(p) || p < 0 || p > 255)) return null
+    tail = [((parts[0] ?? 0) << 8) | (parts[1] ?? 0), ((parts[2] ?? 0) << 8) | (parts[3] ?? 0)]
+    text = text.slice(0, dotted.index)
+    // Leave the separator off so the halves below split cleanly.
+    if (text.endsWith(':') && !text.endsWith('::')) text = text.slice(0, -1)
+  }
+
+  const halves = text.split('::')
+  if (halves.length > 2) return null
+
+  const parse = (part: string): number[] | null => {
+    if (part === '') return []
+    const out: number[] = []
+    for (const piece of part.split(':')) {
+      if (piece === '' || piece.length > 4 || !/^[0-9a-f]+$/.test(piece)) return null
+      out.push(Number.parseInt(piece, 16))
+    }
+    return out
+  }
+
+  const head = parse(halves[0] ?? '')
+  if (!head) return null
+
+  if (halves.length === 1) {
+    groups.push(...head, ...tail)
+    return groups.length === 8 ? groups : null
+  }
+
+  const rest = parse(halves[1] ?? '')
+  if (!rest) return null
+  const filled = [...rest, ...tail]
+  const zeros = 8 - head.length - filled.length
+  if (zeros < 0) return null
+  return [...head, ...new Array(zeros).fill(0), ...filled]
+}
+
 function isPrivateV6(address: string): boolean {
-  const lower = address.toLowerCase().split('%')[0] ?? ''
-  if (lower === '::1' || lower === '::' || lower === '') return true
+  const lower = (address.toLowerCase().split('%')[0] ?? '').replace(/^\[|\]$/g, '')
+  const groups = expandV6(lower)
+  // Unreadable means refused: this decides whether to send a request, so the safe answer
+  // to "I do not understand this address" is no.
+  if (!groups) return true
 
-  // A v4-mapped address is a v4 address wearing a hat; judge it as one.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower)
-  if (mapped?.[1]) return isPrivateV4(mapped[1])
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups
+  const embeddedV4 = () => `${(g6 >> 8) & 0xff}.${g6 & 0xff}.${(g7 >> 8) & 0xff}.${g7 & 0xff}`
 
-  const head = Number.parseInt(lower.split(':')[0] || '0', 16)
-  if ((head & 0xfe00) === 0xfc00) return true // unique local fc00::/7
-  if ((head & 0xffc0) === 0xfe80) return true // link-local fe80::/10
+  // :: and ::1
+  if (g0 + g1 + g2 + g3 + g4 + g5 + g6 === 0 && (g7 === 0 || g7 === 1)) return true
+
+  // A v4 address wearing a hat, in any of its spellings: judge it as a v4 address.
+  const zeroLead = g0 + g1 + g2 + g3 === 0
+  if (zeroLead && g4 === 0 && g5 === 0xffff) return isPrivateV4(embeddedV4()) // ::ffff:a.b.c.d
+  if (zeroLead && g4 === 0xffff && g5 === 0) return isPrivateV4(embeddedV4()) // ::ffff:0:a.b.c.d
+  if (zeroLead && g4 === 0 && g5 === 0) return isPrivateV4(embeddedV4()) // deprecated ::a.b.c.d
+  if (g0 === 0x64 && g1 === 0xff9b) return isPrivateV4(embeddedV4()) // NAT64 64:ff9b::/96
+
+  if ((g0 & 0xfe00) === 0xfc00) return true // unique local fc00::/7
+  if ((g0 & 0xffc0) === 0xfe80) return true // link-local fe80::/10
   return false
 }
 
@@ -72,6 +135,17 @@ export type LookupFn = (hostname: string) => Promise<{ address: string; family: 
 const defaultLookup: LookupFn = async (hostname) => {
   const result = await dns.promises.lookup(hostname, { all: true, verbatim: true })
   return result.map((r) => ({ address: r.address, family: r.family }))
+}
+
+/** Headers that authenticate us to one host and must not travel to another. */
+const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization'])
+
+function strippedHeaders(headers: HeadersInit | undefined): Record<string, string> {
+  const kept: Record<string, string> = {}
+  for (const [name, value] of new Headers(headers ?? {}).entries()) {
+    if (!CREDENTIAL_HEADERS.has(name.toLowerCase())) kept[name] = value
+  }
+  return kept
 }
 
 export type RestrictedFetchOptions = {
@@ -142,12 +216,14 @@ export function createRestrictedFetch(options: RestrictedFetchOptions = {}): Fet
     let url = new URL(
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
     )
+    const origin = url.origin
+    let current: RequestInit = { ...init }
     let remaining = MAX_REDIRECTS
 
     for (;;) {
       await assertAllowed(url, allowPrivate, lookup)
 
-      const response = await transport(url.toString(), { ...init, redirect: 'manual' })
+      const response = await transport(url.toString(), { ...current, redirect: 'manual' })
       const location = response.headers.get('location')
       const isRedirect = response.status >= 300 && response.status < 400 && location
 
@@ -158,7 +234,27 @@ export function createRestrictedFetch(options: RestrictedFetchOptions = {}): Fet
       }
       remaining -= 1
       await response.body?.cancel().catch(() => {})
-      url = new URL(location, url)
+
+      const next = new URL(location, url)
+
+      // Following a redirect by hand means doing by hand what `fetch` would otherwise do
+      // for us, and the two things it does are the two things that matter here.
+      //
+      // A credential is scoped to the host it was configured for. Replaying the headers
+      // verbatim would hand a tenant's API key to whatever their endpoint redirected to,
+      // which may be an expired domain or somebody else's server.
+      if (next.origin !== origin) {
+        current = { ...current, headers: strippedHeaders(current.headers) }
+      }
+
+      // 303 means "go and GET this instead", and 301 and 302 are treated the same way by
+      // every client in practice. Replaying a write's body to the new location is how one
+      // request becomes two applied operations.
+      if (response.status === 303 || response.status === 301 || response.status === 302) {
+        current = { ...current, method: 'GET', body: undefined }
+      }
+
+      url = next
     }
   }
 }

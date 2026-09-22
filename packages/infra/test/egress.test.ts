@@ -53,7 +53,48 @@ describe('isPrivateAddress', () => {
     })
   }
 
-  const publicOnes = ['93.184.216.34', '8.8.8.8', '172.32.0.1', '100.128.0.1', '2606:4700::1111']
+  /**
+   * The same host has many spellings, and a check that only recognised one of them let the
+   * others through. `::ffff:7f00:1` is `127.0.0.1`; so is `::ffff:127.0.0.1`.
+   */
+  const disguisedLoopback = [
+    '::ffff:7f00:1',
+    '::ffff:127.0.0.1',
+    '0:0:0:0:0:ffff:7f00:1',
+    '::ffff:0:7f00:1',
+    '::7f00:1',
+    '64:ff9b::7f00:1',
+  ]
+  for (const address of disguisedLoopback) {
+    test(`refuses ${address}, which is 127.0.0.1 in another spelling`, () => {
+      expect(isPrivateAddress(address)).toBe(true)
+    })
+  }
+
+  const disguisedPrivate = ['::ffff:a00:1', '::ffff:a9fe:a9fe', '::ffff:c0a8:1']
+  for (const address of disguisedPrivate) {
+    test(`refuses ${address}, a private v4 address in v6 clothing`, () => {
+      expect(isPrivateAddress(address)).toBe(true)
+    })
+  }
+
+  test('refuses an address it cannot parse rather than guessing', () => {
+    for (const address of ['::ffff:zzzz:1', '1:2:3::4::5', 'not:an:address']) {
+      expect(isPrivateAddress(address)).toBe(true)
+    }
+  })
+
+  const publicOnes = [
+    '93.184.216.34',
+    '8.8.8.8',
+    '172.32.0.1',
+    '100.128.0.1',
+    '2606:4700::1111',
+    '2001:4860:4860::8888',
+    // A public v4 address in v6 clothing is still public; the rule must not over-block.
+    '::ffff:93.184.216.34',
+    '::ffff:5db8:d822',
+  ]
   for (const address of publicOnes) {
     test(`allows ${address}`, () => {
       expect(isPrivateAddress(address)).toBe(false)
@@ -163,6 +204,86 @@ describe('createRestrictedFetch', () => {
 
     const response = await fetcher('https://start.example.com/')
     expect(await response.text()).toBe('arrived')
+  })
+
+  test('does not carry the credential to a host the redirect chose', async () => {
+    // The tenant's key is configured for their host. A redirect to anywhere else must not
+    // receive it: their endpoint could redirect to an expired domain, or to a server
+    // somebody else now controls.
+    const seen: { url: string; auth: string | null }[] = []
+    const fetcher = createRestrictedFetch({
+      lookup: resolvesTo({
+        'api.example.com': ['93.184.216.34'],
+        'elsewhere.example.com': ['93.184.216.35'],
+      }),
+      transport: async (input, init) => {
+        const headers = new Headers(init?.headers ?? {})
+        seen.push({ url: String(input), auth: headers.get('authorization') })
+        return String(input).includes('api.example.com')
+          ? new Response(null, {
+              status: 302,
+              headers: { location: 'https://elsewhere.example.com/v1' },
+            })
+          : new Response('arrived')
+      },
+    })
+
+    await fetcher('https://api.example.com/v1', {
+      headers: { authorization: 'Bearer tenant-secret', accept: 'application/json' },
+    })
+
+    expect(seen[0]?.auth).toBe('Bearer tenant-secret')
+    expect(seen[1]?.auth).toBeNull()
+  })
+
+  test('keeps the credential across a redirect that stays on the same host', async () => {
+    const seen: (string | null)[] = []
+    const fetcher = createRestrictedFetch({
+      lookup: resolvesTo({ 'api.example.com': ['93.184.216.34'] }),
+      transport: async (input, init) => {
+        seen.push(new Headers(init?.headers ?? {}).get('authorization'))
+        return String(input).endsWith('/v1')
+          ? new Response(null, {
+              status: 302,
+              headers: { location: 'https://api.example.com/v2' },
+            })
+          : new Response('arrived')
+      },
+    })
+
+    await fetcher('https://api.example.com/v1', {
+      headers: { authorization: 'Bearer tenant-secret' },
+    })
+    expect(seen).toEqual(['Bearer tenant-secret', 'Bearer tenant-secret'])
+  })
+
+  test('does not replay a write body to the redirect target', async () => {
+    // Replaying it is how one cancellation becomes two.
+    const seen: { method?: string; body: unknown }[] = []
+    const fetcher = createRestrictedFetch({
+      lookup: resolvesTo({
+        'api.example.com': ['93.184.216.34'],
+        'elsewhere.example.com': ['93.184.216.35'],
+      }),
+      transport: async (input, init) => {
+        seen.push({ method: init?.method, body: init?.body })
+        return String(input).includes('api.example.com')
+          ? new Response(null, {
+              status: 303,
+              headers: { location: 'https://elsewhere.example.com/done' },
+            })
+          : new Response('arrived')
+      },
+    })
+
+    await fetcher('https://api.example.com/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ booking_id: 'B-12' }),
+    })
+
+    expect(seen[0]?.method).toBe('POST')
+    expect(seen[1]?.method).toBe('GET')
+    expect(seen[1]?.body).toBeUndefined()
   })
 
   test('gives up rather than following a redirect loop', async () => {

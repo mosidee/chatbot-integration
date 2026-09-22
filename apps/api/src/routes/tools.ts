@@ -1,4 +1,4 @@
-import { executeHttpTool, type HttpToolDefinition } from '@ci/core'
+import { executeHttpTool, type HttpToolDefinition, inputSchemaFor } from '@ci/core'
 import { decryptSecret, encryptSecret, newId, schema } from '@ci/db'
 import {
   httpToolConfigSchema,
@@ -181,13 +181,27 @@ export function toolRoutes(ctx: ApiContext) {
               : null,
           }
 
+          // Validated the way a turn validates it, so the button cannot succeed on arguments
+          // the model could never produce: a tenant who passes a string where the tool
+          // declares a number would otherwise see 200 here and a failure in front of a
+          // customer.
+          const parsedArgs = inputSchemaFor(row.config).safeParse(body.args ?? {})
+          if (!parsedArgs.success) {
+            return status(400, {
+              error: `Those arguments do not match the tool: ${parsedArgs.error.issues[0]?.message ?? 'invalid'}`,
+            })
+          }
+
           const startedAt = Date.now()
           try {
             const outcome = await executeHttpTool(
               definition,
-              body.args ?? {},
+              parsedArgs.data,
               {
                 workspaceId,
+                // Placeholders, and deliberately obvious ones: a tool bound to a
+                // conversation is being exercised outside any conversation, and a tenant
+                // reading their own logs should be able to tell this from a real request.
                 conversationId: 'test-conversation',
                 customerId: 'test-customer',
                 // Supplied by the person testing, because a tool that binds a subject cannot
