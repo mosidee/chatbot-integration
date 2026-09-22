@@ -36,12 +36,18 @@ they are; see [IDENTITY-VERIFICATION.md](IDENTITY-VERIFICATION.md).
 | Path | May contain `{{name}}`, which is replaced by that argument or bound value, URL-encoded. A value used in the path is not repeated in the query or body |
 | Timeout | Between 1 and 15 seconds, 8 by default. It covers the response body as well as the headers, so an endpoint that answers quickly and then trickles is still cut off |
 | Status | Anything outside 2xx is a failure. The conversation goes to one of your colleagues with the status and the first part of your body in the note |
-| Size | We read at most 64 KB and show the model at most 8 KB of it. A large payload is silently truncated, so return what answers the question rather than a whole record |
+| Size | We read at most 64 KB and show the model at most 8 KB of it, JSON included. A larger answer is cut and the model is told it was cut, so return what answers the question rather than a whole record |
+| Types | An argument declared as a number or a boolean reaches a JSON body as one. A query string and a path are text, as they have to be |
 | Auth | Either a bearer token or a header you name. The value is encrypted at rest and never shown again, here or through the API |
 
 Every request carries `x-ci-tool` naming the tool, so you can see in your own logs which one
-called. Every write carries `idempotency-key`, stable across our retries of the same turn:
-honour it and a retry cannot double-charge anybody.
+called. Every write carries `idempotency-key`, built from the turn, the tool and the
+arguments: the same operation asked for twice carries the same key however our retries
+reorder it, so honouring it means a retry cannot double-charge anybody.
+
+If your endpoint redirects, the credential is not carried to a different host and a `POST`
+becomes a `GET` without its body — the same rules a browser follows, and for the same
+reasons. Redirect within your own origin and both survive.
 
 ## Reading and writing are different
 
@@ -78,6 +84,11 @@ turn, so this usually self-corrects; if it does not, the description is the fix.
 **Everything hands off.** Check the trace on the conversation: it records what each tool was
 asked and what it answered. A refused address, a timeout or a non-2xx status will be there
 in the note.
+
+**The test button disagrees with a real conversation.** It should not: it validates the
+arguments against the same schema and calls through the same code and the same network
+rules. The one difference is that a tool bound to a conversation or a customer is tested
+with a placeholder, since there is no conversation to speak of.
 
 **It reads the wrong customer's data.** It cannot. If a tool is returning the wrong person's
 account, the binding is wrong — check that the account is a supplied value and not an

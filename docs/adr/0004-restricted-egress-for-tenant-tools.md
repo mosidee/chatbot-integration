@@ -53,6 +53,26 @@ one public and one private address would pass a check that only read the first, 
 default resolver passes `{ all: true }` and a test pins that the real resolver is the one
 used when none is injected.
 
+## One spelling is not one address
+
+The first version of this check read a v4-mapped address only in its dotted form,
+`::ffff:127.0.0.1`. The same host also spells as `::ffff:7f00:1`, and a URL keeps whichever
+the tenant typed, so the hex form reached loopback while the rule above claimed it could
+not. Addresses are now expanded into their eight groups and judged there, which covers the
+hex form, `::ffff:0:a.b.c.d`, the deprecated `::a.b.c.d`, and NAT64's `64:ff9b::/96`.
+
+An address the expander cannot read is refused. This decides whether to send a request, so
+the safe answer to "I do not understand this" is no.
+
+## Redirects are followed by hand, so their rules must be too
+
+`redirect: 'manual'` is what lets each hop be checked, and it also switches off everything
+else `fetch` does with a redirect. Two of those matter. A credential is scoped to the host it
+was configured for, so replaying the headers would hand a tenant's API key to whatever their
+endpoint redirected to — an expired domain, or somebody else's server. And 303, along with
+301 and 302 in practice, means "go and GET this instead", so replaying a write's body is how
+one cancellation becomes two. Both are now done explicitly.
+
 ## Residual risk, accepted
 
 Between the check and the connection, a name can change its answer: the resolver says

@@ -217,6 +217,23 @@ without spending money.
   runs and the AI is offered all of them, so one left behind points at a port that died with
   its test process, the model picks it, and the conversation hands off before reaching the
   tool under test. `clearTools()` in `e2e/helpers.ts`.
+- An IPv6 address has many spellings and only one meaning. `::ffff:127.0.0.1` and
+  `::ffff:7f00:1` are the same host, and a URL preserves whichever was typed, so any check
+  on an address must expand it rather than match its text. `packages/infra/src/egress.ts`
+  does; an earlier version matched the dotted form only and let the hex form reach loopback.
+- `redirect: 'manual'` switches off everything `fetch` does with a redirect, not just the
+  following. Credential headers must be dropped by hand when the origin changes, and 301,
+  302 and 303 must become a GET without a body, or a write is replayed at the new location.
+- An idempotency key must not depend on position. A retry re-runs the whole turn and the
+  model may ask for the same operations in a different order, so a key built from an index
+  hands the second operation the key the tenant already answered for the first. Keys are
+  decided when the model asks, from the turn, the tool and a fingerprint of the arguments.
+- Anything after the outbound job is queued in `ai-turn.ts` runs with the reply already
+  sent, so a throw there re-runs the whole turn: another model call, another reply to the
+  customer, another pass over the writes. Work in that tail catches its own errors.
+- A tool whose promise only the `send` path can keep must not be offered on the `draft`
+  path. `request_identity_verification` was, so a supervised workspace could approve a
+  draft saying a link had been sent when nothing would ever send it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 
