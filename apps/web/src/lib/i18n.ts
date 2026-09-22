@@ -114,6 +114,10 @@ const th = {
     lastTrace: 'การทำงานล่าสุดของ AI',
     fallbackUsed: 'ใช้ผู้ให้บริการสำรอง',
     viewTrace: 'ดูรายละเอียด',
+    owner: 'ผู้ดูแลลูกค้า',
+    unassigned: 'ยังไม่มีผู้ดูแล',
+    ownedBy: 'ดูแลโดย',
+    mine: 'ของฉัน',
   },
   merge: {
     title: 'อาจเป็นคนเดียวกัน',
@@ -510,6 +514,10 @@ const en: typeof th = {
     lastTrace: 'Last AI run',
     fallbackUsed: 'Fallback provider used',
     viewTrace: 'View details',
+    owner: 'Account owner',
+    unassigned: 'Nobody yet',
+    ownedBy: 'Owner',
+    mine: 'Yours',
   },
   merge: {
     title: 'Possibly the same person',

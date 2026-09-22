@@ -192,3 +192,32 @@ export async function findWebChannelId(request: APIRequestContext): Promise<stri
   if (!channel) throw new Error('No web channel is configured; run the seed first.')
   return channel.id
 }
+
+/**
+ * Resolve every conversation left open by an earlier run.
+ *
+ * The suite has always created conversations and never cleaned them up, which was harmless
+ * while the inbox was ordered newest first: yesterday's debris sank and a test's own
+ * conversation was always on the first page. The inbox now orders by who owns the customer
+ * and then by longest wait, so three days of unanswered test conversations sit at the top
+ * for ever and push a newly arrived one past the fifty the list asks for.
+ *
+ * CI never noticed, because it runs against a database that migrates and seeds from empty.
+ * This is what lets the same suite pass on a developer's machine that has been running it
+ * for a week. It resolves rather than deletes: nothing is destroyed, and a resolved
+ * conversation simply leaves the default view.
+ */
+export async function clearInbox(request: APIRequestContext): Promise<void> {
+  for (let page = 0; page < 40; page += 1) {
+    const response = await request.get(`${API_URL}/api/v1/conversations?status=open&limit=100`)
+    if (!response.ok()) return
+    const body = (await response.json()) as { conversations: { id: string }[] }
+    if (body.conversations.length === 0) return
+
+    for (const conversation of body.conversations) {
+      await request.post(`${API_URL}/api/v1/conversations/${conversation.id}/status`, {
+        data: { status: 'resolved' },
+      })
+    }
+  }
+}

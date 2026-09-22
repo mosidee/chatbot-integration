@@ -279,6 +279,11 @@ export async function mergeCustomers(
         displayName: survivor.displayName ?? absorbed.displayName,
         primaryLanguage: survivor.primaryLanguage ?? absorbed.primaryLanguage,
         summary: survivor.summary ?? absorbed.summary,
+        // An owner is not a table, so the repoint list below does not cover it: a column
+        // the survivor happens to be missing is simply dropped with the absorbed row unless
+        // it is named here. Somebody looking after the absorbed record keeps looking after
+        // the person, which is the whole point of the relationship surviving a merge.
+        assigneeUserId: survivor.assigneeUserId ?? absorbed.assigneeUserId,
         updatedAt: new Date(),
       })
       .where(eq(schema.customers.id, input.survivorId))

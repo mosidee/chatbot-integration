@@ -7,6 +7,7 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { CustomerAssignee } from '../components/CustomerAssignee'
 import { DeliveryTicks } from '../components/DeliveryTicks'
 import { EraseCustomer } from '../components/EraseCustomer'
 import { FeedbackControls } from '../components/FeedbackControls'
@@ -25,14 +26,7 @@ import {
   Textarea,
   timeAgo,
 } from '../components/ui'
-import {
-  type AiTrace,
-  api,
-  type ConversationDetail,
-  type ConversationListItem,
-  type Feedback,
-  type Message,
-} from '../lib/api'
+import { type AiTrace, api, type ConversationDetail, type Feedback, type Message } from '../lib/api'
 import { useRealtime } from '../lib/ws'
 
 /**
@@ -48,6 +42,24 @@ export function Inbox() {
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved' | undefined>('open')
   const [modeFilter, setModeFilter] = useState<ConversationMode | undefined>(undefined)
   const [reviewFilter, setReviewFilter] = useState(false)
+
+  /**
+   * Who owns each customer, so a row can say so.
+   *
+   * The order already groups the list, but an inbox that silently reads differently for two
+   * people sitting next to each other is worth explaining on the rows themselves.
+   */
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
+  const members = useQuery({
+    queryKey: ['members-list'],
+    queryFn: () => api.settings.members(),
+    staleTime: 300_000,
+  })
+  const ownerName = (userId: string | null): string | null => {
+    if (!userId) return null
+    if (userId === me.data?.userId) return t('sidebar.mine')
+    return members.data?.members.find((member) => member.userId === userId)?.name ?? null
+  }
 
   const conversations = useQuery({
     queryKey: ['conversations', statusFilter, modeFilter, reviewFilter],
@@ -81,13 +93,15 @@ export function Inbox() {
     }
   })
 
+  /**
+   * The server decides the order, and nothing re-sorts it here.
+   *
+   * It used to lift `waiting_human` to the top in the browser, which was right when the
+   * whole queue arrived in one page. The queue is now ordered by who owns the customer and
+   * then by how long each has been waiting, and only the database knows the first of those
+   * — re-sorting a page of fifty here would quietly contradict it.
+   */
   const rows = conversations.data?.conversations ?? []
-  // Anything waiting on a person belongs at the top; that is the queue agents work from.
-  const sorted = [...rows].sort((a, b) => {
-    const rank = (c: ConversationListItem) => (c.mode === 'waiting_human' ? 0 : 1)
-    if (rank(a) !== rank(b)) return rank(a) - rank(b)
-    return (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? '')
-  })
 
   return (
     <div className="flex h-full">
@@ -159,11 +173,11 @@ export function Inbox() {
             <div className="p-4">
               <Spinner label={t('common.loading')} />
             </div>
-          ) : sorted.length === 0 ? (
+          ) : rows.length === 0 ? (
             <EmptyState title={t('inbox.empty')} />
           ) : (
             <ul>
-              {sorted.map((conversation) => (
+              {rows.map((conversation) => (
                 <li key={conversation.id}>
                   <button
                     type="button"
@@ -191,7 +205,20 @@ export function Inbox() {
                       <span className="truncate text-[13px] text-[var(--text-muted)]">
                         {conversation.lastMessage?.text ?? ''}
                       </span>
-                      <span className="ml-auto shrink-0 text-[11px] text-[var(--text-muted)]">
+                      {ownerName(conversation.customer.assigneeUserId) ? (
+                        <span
+                          data-testid="conversation-owner"
+                          className="ml-auto shrink-0 rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]"
+                        >
+                          {ownerName(conversation.customer.assigneeUserId)}
+                        </span>
+                      ) : null}
+                      <span
+                        className={cn(
+                          'shrink-0 text-[11px] text-[var(--text-muted)]',
+                          ownerName(conversation.customer.assigneeUserId) ? '' : 'ml-auto',
+                        )}
+                      >
                         {timeAgo(conversation.lastMessageAt, i18n.language)}
                       </span>
                     </div>
@@ -498,6 +525,7 @@ function ConversationPane({
         language={i18n.language}
         canWrite={canWrite}
         feedbackFor={(suggestionId) => mineFor('suggestion', suggestionId)}
+        onRefresh={invalidate}
         onInsert={(text, suggestionId) => {
           setDraft(text)
           setInsertedSuggestionId(suggestionId)
@@ -666,6 +694,7 @@ function AiSidebar({
   onRemoveRating,
   onMarkReviewed,
   onErased,
+  onRefresh,
 }: {
   detail: ConversationDetail
   className?: string
@@ -684,6 +713,8 @@ function AiSidebar({
   onRemoveRating: (suggestionId: string) => void
   onMarkReviewed: () => void
   onErased: () => void
+  /** The customer changed in a way the conversation list also has to hear about. */
+  onRefresh: () => void
 }) {
   const { t } = useTranslation()
   const [openTrace, setOpenTrace] = useState<AiTrace | null>(null)
@@ -780,6 +811,19 @@ function AiSidebar({
         <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           {t('sidebar.customer')}
         </h3>
+
+        {/* Who owns the relationship. Above the rest because it decides where this person
+            appears in everybody's inbox, which is the most consequential thing on the panel. */}
+        {detail.customer ? (
+          <div className="mb-2">
+            <CustomerAssignee
+              customerId={detail.customer.id}
+              assigneeUserId={detail.customer.assigneeUserId ?? null}
+              canWrite={canWrite}
+              onAssigned={onRefresh}
+            />
+          </div>
+        ) : null}
 
         {/* Whether this person was proved, not merely recognised. A tool that reads an
             account is only offered once this says yes, so it is worth showing plainly. */}

@@ -26,6 +26,12 @@ export default defineConfig({
     locale: 'en-GB',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  /**
+   * Runs once, after the servers are up, to resolve conversations left open by earlier
+   * runs. See `clearInbox` for why the suite cannot simply ignore them any more.
+   */
+  globalSetup: './e2e/global-setup.ts',
+
   webServer: [
     {
       command: 'bun run scripts/mock-provider.ts',

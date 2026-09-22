@@ -53,6 +53,11 @@ Three guards, each resolving its own shape: `auth: 'agent'` (a user, a workspace
 
 **Invitations.** A single-use token, stored as a SHA-256 hash, with a purpose of `invite` or `password_reset` and an expiry. The accept route spends the token and writes the membership in one transaction; accounts are created through a second Better Auth instance that allows sign-up and is never mounted, so the public API stays invite-only. A password reset goes through `auth.$context.internalAdapter`, because `setPassword` refuses an account that already has one.
 
+## The inbox queue (apps/api/src/routes/conversations.ts)
+Ordered in SQL, and nothing re-sorts it in the browser. Three groups, by who owns the *customer*: yours, then nobody's, then somebody else's. Inside each, longest wait first, where waiting means either the conversation was handed to a person (`waiting_human_since`) or the customer spoke last and nobody has answered; anything nobody is waiting on falls to the bottom of its group, newest first.
+
+Ownership deliberately outranks urgency: a colleague's overdue conversation sits below your quiet one, because the person who owns a relationship is the one who should answer it. `customers.assignee_user_id` is that owner and outlives every conversation; `conversations.assignee_user_id` owns one thread, is inherited from the customer when a new conversation opens, and can be handed to somebody else without changing the relationship. `before` is a cutoff on the last message rather than a cursor, since the order is no longer that column alone.
+
 ## Review queue (packages/infra/src/review.ts)
 One SQL fragment, `inReviewQueue()`, correlated on the `conversations` row of whatever query uses it, so the inbox list, the tab's count badge and the dashboard all ask the identical question. It reads: no handoff reason, no message with `sender_type = 'human'`, and some message with `sender_type = 'ai'` newer than `conversations.reviewed_at`. `reviewed_at` is written with the database's `now()`, because it is compared against `messages.created_at`, which `defaultNow()` writes on the same clock. Feedback rows hang off the conversation and cascade with it, which is how retention and erasure reach them.
 

@@ -237,10 +237,26 @@ export const customers = pgTable(
     /** Rolling summary maintained by the summarize job; injected into every prompt. */
     summary: text('summary'),
     summaryUpdatedAt: ts('summary_updated_at'),
+    /**
+     * Who owns this person, across every conversation they ever start.
+     *
+     * Distinct from `conversations.assignee_user_id`, which owns one thread: a colleague can
+     * take a single awkward conversation without inheriting the relationship, and a customer
+     * keeps their account manager after a conversation is resolved. A new conversation that
+     * nobody has claimed inherits this, which is what makes it a default rather than a label.
+     *
+     * `set null` rather than cascade, like every other reference to a user here: somebody
+     * leaving the company must not delete the customers they looked after.
+     */
+    assigneeUserId: text('assignee_user_id').references(() => user.id, { onDelete: 'set null' }),
     createdAt: ts('created_at').defaultNow().notNull(),
     updatedAt: ts('updated_at').defaultNow().notNull(),
   },
-  (t) => [index('customers_workspace_idx').on(t.workspaceId)],
+  (t) => [
+    index('customers_workspace_idx').on(t.workspaceId),
+    // The inbox orders every page by this, so it is worth an index of its own.
+    index('customers_workspace_assignee_idx').on(t.workspaceId, t.assigneeUserId),
+  ],
 )
 
 export const channelIdentities = pgTable(

@@ -280,6 +280,20 @@ without spending money.
 - The seed grants platform admin to `SEED_ADMIN_EMAIL`. An installation seeded before M6
   must re-run `bun run db:seed`, or the platform page is invisible to everybody and no
   second tenant can ever be created.
+- The inbox order lives in SQL and the browser must not re-sort it. It used to lift
+  `waiting_human` to the top client-side, which was right when the whole queue arrived in
+  one page; the order now depends on who owns each customer, which only the database knows,
+  so re-sorting a page of fifty contradicts it.
+- **`customers.assignee_user_id` is the relationship; `conversations.assignee_user_id` is
+  the thread.** A new conversation inherits the customer's owner, a colleague can take one
+  thread without inheriting the customer, and a merge carries the owner onto the survivor
+  when it has none. A column on `customers` is not covered by the repoint list in
+  `merge.ts`: it has to be named in the survivor-wins block or it is dropped with the row.
+- Browser tests resolve every open conversation before the suite runs (`clearInbox`). The
+  suite creates conversations and never deletes them, which cost nothing while the inbox was
+  newest-first; with longest-wait-first, days of unanswered test conversations sit at the top
+  and push each new arrival past the fifty the list asks for. CI never saw it because it
+  seeds from empty.
 - A bare `/<slug>` in the console switches to that workspace, so **a tenant cannot be named
   after a console path**: a static route outranks the `$slug` parameter, and a tenant slugged
   `settings` would be unreachable by URL while looking perfectly normal in every list.

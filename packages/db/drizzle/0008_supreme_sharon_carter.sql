@@ -1,0 +1,3 @@
+ALTER TABLE "customers" ADD COLUMN "assignee_user_id" text;--> statement-breakpoint
+ALTER TABLE "customers" ADD CONSTRAINT "customers_assignee_user_id_user_id_fk" FOREIGN KEY ("assignee_user_id") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "customers_workspace_assignee_idx" ON "customers" USING btree ("workspace_id","assignee_user_id");

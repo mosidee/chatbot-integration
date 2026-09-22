@@ -109,6 +109,8 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 
 ### 3.6 Agent GUI
 - [v1] Inbox list: filters by mode/channel/assignee/tags/status, unread counts, real-time via WebSocket over Redis pub/sub
+- [M6] A customer has an **account owner**, set from the conversation sidebar, which outlives every conversation they start and is inherited by the next one nobody has claimed
+- [M6] The queue is ordered by that owner first — yours, then unclaimed, then everybody else's — and by longest wait inside each group
 - [v1] Conversation view: channel-specific rendering, internal notes, composer with images/files, canned responses with shortcuts
 - [v1] AI sidebar: take over / return to AI, live suggested reply (insert, insert & send), retrieved chunks with sources, customer summary, cost so far, feedback thumbs
 - [v1] Customer panel: identities, fields, merge suggestions, past conversations

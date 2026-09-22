@@ -257,6 +257,25 @@ export async function resolveConversation(
     }
   }
 
+  /**
+   * A new conversation starts with the customer's owner, if they have one.
+   *
+   * This is what makes the owner a default rather than a label: somebody who looks after a
+   * customer finds their next conversation already theirs, without anybody claiming it by
+   * hand. A colleague can still take this one thread afterwards, and doing so does not
+   * change who owns the relationship.
+   */
+  const owner = await db
+    .select({ assigneeUserId: schema.customers.assigneeUserId })
+    .from(schema.customers)
+    .where(
+      and(
+        eq(schema.customers.id, identity.customerId),
+        eq(schema.customers.workspaceId, workspaceId),
+      ),
+    )
+    .limit(1)
+
   const conversationId = newId()
   await db.insert(schema.conversations).values({
     id: conversationId,
@@ -264,6 +283,7 @@ export async function resolveConversation(
     channelId,
     customerId: identity.customerId,
     channelIdentityId: identity.id,
+    assigneeUserId: owner[0]?.assigneeUserId ?? null,
     mode: input.defaultMode,
     status: 'open',
     lastMessageAt: event.timestamp,

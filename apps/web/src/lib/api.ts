@@ -97,7 +97,7 @@ export type ConversationListItem = {
   unreadCount: number
   lastMessageAt: string | null
   waitingHumanSince: string | null
-  customer: { id: string; displayName: string | null }
+  customer: { id: string; displayName: string | null; assigneeUserId: string | null }
   lastMessage: { text: string; senderType: SenderType; createdAt: string } | null
 }
 
@@ -172,6 +172,8 @@ export type Feedback = {
 export type Customer = {
   id: string
   displayName: string | null
+  /** Who looks after this person, across every conversation they start. */
+  assigneeUserId?: string | null
   primaryLanguage: Language | null
   fields: Record<string, string>
   summary: string | null
@@ -558,6 +560,9 @@ export const api = {
   },
 
   customers: {
+    /** Hand a customer to a colleague, or take them yourself. Null lets them go. */
+    assign: (id: string, assigneeUserId: string | null) =>
+      patch<{ assigneeUserId: string | null }>(`/v1/customers/${id}`, { assigneeUserId }),
     mergeSuggestions: (customerId: string) =>
       get<{ suggestions: MergeSuggestion[] }>(`/v1/customers/${customerId}/merge-suggestions`),
     acceptMerge: (customerId: string, suggestionId: string) =>

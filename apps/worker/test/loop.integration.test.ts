@@ -2291,3 +2291,57 @@ describe('the verification link', () => {
     expect(names).not.toContain('request_identity_verification')
   })
 })
+
+describe('the account owner', () => {
+  /**
+   * The owner is a default, not a label. Somebody who looks after a customer should find
+   * their next conversation already theirs rather than having to claim it, which is the
+   * whole difference between an assignment that means something and one that only sorts.
+   */
+  test('is inherited by the next conversation that customer starts', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: server.url })
+
+    await customerSays(f, 'คำถามแรก', { externalId: 'owned-customer' })
+    await runQueuedWork(f)
+
+    const first = await f.runtime.db
+      .select({ id: schema.conversations.id, customerId: schema.conversations.customerId })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, f.workspaceId))
+    const customerId = first[0]?.customerId ?? ''
+
+    // Somebody takes the customer on, and the conversation they are in is left alone.
+    await f.runtime.db
+      .update(schema.customers)
+      .set({ assigneeUserId: f.userId })
+      .where(eq(schema.customers.id, customerId))
+
+    const untouched = await f.runtime.db
+      .select({ assigneeUserId: schema.conversations.assigneeUserId })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, first[0]?.id ?? ''))
+    expect(untouched[0]?.assigneeUserId).toBeNull()
+
+    // Resolve it, so the next message opens a new conversation rather than reusing this one.
+    await f.runtime.db
+      .update(schema.conversations)
+      .set({ status: 'resolved' })
+      .where(eq(schema.conversations.id, first[0]?.id ?? ''))
+
+    await customerSays(f, 'คำถามที่สอง', { externalId: 'owned-customer' })
+
+    const fresh = await f.runtime.db
+      .select({
+        id: schema.conversations.id,
+        assigneeUserId: schema.conversations.assigneeUserId,
+      })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.customerId, customerId))
+      .orderBy(desc(schema.conversations.createdAt))
+      .limit(1)
+
+    expect(fresh[0]?.id).not.toBe(first[0]?.id)
+    expect(fresh[0]?.assigneeUserId).toBe(f.userId)
+  })
+})

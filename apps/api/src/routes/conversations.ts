@@ -94,9 +94,22 @@ export function conversationRoutes(ctx: ApiContext) {
     new Elysia({ prefix: '/conversations' })
       .use(authPlugin(ctx))
 
+      /**
+       * The queue an agent works from.
+       *
+       * Ordered by who owns the customer before anything else: your people first, then
+       * people nobody has claimed, then everybody else's. That is deliberately stronger
+       * than urgency — a colleague's overdue conversation sits below your quiet one,
+       * because the person who owns a relationship is the one who should answer it and an
+       * inbox that reshuffles by whoever shouted last is nobody's queue.
+       *
+       * Within each of those three, longest wait first. A conversation is waiting when it
+       * has been handed to a person, or when the customer spoke last and nobody has
+       * answered; everything else falls to the bottom of its group, newest first.
+       */
       .get(
         '/',
-        async ({ workspaceId, query }) => {
+        async ({ workspaceId, query, user }) => {
           const filters = [eq(schema.conversations.workspaceId, workspaceId)]
           if (query.status) filters.push(eq(schema.conversations.status, query.status))
           if (query.mode) filters.push(eq(schema.conversations.mode, query.mode))
@@ -109,21 +122,64 @@ export function conversationRoutes(ctx: ApiContext) {
           if (query.before)
             filters.push(lt(schema.conversations.lastMessageAt, new Date(query.before)))
 
+          /** Your people first, then unclaimed people, then everybody else's. */
+          const ownership = sql`case
+            when ${schema.customers.assigneeUserId} = ${user.id} then 0
+            when ${schema.customers.assigneeUserId} is null then 1
+            else 2 end`
+
+          /**
+           * When this conversation started waiting for a person, or null if it is not.
+           *
+           * Two ways to be waiting, and they need one column between them so that a single
+           * ascending sort answers "longest first". A conversation in `waiting_human` was
+           * handed over explicitly and knows when; any other conversation is waiting if the
+           * customer spoke last and nobody has answered since. Nulls sort last, which puts
+           * everything nobody is waiting on below everything somebody is.
+           */
+          const waitingSince = sql`case
+            when ${schema.conversations.mode} = 'waiting_human'
+              then coalesce(
+                ${schema.conversations.waitingHumanSince},
+                ${schema.conversations.lastCustomerMessageAt}
+              )
+            when ${schema.conversations.lastCustomerMessageAt} is not null
+              and (
+                ${schema.conversations.lastMessageAt} is null
+                or ${schema.conversations.lastCustomerMessageAt} >= ${schema.conversations.lastMessageAt}
+              )
+              then ${schema.conversations.lastCustomerMessageAt}
+          end`
+
           const rows = await db
-            .select()
+            .select({
+              id: schema.conversations.id,
+              mode: schema.conversations.mode,
+              status: schema.conversations.status,
+              channelId: schema.conversations.channelId,
+              assigneeUserId: schema.conversations.assigneeUserId,
+              tags: schema.conversations.tags,
+              handoffReason: schema.conversations.handoffReason,
+              unreadCount: schema.conversations.unreadCount,
+              lastMessageAt: schema.conversations.lastMessageAt,
+              waitingHumanSince: schema.conversations.waitingHumanSince,
+              customerId: schema.conversations.customerId,
+              customerDisplayName: schema.customers.displayName,
+              customerAssigneeUserId: schema.customers.assigneeUserId,
+            })
             .from(schema.conversations)
+            // Replaces a second query that fetched these by id. The ordering needs the
+            // owner in SQL anyway, and a customer always exists for a conversation.
+            .innerJoin(schema.customers, eq(schema.customers.id, schema.conversations.customerId))
             .where(and(...filters))
-            .orderBy(desc(schema.conversations.lastMessageAt))
+            .orderBy(
+              ownership,
+              sql`${waitingSince} asc nulls last`,
+              sql`${schema.conversations.lastMessageAt} desc nulls last`,
+            )
             .limit(query.limit ?? 50)
 
           if (rows.length === 0) return { conversations: [] }
-
-          const customerIds = [...new Set(rows.map((r) => r.customerId))]
-          const customers = await db
-            .select()
-            .from(schema.customers)
-            .where(inArray(schema.customers.id, customerIds))
-          const byCustomer = new Map(customers.map((c) => [c.id, c]))
 
           // One extra query for previews rather than one per row.
           const conversationIds = rows.map((r) => r.id)
@@ -155,7 +211,9 @@ export function conversationRoutes(ctx: ApiContext) {
               waitingHumanSince: row.waitingHumanSince,
               customer: {
                 id: row.customerId,
-                displayName: byCustomer.get(row.customerId)?.displayName ?? null,
+                displayName: row.customerDisplayName,
+                /** The console resolves the name from the member list it already holds. */
+                assigneeUserId: row.customerAssigneeUserId,
               },
               lastMessage: preview.get(row.id)
                 ? {
@@ -181,6 +239,11 @@ export function conversationRoutes(ctx: ApiContext) {
              * `?review=false` would turn the filter on.
              */
             review: z.literal('true').optional(),
+            /**
+             * A cutoff on the last message, not a cursor. It was only ever approximately
+             * one, and since the list is no longer ordered by that column alone it is a
+             * filter and nothing more.
+             */
             before: z.string().optional(),
             limit: z.coerce.number().int().min(1).max(100).optional(),
           }),

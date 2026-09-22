@@ -236,6 +236,66 @@ describe('merging two customers', () => {
   })
 })
 
+describe('the account owner survives a merge', () => {
+  /**
+   * The repoint list is about tables, so it does not cover a column on `customers`: any
+   * column not named in the survivor-wins block is simply dropped with the absorbed row.
+   * Somebody looking after the absorbed record must keep looking after the person.
+   */
+  test('is inherited when the survivor has none', async () => {
+    const f = await setup()
+    const { older, newer } = olderOf(f)
+    const owner = await makeUser(f, 'owner')
+
+    await f.db
+      .update(schema.customers)
+      .set({ assigneeUserId: owner })
+      .where(eq(schema.customers.id, newer))
+
+    await mergeCustomers(f.db, {
+      workspaceId: f.workspaceId,
+      survivorId: older,
+      absorbedId: newer,
+      userId: null,
+    })
+
+    const rows = await f.db
+      .select({ assigneeUserId: schema.customers.assigneeUserId })
+      .from(schema.customers)
+      .where(eq(schema.customers.id, older))
+    expect(rows[0]?.assigneeUserId).toBe(owner)
+  })
+
+  test('is not overwritten when the survivor already has one', async () => {
+    const f = await setup()
+    const { older, newer } = olderOf(f)
+    const survivorOwner = await makeUser(f, 'survivor-owner')
+    const absorbedOwner = await makeUser(f, 'absorbed-owner')
+
+    await f.db
+      .update(schema.customers)
+      .set({ assigneeUserId: survivorOwner })
+      .where(eq(schema.customers.id, older))
+    await f.db
+      .update(schema.customers)
+      .set({ assigneeUserId: absorbedOwner })
+      .where(eq(schema.customers.id, newer))
+
+    await mergeCustomers(f.db, {
+      workspaceId: f.workspaceId,
+      survivorId: older,
+      absorbedId: newer,
+      userId: null,
+    })
+
+    const rows = await f.db
+      .select({ assigneeUserId: schema.customers.assigneeUserId })
+      .from(schema.customers)
+      .where(eq(schema.customers.id, older))
+    expect(rows[0]?.assigneeUserId).toBe(survivorOwner)
+  })
+})
+
 describe('normalising an identifier', () => {
   test('one Thai mobile written three ways is one number', () => {
     const expected = '0812345678'
