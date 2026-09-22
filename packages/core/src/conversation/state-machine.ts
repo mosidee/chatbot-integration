@@ -22,8 +22,20 @@ export type ConversationState = {
 export type ConversationEvent =
   /** An inbound message from the customer arrived and has been stored. */
   | { type: 'customer_message'; at: Date; isMedia?: boolean }
-  /** The AI decided it cannot or should not continue. */
-  | { type: 'ai_handoff'; at: Date; reason: HandoffReason; note: string | null }
+  /**
+   * The AI decided it cannot or should not continue.
+   *
+   * `language` is the language the customer was last writing in, where the caller could
+   * tell. Null falls back to the customer's recorded language and then the workspace
+   * default, which is what the acknowledgement is written in.
+   */
+  | {
+      type: 'ai_handoff'
+      at: Date
+      reason: HandoffReason
+      note: string | null
+      language?: Language | null
+    }
   /** A human clicked "take over". */
   | { type: 'human_take_over'; at: Date; userId: string }
   /** A human handed the conversation back, optionally leaving the AI an instruction. */
@@ -45,8 +57,24 @@ export type Effect =
   | { type: 'run_ai_turn'; deliver: 'send' | 'draft' }
   /** Produce a suggested reply for the human sidebar. Never sent to the customer. */
   | { type: 'run_suggestion' }
-  /** Send the configured acknowledgement text to the customer. */
-  | { type: 'send_acknowledgement'; language: Language | null }
+  /**
+   * Send one of the workspace's holding messages to the customer.
+   *
+   * `kind` chooses which: `handoff` is what a customer reads the moment the AI stops
+   * answering, `still_waiting` is what they read if nobody has picked the conversation up
+   * by the time the fallback timer fires. Two texts rather than one, because sending the
+   * same sentence twice reads like a machine that has lost its place.
+   *
+   * `at` travels with the effect for the reason `record_handoff` does: a retried job
+   * replaying an already-computed effect list must send the same message rather than a
+   * second copy of it, and the instant is what makes the two indistinguishable.
+   */
+  | {
+      type: 'send_acknowledgement'
+      kind: 'handoff' | 'still_waiting'
+      language: Language | null
+      at: Date
+    }
   /** Write an internal note visible to agents only. */
   | { type: 'add_internal_note'; body: string }
   /** Tell connected agents something needs attention. */
@@ -107,6 +135,16 @@ export function transition(
       }
       const effects: Effect[] = [
         { type: 'record_handoff', reason: event.reason, at: event.at },
+        // Before the note and the nudge: the customer asked the question, and leaving them
+        // watching an empty thread while colleagues are told about it is the silence this
+        // product refuses. An agent opening the conversation then reads what was promised
+        // on their behalf.
+        {
+          type: 'send_acknowledgement',
+          kind: 'handoff',
+          language: event.language ?? null,
+          at: event.at,
+        },
         {
           type: 'add_internal_note',
           body: event.note ?? `AI handed off. Reason: ${event.reason}.`,
@@ -205,7 +243,14 @@ export function transition(
       return {
         patch: {},
         effects: [
-          { type: 'send_acknowledgement', language: null },
+          {
+            type: 'send_acknowledgement',
+            kind: 'still_waiting',
+            language: null,
+            // The instant the wait began rather than the instant the timer fired, so a
+            // timer that runs twice for one wait apologises once.
+            at: state.waitingHumanSince ?? event.at,
+          },
           { type: 'notify_agents', reason: 'timeout' },
         ],
       }
@@ -240,6 +285,15 @@ function onCustomerMessage(
           },
           effects: [
             { type: 'record_handoff', reason: 'unsupported_media', at: event.at },
+            // A customer who has just sent a photograph is owed an answer as much as one
+            // who asked a question, and this path never reaches the AI turn that would
+            // otherwise produce one.
+            {
+              type: 'send_acknowledgement',
+              kind: 'handoff',
+              language: null,
+              at: event.at,
+            },
             {
               type: 'add_internal_note',
               body: 'Customer sent media the AI cannot interpret. Handed off.',

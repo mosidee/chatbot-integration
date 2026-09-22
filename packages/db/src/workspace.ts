@@ -51,6 +51,10 @@ export function defaultWorkspaceSettings(
       th: 'สักครู่นะคะ กำลังโอนสายให้เจ้าหน้าที่ดูแลต่อค่ะ',
       en: 'One moment please, I am passing you to a colleague.',
     },
+    stillWaitingText: {
+      th: 'ขออภัยที่ให้รอนะคะ เจ้าหน้าที่จะติดต่อกลับโดยเร็วที่สุดค่ะ',
+      en: 'Sorry to keep you waiting. A colleague will be with you as soon as they can.',
+    },
     modelPrices: {},
     externalRetrieval: null,
     identity: {

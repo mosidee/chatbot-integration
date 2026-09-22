@@ -4,7 +4,12 @@ import { type Database, decryptJson, type Executor, newId, schema } from '@ci/db
 import type { Language } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import { summaryJobId, waitingHumanJobId } from './queues'
-import { loadWorkspaceSettings, storeMessage } from './repo'
+import {
+  conversationLanguage,
+  findMessageIdByTurnKey,
+  loadWorkspaceSettings,
+  storeMessage,
+} from './repo'
 import type { Runtime } from './runtime'
 
 /**
@@ -80,12 +85,48 @@ export function createEffectPorts(
       })
     },
 
-    async sendAcknowledgement(ctx, language) {
+    async sendAcknowledgement(ctx, input) {
       const settings = await loadWorkspaceSettings(db, ctx.workspaceId)
-      const chosen: Language = language ?? settings.defaultLanguage
-      const text = settings.acknowledgementText[chosen] ?? settings.acknowledgementText.en
-      if (!text) return
+      const texts =
+        input.kind === 'handoff' ? settings.acknowledgementText : settings.stillWaitingText
 
+      /**
+       * The language the customer is owed this in.
+       *
+       * The caller knows it when a message prompted the handoff; the timer does not, and
+       * falls back to what this customer has been answered in before. An empty string
+       * counts as missing, because a tenant clearing the box means the same as never
+       * having filled it.
+       */
+      const chosen: Language =
+        input.language ??
+        (await conversationLanguage(
+          executor,
+          ctx.workspaceId,
+          ctx.conversationId,
+          settings.defaultLanguage,
+        ))
+      const text = texts[chosen] || texts.en || texts.th
+      if (!text) {
+        // Deliberately loud. This is the one path whose whole purpose is that the customer
+        // hears something, so a workspace that has emptied both boxes is a silence that
+        // somebody has to be able to find afterwards.
+        logger.warn('no acknowledgement text configured', {
+          workspaceId: ctx.workspaceId,
+          conversationId: ctx.conversationId,
+          kind: input.kind,
+        })
+        return
+      }
+
+      /**
+       * One message per wait, not one per attempt.
+       *
+       * `handOff` runs outside a transaction and its job retries, so the whole effect list
+       * is replayed. The instant comes from the state machine, which makes the key the
+       * same across those replays and different for a genuinely new handoff.
+       */
+      const turnKey = `ack-${input.kind}-${ctx.conversationId}-${input.at.getTime()}`
       const stored = await storeMessage(executor, {
         workspaceId: ctx.workspaceId,
         conversationId: ctx.conversationId,
@@ -93,11 +134,21 @@ export function createEffectPorts(
         senderType: 'system',
         message: { kind: 'text', text },
         status: 'queued',
+        turnKey,
         redaction: settings.redaction,
       })
 
-      // The message and its delivery are one promise: a stored reply nobody was told to
-      // send is the silence this product refuses.
+      /**
+       * On a collision the id `storeMessage` returns names no row, so the winner has to be
+       * read back. Enqueueing anyway rather than returning early: the attempt that lost
+       * this race may be the only one that got as far as the queue, and a stored message
+       * nobody was told to send is exactly the silence this product refuses.
+       */
+      const messageId = stored.duplicate
+        ? await findMessageIdByTurnKey(executor, ctx.workspaceId, turnKey)
+        : stored.id
+      if (!messageId) return
+
       await outbox.enqueue(executor, {
         queue: 'outbound',
         name: 'send',
@@ -105,9 +156,9 @@ export function createEffectPorts(
         payload: {
           workspaceId: ctx.workspaceId,
           conversationId: ctx.conversationId,
-          messageId: stored.id,
+          messageId,
         },
-        jobId: `outbound-${stored.id}`,
+        jobId: `outbound-${messageId}`,
       })
     },
 

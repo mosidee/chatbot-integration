@@ -206,7 +206,15 @@ export async function pendingSummary(
   const oldest = rows[0]?.oldest
   return {
     pending: rows[0]?.pending ?? 0,
-    oldestAgeMs: oldest ? Date.now() - new Date(oldest).getTime() : 0,
+    /**
+     * Never negative.
+     *
+     * `created_at` is written on the database clock and subtracted from this process's
+     * clock, and the two disagree by a few milliseconds — enough that a row inserted a
+     * moment ago reports having waited minus six. A health endpoint saying the oldest
+     * pending work is from the future reads as a broken relay rather than a working one.
+     */
+    oldestAgeMs: oldest ? Math.max(0, Date.now() - new Date(oldest).getTime()) : 0,
   }
 }
 

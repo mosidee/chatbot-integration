@@ -1,7 +1,7 @@
 import type { ChannelAdapter, InboundEvent } from '@ci/channels'
 import type { Logger } from '@ci/core'
 import { type RedactionOptions, redactMessage } from '@ci/core'
-import { type Database, type Executor, newId, schema } from '@ci/db'
+import { type Database, defaultWorkspaceSettings, type Executor, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import type {
   ConversationMode,
@@ -94,6 +94,9 @@ export async function workspaceIsWorkable(
 export function withSettingsDefaults(settings: WorkspaceSettings): WorkspaceSettings {
   return {
     ...settings,
+    // A workspace from before the wait had its own sentence would otherwise send the
+    // handoff text twice, which is the thing the second text exists to prevent.
+    stillWaitingText: settings.stillWaitingText ?? defaultWorkspaceSettings().stillWaitingText,
     identity: {
       // A widget token was already trusted before this key existed, so leaving it on
       // changes nothing for anyone. The link is new, and starts off.
@@ -114,6 +117,53 @@ export type ResolvedConversation = {
   channelIdentityId: string
   mode: ConversationMode
   isNew: boolean
+}
+
+/**
+ * The id of the message a turn key already wrote, where one exists.
+ *
+ * `storeMessage` generates its id before the insert, so on a collision the id it hands
+ * back names no row. The winner has to be read back by the key both attempts shared, or
+ * delivery is queued for a message that does not exist.
+ */
+export async function findMessageIdByTurnKey(
+  db: Executor,
+  workspaceId: string,
+  turnKey: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ id: schema.messages.id })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.workspaceId, workspaceId), eq(schema.messages.turnKey, turnKey)))
+    .limit(1)
+  return rows[0]?.id ?? null
+}
+
+/**
+ * The language to write to this conversation's customer in.
+ *
+ * Used by the messages the product composes itself, which have no model to mirror the
+ * customer for them. A conversation whose customer has vanished falls back rather than
+ * failing: something is better than silence.
+ */
+export async function conversationLanguage(
+  db: Executor,
+  workspaceId: string,
+  conversationId: string,
+  fallback: Language,
+): Promise<Language> {
+  const rows = await db
+    .select({ primaryLanguage: schema.customers.primaryLanguage })
+    .from(schema.conversations)
+    .innerJoin(schema.customers, eq(schema.conversations.customerId, schema.customers.id))
+    .where(
+      and(
+        eq(schema.conversations.id, conversationId),
+        eq(schema.conversations.workspaceId, workspaceId),
+      ),
+    )
+    .limit(1)
+  return rows[0]?.primaryLanguage ?? fallback
 }
 
 /** Who looks after this customer, if anybody. Null when nobody has claimed them. */

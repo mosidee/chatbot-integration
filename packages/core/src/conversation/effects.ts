@@ -31,7 +31,11 @@ export async function applyEffects(
         break
 
       case 'send_acknowledgement':
-        await ports.sendAcknowledgement(ctx, effect.language)
+        await ports.sendAcknowledgement(ctx, {
+          kind: effect.kind,
+          language: effect.language,
+          at: effect.at,
+        })
         break
 
       case 'record_handoff':

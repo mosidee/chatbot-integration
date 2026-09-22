@@ -7,6 +7,7 @@ import type {
   ToolSummary,
 } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -148,6 +149,8 @@ export function Settings() {
           </div>
         </div>
 
+        <HoldingMessages settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
+
         <fieldset>
           <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
             {t('settings.redaction')}
@@ -206,6 +209,98 @@ export function Settings() {
           flash()
         }}
       />
+    </div>
+  )
+}
+
+/**
+ * What a customer reads while they wait for a person.
+ *
+ * Two sentences the AI never writes: one sent the moment it stops answering, one sent if
+ * nobody has picked the conversation up by the deadline below them. They were settings the
+ * API accepted and no screen offered, which meant every tenant shipped with the defaults
+ * and the operator had no way to sound like themselves at the one moment the AI has
+ * admitted it cannot help.
+ */
+function HoldingMessages({
+  settings,
+  onSave,
+}: {
+  settings: WorkspaceSettings
+  onSave: (patch: Partial<WorkspaceSettings>) => void
+}) {
+  const { t } = useTranslation()
+
+  const field = (
+    key: 'acknowledgementText' | 'stillWaitingText',
+    language: 'th' | 'en',
+  ): ReactNode => {
+    const current = settings[key][language] ?? ''
+    return (
+      <div>
+        <Label htmlFor={`${key}-${language}`}>{language === 'th' ? 'ไทย' : 'English'}</Label>
+        <Textarea
+          id={`${key}-${language}`}
+          data-testid={`${key}-${language}`}
+          rows={2}
+          maxLength={1000}
+          defaultValue={current}
+          onBlur={(event) => {
+            if (event.target.value === current) return
+            onSave({ [key]: { ...settings[key], [language]: event.target.value } })
+          }}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">
+      <div>
+        <h3 className="text-[13px] font-semibold">{t('settings.holdingMessages')}</h3>
+        <p className="text-[12px] text-[var(--text-muted)]">{t('settings.holdingHint')}</p>
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs font-medium">{t('settings.acknowledgementText')}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {field('acknowledgementText', 'th')}
+          {field('acknowledgementText', 'en')}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs font-medium">{t('settings.stillWaitingText')}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {field('stillWaitingText', 'th')}
+          {field('stillWaitingText', 'en')}
+        </div>
+      </div>
+
+      <div className="max-w-xs">
+        <Label htmlFor="waiting-fallback">{t('settings.waitingHumanFallback')}</Label>
+        <Input
+          id="waiting-fallback"
+          data-testid="waiting-human-minutes"
+          type="number"
+          min={1}
+          max={1440}
+          placeholder={t('settings.waitingHumanFallbackOff')}
+          defaultValue={settings.waitingHumanFallbackMinutes ?? ''}
+          onBlur={(event) => {
+            const raw = event.target.value.trim()
+            // An empty box switches the second message off rather than meaning zero: there
+            // is no such thing as apologising for a wait that has not happened yet.
+            const next = raw === '' ? null : Number(raw)
+            if (next !== null && (!Number.isInteger(next) || next < 1 || next > 1440)) return
+            if (next === settings.waitingHumanFallbackMinutes) return
+            onSave({ waitingHumanFallbackMinutes: next })
+          }}
+        />
+        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+          {t('settings.waitingHumanFallbackHint')}
+        </p>
+      </div>
     </div>
   )
 }

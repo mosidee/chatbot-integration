@@ -136,7 +136,16 @@ export type WorkspaceSettings = {
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
   /** Minutes a conversation may sit in `waiting_human` before the AI offers a fallback reply. */
   waitingHumanFallbackMinutes: number | null
+  /** What a customer reads the moment the AI stops answering and a person is fetched. */
   acknowledgementText: Record<Language, string>
+  /**
+   * What they read if nobody has picked the conversation up by the fallback deadline.
+   *
+   * Separate from `acknowledgementText` because the two are sent minutes apart to the same
+   * person: repeating the first sentence reads like a machine that has lost its place,
+   * where an apology for the wait reads like somebody is still there.
+   */
+  stillWaitingText: Record<Language, string>
   /** Per-model price table for cost estimates, keyed `provider:model`. */
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
   /**

@@ -247,7 +247,8 @@ export function settingsRoutes(ctx: ApiContext) {
             redaction: z
               .object({ cardNumbers: z.boolean(), thaiNationalId: z.boolean() })
               .optional(),
-            acknowledgementText: z.record(languageSchema, z.string()).optional(),
+            acknowledgementText: z.record(languageSchema, z.string().max(1000)).optional(),
+            stillWaitingText: z.record(languageSchema, z.string().max(1000)).optional(),
             modelPrices: z
               .record(
                 z.string(),

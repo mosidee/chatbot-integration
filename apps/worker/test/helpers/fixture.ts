@@ -35,6 +35,7 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = defaultWorkspaceSettings({
   businessHours: { timezone: 'Asia/Bangkok', days: {} },
   waitingHumanFallbackMinutes: null,
   acknowledgementText: { th: 'รอสักครู่นะคะ', en: 'One moment please.' },
+  stillWaitingText: { th: 'ขออภัยที่ให้รอค่ะ', en: 'Sorry for the wait.' },
 })
 
 export type Fixture = {

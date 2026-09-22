@@ -263,6 +263,7 @@ export type WorkspaceSettings = {
   waitingHumanFallbackMinutes: number | null
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
   acknowledgementText: Record<string, string>
+  stillWaitingText: Record<string, string>
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
   businessHours: {
     timezone: string

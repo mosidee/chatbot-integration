@@ -27,13 +27,25 @@ export type EffectContext = {
 
 export type NotifyReason = 'handoff' | 'draft_ready' | 'timeout'
 
+/** Which holding message to send, in which language, and the instant that identifies it. */
+export type AcknowledgementInput = {
+  kind: 'handoff' | 'still_waiting'
+  language: Language | null
+  at: Date
+}
+
 export type EffectPorts = {
   /** Queue an AI turn. `deliver` decides whether the reply is sent or stored as a draft. */
   enqueueAiTurn(ctx: EffectContext, deliver: 'send' | 'draft'): Promise<void>
   /** Queue a suggested reply for the human sidebar. Never reaches the customer. */
   enqueueSuggestion(ctx: EffectContext): Promise<void>
-  /** Send the workspace's acknowledgement text to the customer. */
-  sendAcknowledgement(ctx: EffectContext, language: Language | null): Promise<void>
+  /**
+   * Send one of the workspace's holding messages to the customer.
+   *
+   * Must be idempotent on `at`: the same instant is the same message, because a retried
+   * job replays the whole effect list and a customer must not read it twice.
+   */
+  sendAcknowledgement(ctx: EffectContext, input: AcknowledgementInput): Promise<void>
   /** Write a note visible to agents only. */
   addInternalNote(ctx: EffectContext, body: string): Promise<void>
   /** Best-effort realtime nudge to connected agents. Failures must not fail the job. */
