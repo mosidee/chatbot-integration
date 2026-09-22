@@ -170,8 +170,13 @@ function toNormalized(event: webhook.Event): NormalizedMessage | null {
   }
 }
 
-/** Translate our outbound model into LINE's message objects. */
-function toLineMessages(message: NormalizedMessage): messagingApi.Message[] {
+/**
+ * Translate our outbound model into LINE's message objects.
+ *
+ * Exported for its tests. Sending goes through the SDK's client, so the translation is the
+ * part worth asserting on and the only part with decisions in it.
+ */
+export function toLineMessages(message: NormalizedMessage): messagingApi.Message[] {
   switch (message.kind) {
     case 'text':
       return splitText(message.text, MAX_TEXT_LENGTH).map((text) => ({ type: 'text', text }))
@@ -199,17 +204,40 @@ function toLineMessages(message: NormalizedMessage): messagingApi.Message[] {
       if (urls.length === 0) {
         return [{ type: 'text', text: message.text ?? '[image]' }]
       }
-      return urls.map((url) => ({
-        type: 'image',
-        originalContentUrl: url,
-        previewImageUrl: url,
-      }))
+      // A LINE image carries no caption, so the agent's note goes first as its own message
+      // rather than being dropped on the floor.
+      return [
+        ...(message.text ? [{ type: 'text' as const, text: message.text }] : []),
+        ...urls.map((url) => ({
+          type: 'image' as const,
+          originalContentUrl: url,
+          previewImageUrl: url,
+        })),
+      ]
     }
 
     case 'template':
       return [{ type: 'text', text: message.altText.slice(0, MAX_TEXT_LENGTH) }]
 
-    case 'file':
+    /**
+     * LINE has no document message. Its outbound types are text, sticker, image, video,
+     * audio, location, imagemap, template and flex, and none of them carries a PDF.
+     *
+     * So a file becomes a link, with the caption above it when there is one. That is what a
+     * person would do by hand, and it is better than the alternative of refusing to send
+     * something the agent has already told the customer is coming.
+     */
+    case 'file': {
+      const urls = message.attachments.flatMap((a) =>
+        a.sourceUrl?.startsWith('http') ? [a.sourceUrl] : [],
+      )
+      if (urls.length === 0) {
+        return [{ type: 'text', text: message.text ?? '[file]' }]
+      }
+      const caption = message.text ? `${message.text}\n` : ''
+      return [{ type: 'text', text: `${caption}${urls.join('\n')}`.slice(0, MAX_TEXT_LENGTH) }]
+    }
+
     case 'audio':
     case 'video':
     case 'location':
@@ -230,6 +258,11 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
     supportsQuickReplies: true,
     supportsTemplates: true,
     supportsImages: true,
+    /**
+     * LINE has no document message type. A file still reaches the customer, as a link in a
+     * text message, which is why the composer offers one; this says the platform has no
+     * native carrier for it.
+     */
     supportsFiles: false,
     // LINE has no customer-service window; replies are limited by the reply token instead.
     messagingWindowHours: null,

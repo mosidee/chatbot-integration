@@ -54,6 +54,9 @@ const sessionClaimsSchema = z.object({
 
 type SessionClaims = z.infer<typeof sessionClaimsSchema>
 
+/** Only the parts of a stored attachment the widget is allowed to see. */
+type WidgetAttachment = { sourceUrl: string | null; mime: string; fileName: string | null }
+
 export function widgetRoutes(ctx: ApiContext) {
   const { db, runtime } = ctx
 
@@ -313,6 +316,22 @@ export function widgetRoutes(ctx: ApiContext) {
                 // The customer does not need to know whether a person or the AI answered.
                 from: row.direction === 'inbound' ? 'you' : 'support',
                 text: (row.content as { text?: string | null }).text ?? '',
+                /**
+                 * Files an agent sent, as links the widget can render.
+                 *
+                 * Signed by the outbound job when the message went out, so they are already
+                 * fetchable without a session, which is what the visitor has. An attachment
+                 * we never resolved a link for is left out rather than shown as a dead one.
+                 */
+                attachments: (
+                  (row.content as { attachments?: WidgetAttachment[] }).attachments ?? []
+                )
+                  .filter((attachment) => Boolean(attachment.sourceUrl))
+                  .map((attachment) => ({
+                    url: attachment.sourceUrl as string,
+                    mime: attachment.mime,
+                    fileName: attachment.fileName,
+                  })),
                 at: row.createdAt.toISOString(),
               })),
           }

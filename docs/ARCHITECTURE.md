@@ -63,6 +63,11 @@ One conversation per channel identity, found or created under a row lock on that
 
 The panel loads the most recent thirty messages and widens the window on scroll, rather than paging backwards with a cursor, so the newest message is always the end of what is shown.
 
+## Sending a file (packages/infra/src/media-links.ts)
+Inbound media is downloaded into our own private storage and read back as bytes (ADR 0001). Outbound cannot work that way: LINE and Messenger take a URL and fetch it from their own servers with no session, so `withMediaLinks` turns the storage key into a link signed with `APP_SECRET_KEY` and carrying an expiry, and `/api/media/*` serves it publicly by verifying that signature. The link is unguessable and dies on its own; the platforms cache what they fetch, so the customer keeps the file after it does. `MEDIA_LINK_TTL_DAYS` sets the lifetime, seven days by default.
+
+Adapters remain pure translators reading `sourceUrl`. LINE has no document message type at all, so a file becomes a link in a text message; Messenger carries it natively. Neither platform's media message has a caption field, so an agent's note goes out first as its own message.
+
 ## Review queue (packages/infra/src/review.ts)
 One SQL fragment, `inReviewQueue()`, correlated on the `conversations` row of whatever query uses it, so the inbox list, the tab's count badge and the dashboard all ask the identical question. It reads: no handoff reason, no message with `sender_type = 'human'`, and some message with `sender_type = 'ai'` newer than `conversations.reviewed_at`. `reviewed_at` is written with the database's `now()`, because it is compared against `messages.created_at`, which `defaultNow()` writes on the same clock. Feedback rows hang off the conversation and cascade with it, which is how retention and erasure reach them.
 

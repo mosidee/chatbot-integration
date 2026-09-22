@@ -88,6 +88,7 @@ const th = {
     handoffReason: 'เหตุผลที่ส่งต่อ',
     selectPrompt: 'เลือกบทสนทนาเพื่อเริ่ม',
     loadOlder: 'ดูข้อความก่อนหน้า',
+    attach: 'แนบไฟล์',
   },
   sidebar: {
     identityVerified: 'ยืนยันตัวตนแล้ว',
@@ -495,6 +496,7 @@ const en: typeof th = {
     handoffReason: 'Handoff reason',
     selectPrompt: 'Choose a conversation to start',
     loadOlder: 'Show earlier messages',
+    attach: 'Attach',
   },
   sidebar: {
     identityVerified: 'Verified',

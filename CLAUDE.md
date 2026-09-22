@@ -280,6 +280,16 @@ without spending money.
 - The seed grants platform admin to `SEED_ADMIN_EMAIL`. An installation seeded before M6
   must re-run `bun run db:seed`, or the platform page is invisible to everybody and no
   second tenant can ever be created.
+- **Outbound media leaves as a signed link, not as bytes.** LINE and Messenger do not accept
+  a file: they take a URL and fetch it themselves, from their own servers, with no session.
+  `withMediaLinks` in the outbound processor turns a storage key into a link signed with
+  `APP_SECRET_KEY` and expiring after `MEDIA_LINK_TTL_DAYS`, and `/api/media/*` serves it
+  publicly. Adapters stay pure translators and read `sourceUrl` only. This is the one place
+  the private-bucket posture of ADR 0001 is relaxed, and the link is what makes it safe.
+- **LINE has no document message.** Its outbound types are text, sticker, image, video,
+  audio, location, imagemap, template and flex. A file therefore goes as a link inside a
+  text message; Messenger carries it natively. Neither platform's image or file carries a
+  caption, so an agent's note is sent as its own message first rather than dropped.
 - The conversation panel loads the **most recent** thirty messages and widens the window as
   somebody scrolls up. It used to take the first two hundred, which showed a long thread's
   opening and hid everything an agent needed. Paging widens the window rather than walking a

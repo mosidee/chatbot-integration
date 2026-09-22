@@ -10,6 +10,7 @@ import { dashboardRoutes } from './routes/dashboard'
 import { identityRoutes } from './routes/identity'
 import { invitationRoutes } from './routes/invitations'
 import { knowledgeRoutes } from './routes/knowledge'
+import { mediaRoutes } from './routes/media'
 import { platformRoutes } from './routes/platform'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
@@ -78,6 +79,10 @@ export function createApp(ctx: ApiContext) {
       // Public for a third reason: somebody accepting an invitation has no account yet, so
       // there is nothing to authenticate them with. The token in the link is what stands in.
       .group('/api/invitations', (app) => app.use(invitationRoutes(ctx)))
+
+      // And a fourth: the caller is LINE's or Meta's fetcher collecting a file we sent, and
+      // the signature on the link is what stands in for a session it will never have.
+      .group('/api/media', (app) => app.use(mediaRoutes(ctx)))
 
       .group('/api/v1', (app) =>
         app

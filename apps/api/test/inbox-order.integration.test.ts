@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { loadEnv } from '@ci/config'
 import { newId, schema } from '@ci/db'
+import { signMediaUrl } from '@ci/infra'
 import { eq } from 'drizzle-orm'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
@@ -376,5 +377,140 @@ describe('the channel a conversation is on', () => {
     expect(response.status).toBe(200)
     const body = (await response.json()) as { conversations: { channel: { type: string } }[] }
     expect(body.conversations.every((row) => Boolean(row.channel?.type))).toBe(true)
+  })
+})
+
+describe('sending a file to a customer', () => {
+  /**
+   * The whole path: an agent uploads, sends, and the file becomes a link a chat platform
+   * can fetch without a session. The link is the only way LINE or Messenger can receive a
+   * file at all, so the parts that make it safe are asserted rather than assumed.
+   */
+  const upload = async (name: string, mime: string, body: string) => {
+    const form = new FormData()
+    form.set('file', new File([body], name, { type: mime }))
+    const response = await app.handle(
+      new Request('http://localhost/api/v1/uploads', {
+        method: 'POST',
+        headers: { cookie: fixture.admin.cookie, origin: env.PUBLIC_WEB_URL },
+        body: form,
+      }),
+    )
+    return { status: response.status, body: await response.json() }
+  }
+
+  test('accepts a document, which the allowlist used to refuse', async () => {
+    const pdf = await upload('invoice.pdf', 'application/pdf', '%PDF-1.4')
+    expect(pdf.status).toBe(200)
+
+    const docx = await upload(
+      'quote.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'PK',
+    )
+    expect(docx.status).toBe(200)
+  })
+
+  test('still refuses something we should not relay', async () => {
+    const zip = await upload('payload.zip', 'application/zip', 'PK')
+    expect(zip.status).toBe(415)
+  })
+
+  test('serves the file to a caller with no session at all, given the link', async () => {
+    const uploaded = await upload('receipt.pdf', 'application/pdf', '%PDF-receipt')
+    const storageKey = (uploaded.body as { storageKey: string }).storageKey
+
+    const link = await signMediaUrl({
+      storageKey,
+      fileName: 'receipt.pdf',
+      secret: env.APP_SECRET_KEY,
+      baseUrl: 'http://localhost',
+      ttlDays: env.MEDIA_LINK_TTL_DAYS,
+    })
+
+    // No cookie: this is what LINE's fetcher looks like.
+    const fetched = await app.handle(new Request(link))
+    expect(fetched.status).toBe(200)
+    expect(fetched.headers.get('content-type')).toContain('application/pdf')
+    expect(await fetched.text()).toBe('%PDF-receipt')
+  })
+
+  test('refuses a link whose claims were edited', async () => {
+    const uploaded = await upload('private.pdf', 'application/pdf', 'secret')
+    const storageKey = (uploaded.body as { storageKey: string }).storageKey
+    const link = await signMediaUrl({
+      storageKey,
+      secret: env.APP_SECRET_KEY,
+      baseUrl: 'http://localhost',
+      ttlDays: 7,
+    })
+
+    const [header, , signature] = link.split('/api/media/')[1]?.split('/')[0]?.split('.') ?? []
+    const forged = btoa(JSON.stringify({ key: 'someone-else/file.pdf', exp: 9_999_999_999 }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+
+    const response = await app.handle(
+      new Request(`http://localhost/api/media/${header}.${forged}.${signature}/x.pdf`),
+    )
+    expect(response.status).toBe(404)
+  })
+
+  test('refuses a link for a file that is not there', async () => {
+    const link = await signMediaUrl({
+      storageKey: 'nobody/nothing.pdf',
+      secret: env.APP_SECRET_KEY,
+      baseUrl: 'http://localhost',
+      ttlDays: 7,
+    })
+    expect((await app.handle(new Request(link))).status).toBe(404)
+  })
+
+  test('stores the file on the message, ready for the outbound job to sign', async () => {
+    const uploaded = await upload('note.pdf', 'application/pdf', '%PDF-note')
+    const storageKey = (uploaded.body as { storageKey: string }).storageKey
+    const { conversationId } = await seed({
+      name: 'file-recipient',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+
+    const sent = await fixture.as(
+      fixture.admin,
+      `/api/v1/conversations/${conversationId}/messages`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message: {
+            kind: 'file',
+            text: 'your invoice',
+            attachments: [
+              {
+                storageKey,
+                sourceUrl: null,
+                mime: 'application/pdf',
+                sizeBytes: 8,
+                fileName: 'note.pdf',
+                width: null,
+                height: null,
+                durationMs: null,
+              },
+            ],
+          },
+        }),
+      },
+    )
+    expect(sent.status).toBe(200)
+
+    const rows = await ctx.db
+      .select({ content: schema.messages.content })
+      .from(schema.messages)
+      .where(eq(schema.messages.conversationId, conversationId))
+    const stored = rows
+      .map((row) => row.content as { kind: string; attachments?: { storageKey: string }[] })
+      .find((content) => content.kind === 'file')
+
+    expect(stored?.attachments?.[0]?.storageKey).toBe(storageKey)
   })
 })

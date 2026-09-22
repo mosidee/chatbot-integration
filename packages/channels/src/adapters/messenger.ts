@@ -235,15 +235,36 @@ function toMessengerPayloads(message: NormalizedMessage): OutboundPayload[] {
         a.sourceUrl?.startsWith('http') ? [a.sourceUrl] : [],
       )
       if (urls.length === 0) return [{ text: message.text ?? '[image]' }]
-      return urls.map((url) => ({
-        attachment: { type: 'image', payload: { url, is_reusable: true } },
-      }))
+      // A Messenger attachment carries no caption either, so the note goes first.
+      return [
+        ...(message.text ? [{ text: message.text }] : []),
+        ...urls.map((url) => ({
+          attachment: { type: 'image' as const, payload: { url, is_reusable: true } },
+        })),
+      ]
     }
 
     case 'template':
       return [{ text: message.altText.slice(0, MAX_TEXT_LENGTH) }]
 
-    case 'file':
+    /**
+     * Messenger does carry a document, with the same payload shape as an image. The flag
+     * saying so has been true since the adapter was written; this is the branch that makes
+     * it mean something.
+     */
+    case 'file': {
+      const urls = message.attachments.flatMap((a) =>
+        a.sourceUrl?.startsWith('http') ? [a.sourceUrl] : [],
+      )
+      if (urls.length === 0) return [{ text: message.text ?? '[file]' }]
+      return [
+        ...(message.text ? [{ text: message.text }] : []),
+        ...urls.map((url) => ({
+          attachment: { type: 'file' as const, payload: { url, is_reusable: true } },
+        })),
+      ]
+    }
+
     case 'audio':
     case 'video':
     case 'location':

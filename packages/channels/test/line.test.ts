@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { webhook } from '@line/bot-sdk'
-import { type LineConfig, lineChannelAdapter } from '../src/adapters/line'
+import { type LineConfig, lineChannelAdapter, toLineMessages } from '../src/adapters/line'
 import { signBodyBase64 } from '../src/signature'
 import type { WebhookRequest } from '../src/types'
 
@@ -222,5 +222,75 @@ describe('capabilities and config', () => {
     expect(() => lineChannelAdapter.parseConfig({ channelSecret: 'only-one' })).toThrow()
     expect(() => lineChannelAdapter.parseConfig({})).toThrow()
     expect(lineChannelAdapter.parseConfig(CONFIG)).toEqual(CONFIG)
+  })
+})
+
+/**
+ * Sending media, which nothing here had ever asserted.
+ *
+ * LINE has no document message: its outbound types are text, sticker, image, video, audio,
+ * location, imagemap, template and flex. A file therefore has to reach the customer as a
+ * link, and what matters is that it reaches them at all rather than as the literal words
+ * "[unsupported message]", which is what it used to send.
+ */
+describe('sending media', () => {
+  const attachment = (mime: string, url: string | null) => ({
+    storageKey: 'ws/file',
+    sourceUrl: url,
+    mime,
+    sizeBytes: 12,
+    fileName: 'receipt.pdf',
+    width: null,
+    height: null,
+    durationMs: null,
+  })
+
+  const LINK = 'https://chat.example.com/api/media/tok/receipt.pdf'
+
+  test('sends an image as an image', () => {
+    const messages = toLineMessages({
+      kind: 'image',
+      text: null,
+      attachments: [attachment('image/png', LINK)],
+    })
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ type: 'image', originalContentUrl: LINK })
+  })
+
+  test('sends the note before the image, because a LINE image carries no caption', () => {
+    const messages = toLineMessages({
+      kind: 'image',
+      text: 'here is the receipt',
+      attachments: [attachment('image/png', LINK)],
+    })
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toMatchObject({ type: 'text', text: 'here is the receipt' })
+    expect(messages[1]).toMatchObject({ type: 'image' })
+  })
+
+  test('sends a document as a link, which is the only carrier LINE has', () => {
+    const messages = toLineMessages({
+      kind: 'file',
+      text: 'your invoice',
+      attachments: [attachment('application/pdf', LINK)],
+    })
+
+    expect(messages).toHaveLength(1)
+    const text = (messages[0] as { text: string }).text
+    expect(text).toContain('your invoice')
+    expect(text).toContain(LINK)
+    // The thing it used to say instead.
+    expect(text).not.toContain('[unsupported message]')
+  })
+
+  test('says something useful when there is no link to send', () => {
+    const messages = toLineMessages({
+      kind: 'file',
+      text: 'could not attach',
+      attachments: [attachment('application/pdf', null)],
+    })
+    expect(messages[0]).toMatchObject({ type: 'text', text: 'could not attach' })
   })
 })

@@ -362,3 +362,92 @@ describe('checking credentials', () => {
     globalThis.fetch = realFetch
   })
 })
+
+/**
+ * Sending a file, which the adapter declared it could do since it was written and could
+ * not until now. Nothing here had ever asserted an outbound message that was not text.
+ */
+describe('sending media', () => {
+  const realFetch = globalThis.fetch
+
+  /** Captures what would have gone to Graph, and answers as Graph would. */
+  function captureSends(): { bodies: unknown[] } {
+    const bodies: unknown[] = []
+    const impl = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')))
+      return Response.json({ message_id: 'mid.1' }, { status: 200 })
+    }
+    ;(impl as unknown as { preconnect: () => void }).preconnect = () => {}
+    globalThis.fetch = impl as unknown as typeof fetch
+    return { bodies }
+  }
+
+  const attachment = (mime: string) => ({
+    storageKey: 'ws/file',
+    sourceUrl: 'https://chat.example.com/api/media/tok/receipt.pdf',
+    mime,
+    sizeBytes: 12,
+    fileName: 'receipt.pdf',
+    width: null,
+    height: null,
+    durationMs: null,
+  })
+
+  test('sends a document as a file attachment rather than as an apology', async () => {
+    const captured = captureSends()
+    try {
+      await messengerChannelAdapter.send(
+        'psid-1',
+        { kind: 'file', text: null, attachments: [attachment('application/pdf')] },
+        CONFIG,
+        { messagingWindowExpiresAt: new Date(Date.now() + 3600_000) },
+      )
+    } finally {
+      globalThis.fetch = realFetch
+    }
+
+    const payload = captured.bodies[0] as { message?: { attachment?: { type?: string } } }
+    expect(payload.message?.attachment?.type).toBe('file')
+  })
+
+  test('sends the agent note before the file, rather than losing it', async () => {
+    const captured = captureSends()
+    try {
+      await messengerChannelAdapter.send(
+        'psid-1',
+        { kind: 'file', text: 'your receipt', attachments: [attachment('application/pdf')] },
+        CONFIG,
+        { messagingWindowExpiresAt: new Date(Date.now() + 3600_000) },
+      )
+    } finally {
+      globalThis.fetch = realFetch
+    }
+
+    expect(captured.bodies).toHaveLength(2)
+    expect((captured.bodies[0] as { message?: { text?: string } }).message?.text).toBe(
+      'your receipt',
+    )
+  })
+
+  test('falls back to words when there is no link to fetch', async () => {
+    const captured = captureSends()
+    try {
+      await messengerChannelAdapter.send(
+        'psid-1',
+        {
+          kind: 'file',
+          text: 'could not attach',
+          attachments: [{ ...attachment('application/pdf'), sourceUrl: null }],
+        },
+        CONFIG,
+        { messagingWindowExpiresAt: new Date(Date.now() + 3600_000) },
+      )
+    } finally {
+      globalThis.fetch = realFetch
+    }
+
+    expect((captured.bodies[0] as { message?: { text?: string } }).message?.text).toBe(
+      'could not attach',
+    )
+  })
+})

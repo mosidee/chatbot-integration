@@ -2,7 +2,7 @@ import { splitText } from '@ci/channels'
 import type { EffectPorts, Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
-import { loadChannel, workspaceIsWorkable } from '@ci/infra'
+import { loadChannel, withMediaLinks, workspaceIsWorkable } from '@ci/infra'
 import type { NormalizedMessage } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 
@@ -79,7 +79,23 @@ export async function processOutbound(
   }
 
   try {
-    const parts = toSendableParts(message.content, adapter.capabilities.maxTextLength)
+    /**
+     * A file we hold becomes a link before the adapter sees it.
+     *
+     * LINE and Messenger do not take bytes: they take a URL and fetch it themselves, from
+     * their own servers, with no session. So the one place that knows both the storage key
+     * and the public address of this installation turns the first into the second, and the
+     * adapters stay pure translators of a message they are handed.
+     *
+     * Signed and short-lived rather than public and permanent; see `signMediaUrl`.
+     */
+    const outbound = await withMediaLinks(message.content, {
+      secret: env.APP_SECRET_KEY,
+      baseUrl: env.WEBHOOK_BASE_URL,
+      ttlDays: env.MEDIA_LINK_TTL_DAYS,
+    })
+
+    const parts = toSendableParts(outbound, adapter.capabilities.maxTextLength)
     let lastPlatformId: string | null = null
 
     for (const [index, part] of parts.entries()) {

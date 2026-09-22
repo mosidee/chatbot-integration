@@ -14,7 +14,32 @@ import type { ApiContext } from '../context'
 
 const MAX_BYTES = 20 * 1024 * 1024
 
-const ALLOWED_PREFIXES = ['image/', 'audio/', 'video/', 'application/pdf', 'text/']
+/**
+ * What an agent may put in front of a customer.
+ *
+ * Images and documents: a receipt, a price list, a screenshot, an invoice. Deliberately not
+ * "anything the channel accepts" — an archive or an installer relayed through us is a thing
+ * we would rather not be the courier for, and a customer's phone would likely refuse it
+ * anyway. Audio and video stay because inbound media lands here too.
+ */
+const ALLOWED_PREFIXES = [
+  'image/',
+  'audio/',
+  'video/',
+  'text/',
+  'application/pdf',
+  // The office formats, old and new, by their exact types rather than a prefix: the
+  // `application/` space is mostly things that should not be relayed.
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/rtf',
+]
 
 export function uploadRoutes(ctx: ApiContext) {
   const { runtime } = ctx

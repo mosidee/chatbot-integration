@@ -3,6 +3,7 @@ import type {
   FeedbackRating,
   FeedbackReason,
   FeedbackTargetType,
+  NormalizedMessage,
 } from '@ci/shared'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
@@ -27,7 +28,14 @@ import {
   Textarea,
   timeAgo,
 } from '../components/ui'
-import { type AiTrace, api, type ConversationDetail, type Feedback, type Message } from '../lib/api'
+import {
+  type AiTrace,
+  api,
+  type ConversationDetail,
+  type Feedback,
+  type Message,
+  type UploadResult,
+} from '../lib/api'
 import { useRealtime } from '../lib/ws'
 
 /**
@@ -36,6 +44,36 @@ import { useRealtime } from '../lib/ws'
  * On a phone the three panes become one at a time, because an agent replying from their
  * phone needs the thread full-width, not a squeezed column.
  */
+/**
+ * What actually goes out: a note, a file, or a file with a note.
+ *
+ * The kind follows the mime type rather than always being `image`, which is the difference
+ * between a PDF arriving as a document and arriving as a picture that will not open. The
+ * simulator gets this wrong on the inbound side and is not a model to copy.
+ */
+function messageToSend(text: string, attachment: UploadResult | null): NormalizedMessage {
+  if (!attachment) return { kind: 'text', text }
+
+  return {
+    kind: attachment.mime.startsWith('image/') ? 'image' : 'file',
+    text: text || null,
+    attachments: [
+      {
+        storageKey: attachment.storageKey,
+        // Filled in when the message goes out, by the one place that knows this
+        // installation's public address. See `withMediaLinks`.
+        sourceUrl: null,
+        mime: attachment.mime,
+        sizeBytes: attachment.sizeBytes,
+        fileName: attachment.fileName,
+        width: null,
+        height: null,
+        durationMs: null,
+      },
+    ],
+  }
+}
+
 /** How many messages the thread asks for at a time, and grows by on scroll. */
 const MESSAGE_PAGE = 30
 
@@ -387,15 +425,45 @@ function ConversationPane({
     void queryClient.invalidateQueries({ queryKey: ['review-count'] })
   }
 
+  /**
+   * A file waiting to go with the next message.
+   *
+   * Uploaded as soon as it is chosen rather than on send, so the agent finds out it is too
+   * large or the wrong kind while they are still writing, not after they press the button.
+   */
+  const [attachment, setAttachment] = useState<UploadResult | null>(null)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+
+  const clearAttachment = () => {
+    setAttachment(null)
+    setAttachmentError(null)
+    if (fileInput.current) fileInput.current.value = ''
+  }
+
+  const upload = useMutation({
+    mutationFn: (file: File) => api.uploads.upload(file),
+    onSuccess: (result) => {
+      setAttachment(result)
+      setAttachmentError(null)
+    },
+    onError: (caught) =>
+      setAttachmentError(caught instanceof Error ? caught.message : String(caught)),
+  })
+
   const send = useMutation({
     mutationFn: ({ text, suggestionId }: { text: string; suggestionId?: string }) =>
-      api.conversations.send(conversationId, { kind: 'text', text }, suggestionId),
+      api.conversations.send(conversationId, messageToSend(text, attachment), suggestionId),
     onSuccess: () => {
       setDraft('')
       setInsertedSuggestionId(null)
+      clearAttachment()
       invalidate()
     },
   })
+
+  /** Something to send: either of a note and a file is enough on its own. */
+  const canSend = Boolean(draft.trim() || attachment)
 
   const rate = useMutation({
     mutationFn: (input: {
@@ -592,7 +660,60 @@ function ConversationPane({
         </div>
 
         <footer className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] p-2">
+          {attachment ? (
+            <div
+              data-testid="composer-attachment"
+              className="mb-2 flex items-center gap-2 rounded-lg border border-[var(--border)] p-1.5 text-[13px]"
+            >
+              {attachment.mime.startsWith('image/') ? (
+                <img
+                  src={api.uploads.urlFor(attachment.storageKey)}
+                  alt=""
+                  className="size-10 rounded object-cover"
+                />
+              ) : (
+                <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px]">
+                  {attachment.mime.split('/').pop()}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate">{attachment.fileName}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="remove-attachment"
+                onClick={clearAttachment}
+              >
+                ✕
+              </Button>
+            </div>
+          ) : null}
+          {attachmentError ? (
+            <p
+              className="mb-2 text-[13px] text-red-700 dark:text-red-300"
+              data-testid="attachment-error"
+            >
+              {attachmentError}
+            </p>
+          ) : null}
           <div className="flex items-end gap-2">
+            <input
+              ref={fileInput}
+              type="file"
+              className="hidden"
+              data-testid="attachment-input"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) upload.mutate(file)
+              }}
+            />
+            <Button
+              variant="secondary"
+              data-testid="attach"
+              disabled={upload.isPending || send.isPending}
+              onClick={() => fileInput.current?.click()}
+            >
+              {upload.isPending ? t('common.loading') : t('conversation.attach')}
+            </Button>
             <Textarea
               rows={2}
               data-testid="composer"
@@ -614,7 +735,7 @@ function ConversationPane({
             <Button
               variant="primary"
               data-testid="send"
-              disabled={!draft.trim() || send.isPending}
+              disabled={!canSend || send.isPending}
               onClick={() => send.mutate({ text: draft.trim(), ...fromSuggestion() })}
             >
               {t('conversation.send')}

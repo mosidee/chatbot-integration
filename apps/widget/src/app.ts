@@ -15,7 +15,14 @@ import './styles.css'
 const POLL_MS = 3000
 const VISITOR_KEY = 'chat-widget:visitor'
 
-type WidgetMessage = { id: string; from: 'you' | 'support'; text: string; at: string }
+type WidgetAttachment = { url: string; mime: string; fileName: string | null }
+type WidgetMessage = {
+  id: string
+  from: 'you' | 'support'
+  text: string
+  at: string
+  attachments?: WidgetAttachment[]
+}
 
 const params = new URLSearchParams(location.search)
 const channel = params.get('channel') ?? ''
@@ -108,7 +115,32 @@ function append(message: WidgetMessage, optimistic = false): void {
   const bubble = document.createElement('div')
   bubble.className = `bubble ${message.from}`
   bubble.dataset.from = message.from
-  bubble.textContent = message.text
+  // textContent, never innerHTML: everything here came from somebody typing.
+  if (message.text) bubble.textContent = message.text
+
+  /**
+   * A file an agent sent. An image is shown; anything else is a link to open, because a
+   * widget in somebody's page is the wrong place to start a download nobody asked for.
+   */
+  for (const attachment of message.attachments ?? []) {
+    if (attachment.mime.startsWith('image/')) {
+      const image = document.createElement('img')
+      image.src = attachment.url
+      image.alt = attachment.fileName ?? ''
+      image.className = 'attachment'
+      bubble.append(image)
+      continue
+    }
+
+    const link = document.createElement('a')
+    link.href = attachment.url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    link.className = 'attachment-file'
+    link.textContent = attachment.fileName ?? attachment.mime
+    bubble.append(link)
+  }
+
   thread.append(bubble)
   thread.scrollTop = thread.scrollHeight
 

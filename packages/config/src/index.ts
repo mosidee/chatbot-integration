@@ -52,6 +52,17 @@ export const envSchema = z.object({
    * local development need a tool endpoint on localhost, which is the only reason this
    * exists; `createRuntime` refuses to start with it on in production.
    */
+  /**
+   * How long a link to a stored file stays valid, in days.
+   *
+   * LINE and Messenger fetch outbound media from a URL rather than accepting bytes, so a
+   * file an agent sends has to be reachable without a session. The link is signed and
+   * expires: a leaked URL stops working, and the platforms have already cached the file by
+   * then. Seven days is long enough that a customer scrolling back a week still sees the
+   * copy in our own console.
+   */
+  MEDIA_LINK_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(7),
+
   TOOL_EGRESS_ALLOW_PRIVATE: boolish.default(false),
 
   SEED_ADMIN_EMAIL: z.string().optional(),
