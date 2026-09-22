@@ -60,6 +60,20 @@ export function webhookRoutes(ctx: ApiContext) {
               channelId: params.channelId,
               reason: outcome.reason,
             })
+
+            /**
+             * A suspended tenant acknowledges and drops.
+             *
+             * Answering with an error would be the honest-looking thing to do and the wrong
+             * one: LINE and Meta disable an endpoint that keeps failing, so a suspension of
+             * a few days would cost the operator their webhook registration and a support
+             * conversation to get it back. The message is discarded either way, and this way
+             * the channel still works the moment the tenant is restored.
+             */
+            if (outcome.reason === 'workspace_suspended') {
+              return { received: true, dropped: true }
+            }
+
             // A wrong signature gets 401; an unknown channel gets 404. Neither is retried
             // usefully by the platform, and neither leaks whether a channel exists.
             return outcome.reason === 'invalid_signature'

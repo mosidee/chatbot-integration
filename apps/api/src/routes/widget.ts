@@ -60,12 +60,26 @@ export function widgetRoutes(ctx: ApiContext) {
   /** The widget channel, its config, and the secret its session tokens are signed with. */
   async function loadChannel(channelId: string) {
     const rows = await db
-      .select()
+      .select({ channel: schema.channels, status: schema.workspaces.status })
       .from(schema.channels)
+      .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.channels.workspaceId))
       .where(and(eq(schema.channels.id, channelId), eq(schema.channels.type, 'web')))
       .limit(1)
-    const channel = rows[0]
+    const channel = rows[0]?.channel
     if (!channel?.enabled) return null
+
+    /**
+     * A widget on a suspended tenant's site stops working, and says so plainly.
+     *
+     * Unlike a webhook there is a person on the other end of this, reading the page, so
+     * pretending everything is fine and silently dropping their message would be worse than
+     * telling them the chat is unavailable. A tenant being deleted reads as no channel at
+     * all, because in a moment it will not exist.
+     */
+    const status = rows[0]?.status
+    if (status !== 'active') {
+      return { channel, config: null, suspended: status === 'suspended' } as const
+    }
 
     // The web adapter directly rather than through the registry: the registry erases its
     // config type, and this route needs the origin list from it.
@@ -77,7 +91,7 @@ export function widgetRoutes(ctx: ApiContext) {
         )
       : {}
 
-    return { channel, config: webChannelAdapter.parseConfig(raw) }
+    return { channel, config: webChannelAdapter.parseConfig(raw), suspended: false } as const
   }
 
   /** The origin rule is the channel's, so a pilot can allow none and production can list them. */
@@ -142,6 +156,11 @@ export function widgetRoutes(ctx: ApiContext) {
         async ({ params, body, request, status }) => {
           const loaded = await loadChannel(params.channelId)
           if (!loaded) return status(404, { error: 'Unknown widget channel' })
+          if (!loaded.config) {
+            return loaded.suspended
+              ? status(403, { error: 'This workspace is suspended', code: 'workspace_suspended' })
+              : status(404, { error: 'Unknown widget channel' })
+          }
           if (
             !originAllowed(loaded.config.allowedOrigins, request.headers.get('origin') ?? undefined)
           ) {
@@ -212,7 +231,17 @@ export function widgetRoutes(ctx: ApiContext) {
               {},
             ),
           )
-          if (!outcome.ok) return status(400, { error: outcome.reason })
+          if (!outcome.ok) {
+            // The same answer the session endpoint gives, so a widget that was already open
+            // when the tenant was suspended learns the same thing a fresh one does.
+            if (outcome.reason === 'workspace_suspended') {
+              return status(403, {
+                error: 'This workspace is suspended',
+                code: 'workspace_suspended',
+              })
+            }
+            return status(400, { error: outcome.reason })
+          }
           return { received: true }
         },
         {

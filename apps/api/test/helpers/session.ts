@@ -82,7 +82,11 @@ export type ApiFixture = {
  * platform admin creates, channels included.
  */
 export async function createApiFixture(ctx: ApiContext, app: App): Promise<ApiFixture> {
-  const token = newId().slice(0, 8)
+  /**
+   * Random rather than the head of a UUIDv7, which is a timestamp: two fixtures built in
+   * the same test file shared their first eight characters and collided on the slug.
+   */
+  const token = Math.random().toString(36).slice(2, 10)
   const slug = `api-test-${token}`
   const { workspaceId } = await createWorkspace(ctx.db, { name: slug, slug })
 

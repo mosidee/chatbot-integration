@@ -5,7 +5,7 @@ import {
   consumeVerificationCode,
   customerLanguage,
   findVerificationCode,
-  loadWorkspaceSettings,
+  loadWorkspace,
   recordVerifiedIdentity,
   storeMessage,
 } from '@ci/infra'
@@ -43,7 +43,15 @@ export function identityRoutes(ctx: ApiContext) {
         return status(404, { error: 'That link is not valid any more' })
       }
 
-      const settings = await loadWorkspaceSettings(db, pending.workspaceId)
+      const workspace = await loadWorkspace(db, pending.workspaceId)
+      if (workspace.status !== 'active') {
+        // The same answer a switched-off proof gets. A tenant that is suspended or being
+        // deleted confirms nothing, and there is no useful distinction to draw for the
+        // person holding the link.
+        return status(404, { error: 'That link is not valid any more' })
+      }
+
+      const settings = workspace.settings
       const link = settings.identity.verificationLink
       if (!link.enabled || !link.secretEncrypted) {
         // Turning the proof off must stop it working immediately, including for a code

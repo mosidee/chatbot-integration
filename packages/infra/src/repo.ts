@@ -3,7 +3,13 @@ import type { Logger } from '@ci/core'
 import { type RedactionOptions, redactMessage } from '@ci/core'
 import { type Database, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
-import type { ConversationMode, Language, NormalizedMessage, SenderType } from '@ci/shared'
+import type {
+  ConversationMode,
+  Language,
+  NormalizedMessage,
+  SenderType,
+  WorkspaceStatus,
+} from '@ci/shared'
 import { messageToText } from '@ci/shared'
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
 
@@ -14,18 +20,68 @@ import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
  * tenancy guarantee; there is no ambient workspace.
  */
 
-export async function loadWorkspaceSettings(
-  db: Database,
-  workspaceId: string,
-): Promise<WorkspaceSettings> {
+export type LoadedWorkspace = {
+  settings: WorkspaceSettings
+  status: WorkspaceStatus
+}
+
+/**
+ * The workspace a job is about: its settings and whether it may be worked on at all.
+ *
+ * Both come from the one row every processor already reads, so asking whether a tenant is
+ * suspended costs nothing it was not already paying. A processor that reads the settings
+ * and then asks about the status separately could be told the workspace is fine and act on
+ * settings from before a suspension, which is the kind of gap worth closing by construction.
+ */
+export async function loadWorkspace(db: Database, workspaceId: string): Promise<LoadedWorkspace> {
   const rows = await db
     .select()
     .from(schema.workspaces)
     .where(eq(schema.workspaces.id, workspaceId))
     .limit(1)
-  const settings = rows[0]?.settings
-  if (!settings) throw new Error(`workspace ${workspaceId} has no settings`)
-  return withSettingsDefaults(settings)
+  const row = rows[0]
+  if (!row?.settings) throw new Error(`workspace ${workspaceId} has no settings`)
+  return { settings: withSettingsDefaults(row.settings), status: row.status }
+}
+
+export async function loadWorkspaceSettings(
+  db: Database,
+  workspaceId: string,
+): Promise<WorkspaceSettings> {
+  return (await loadWorkspace(db, workspaceId)).settings
+}
+
+/**
+ * Whether a queued job should go ahead, given the state of its workspace.
+ *
+ * A suspended or deleting tenant does no work at all: no model call, no message stored, no
+ * message sent. The job is dropped rather than failed, because failing it means BullMQ
+ * retries it three times and then keeps it, and none of that changes the answer.
+ *
+ * It is logged every time. A dropped job is invisible otherwise, and somebody looking into
+ * why a customer got no reply needs to find the reason rather than an absence.
+ *
+ * Note what this means for the AI turn in particular, since it is an exception to the
+ * strongest rule in this codebase: normally every path out of a turn ends in a message to
+ * the customer or a handoff to a person, precisely so nobody is left waiting. A suspended
+ * workspace is the one case where the turn simply stops, and it is deliberate — there is no
+ * colleague to hand off to, because every one of them is locked out too.
+ */
+export async function workspaceIsWorkable(
+  db: Database,
+  workspaceId: string,
+  logger: Logger | undefined,
+  queue: string,
+): Promise<LoadedWorkspace | null> {
+  const workspace = await loadWorkspace(db, workspaceId)
+  if (workspace.status === 'active') return workspace
+
+  logger?.info('workspace not active, job dropped', {
+    queue,
+    workspaceId,
+    status: workspace.status,
+  })
+  return null
 }
 
 /**

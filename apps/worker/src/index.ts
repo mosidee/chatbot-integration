@@ -15,6 +15,7 @@ import {
   type Runtime,
   type SuggestionJob,
   type WaitingHumanTimeoutJob,
+  type WorkspaceErasureJob,
 } from '@ci/infra'
 import { type Job, Worker } from 'bullmq'
 
@@ -22,7 +23,11 @@ import { processAiTurn } from './processors/ai-turn'
 import { processInbound } from './processors/inbound'
 import { processKnowledgeIngest } from './processors/knowledge-ingest'
 import { processOutbound } from './processors/outbound'
-import { processCustomerErasure, processRetention } from './processors/retention'
+import {
+  processCustomerErasure,
+  processRetention,
+  processWorkspaceErasure,
+} from './processors/retention'
 import { processSuggestion } from './processors/suggestion'
 import { processSummarize, type SummarizeJob } from './processors/summarize'
 import { processWaitingHumanTimeout } from './processors/waiting-human'
@@ -48,6 +53,8 @@ const CONCURRENCY = {
   // way of anything a customer is waiting on.
   retention: 1,
   customer_erasure: 1,
+  // One at a time, and never more: it deletes a whole tenant's rows and then its media.
+  workspace_erasure: 1,
 } as const
 
 function makeWorker<T>(
@@ -165,6 +172,14 @@ async function main() {
       logger,
       CONCURRENCY.customer_erasure,
       processCustomerErasure,
+    ),
+    makeWorker<WorkspaceErasureJob>(
+      QUEUE_NAMES.workspaceErasure,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.workspace_erasure,
+      processWorkspaceErasure,
     ),
     makeWorker<KnowledgeIngestJob>(
       QUEUE_NAMES.knowledgeIngest,

@@ -3,11 +3,14 @@ import openapi from '@elysiajs/openapi'
 import Elysia from 'elysia'
 import { authHandler } from './auth-plugin'
 import type { ApiContext } from './context'
+import { adminRoutes } from './routes/admin'
 import { conversationRoutes } from './routes/conversations'
 import { customerRoutes } from './routes/customers'
 import { dashboardRoutes } from './routes/dashboard'
 import { identityRoutes } from './routes/identity'
+import { invitationRoutes } from './routes/invitations'
 import { knowledgeRoutes } from './routes/knowledge'
+import { platformRoutes } from './routes/platform'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
 import { toolRoutes } from './routes/tools'
@@ -72,6 +75,10 @@ export function createApp(ctx: ApiContext) {
       // completing a verification, with no console session to present.
       .group('/api/identity', (app) => app.use(identityRoutes(ctx)))
 
+      // Public for a third reason: somebody accepting an invitation has no account yet, so
+      // there is nothing to authenticate them with. The token in the link is what stands in.
+      .group('/api/invitations', (app) => app.use(invitationRoutes(ctx)))
+
       .group('/api/v1', (app) =>
         app
           .use(conversationRoutes(ctx))
@@ -79,6 +86,8 @@ export function createApp(ctx: ApiContext) {
           .use(dashboardRoutes(ctx))
           .use(simulatorRoutes(ctx))
           .use(settingsRoutes(ctx))
+          .use(adminRoutes(ctx))
+          .use(platformRoutes(ctx))
           .use(toolRoutes(ctx))
           .use(knowledgeRoutes(ctx))
           .use(traceRoutes(ctx))

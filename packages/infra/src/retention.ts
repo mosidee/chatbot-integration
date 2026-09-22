@@ -61,9 +61,9 @@ async function removeMedia(
   blob: BlobStore,
   keys: string[],
   logger?: Logger,
-): Promise<{ removed: number; failed: number }> {
+): Promise<{ removed: number; failed: number; failedKeys: string[] }> {
   let removed = 0
-  let failed = 0
+  const failedKeys: string[] = []
   for (const key of keys) {
     try {
       await blob.remove(key)
@@ -71,14 +71,17 @@ async function removeMedia(
     } catch (error) {
       // A blob we cannot delete must not abort the erasure. The rows are already gone, and
       // leaving one object behind is better than leaving half the rows.
-      failed += 1
+      //
+      // Which ones failed is reported as well as how many, so a caller that intends to try
+      // again knows what is left rather than starting from the whole list.
+      failedKeys.push(key)
       logger?.warn('could not remove stored media', {
         key,
         error: error instanceof Error ? error.message : String(error),
       })
     }
   }
-  return { removed, failed }
+  return { removed, failed: failedKeys.length, failedKeys }
 }
 
 /** Delete these conversations and everything hanging off them, media included. */
@@ -209,5 +212,159 @@ export async function eraseCustomer(
     conversations: conversations.length,
     media: media.removed,
     mediaFailed: media.failed,
+  }
+}
+
+export type WorkspaceErasureResult = {
+  /** True when there was no record of a request, so nothing was touched. */
+  skipped: boolean
+  rowsDeleted: boolean
+  media: number
+  mediaFailed: number
+}
+
+/**
+ * Erase a whole tenant.
+ *
+ * Deliberately not one statement, because it cannot be. The rows cascade from the
+ * organization row and the stored media does not, so the keys are collected while the rows
+ * that name them still exist, and the objects are removed afterwards.
+ *
+ * Three things make it safe to run twice, which matters because the queue retries:
+ *
+ *  - It refuses unless a `workspace_erasures` row says the deletion was asked for. A job
+ *    that arrives from anywhere else — a stray enqueue, a replayed message — deletes nothing.
+ *  - The collected keys are written to that row before the rows go. After the tenant is
+ *    gone there is nothing left to read them from, so a retry that finds the rows already
+ *    deleted still knows exactly which objects it has yet to remove.
+ *  - Keys that were removed are dropped from the list, so a retry works on the remainder
+ *    rather than on the whole set.
+ *
+ * The record outlives the tenant: it has no foreign key, and the audit entry it produces
+ * goes to `platform_audit_log`, because the workspace's own audit log cascades away with
+ * the very deletion it would be the record of.
+ */
+export async function eraseWorkspace(
+  db: Database,
+  blob: BlobStore,
+  input: { workspaceId: string; logger?: Logger },
+): Promise<WorkspaceErasureResult> {
+  const records = await db
+    .select()
+    .from(schema.workspaceErasures)
+    .where(eq(schema.workspaceErasures.workspaceId, input.workspaceId))
+    .limit(1)
+  const record = records[0]
+
+  if (!record) {
+    input.logger?.warn('refusing to erase a workspace that was never marked for erasure', {
+      workspaceId: input.workspaceId,
+    })
+    return { skipped: true, rowsDeleted: false, media: 0, mediaFailed: 0 }
+  }
+
+  let mediaKeys = record.mediaKeys
+  let rowsDeleted = record.rowsDeleted
+
+  if (!rowsDeleted) {
+    const workspace = await db
+      .select({ status: schema.workspaces.status })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, input.workspaceId))
+      .limit(1)
+
+    // Gone already: a previous attempt deleted the rows and failed before saying so.
+    if (workspace.length === 0) {
+      rowsDeleted = true
+    } else {
+      if (workspace[0]?.status !== 'deleting') {
+        input.logger?.warn('refusing to erase a workspace that is not marked deleting', {
+          workspaceId: input.workspaceId,
+          status: workspace[0]?.status,
+        })
+        return { skipped: true, rowsDeleted: false, media: 0, mediaFailed: 0 }
+      }
+
+      const conversations = await db
+        .select({ id: schema.conversations.id })
+        .from(schema.conversations)
+        .where(eq(schema.conversations.workspaceId, input.workspaceId))
+
+      const fromMessages = await mediaKeysOf(
+        db,
+        conversations.map((row) => row.id),
+      )
+
+      // Knowledge files are the other half, and `mediaKeysOf` does not know about them: it
+      // reads message attachments. A tenant's uploaded documents would otherwise be left
+      // in storage for ever, with nothing left in the database pointing at them.
+      const sources = await db
+        .select({ storageKey: schema.knowledgeSources.storageKey })
+        .from(schema.knowledgeSources)
+        .where(eq(schema.knowledgeSources.workspaceId, input.workspaceId))
+
+      mediaKeys = [
+        ...new Set([
+          ...fromMessages,
+          ...sources.flatMap((row) => (row.storageKey ? [row.storageKey] : [])),
+        ]),
+      ]
+
+      await db
+        .update(schema.workspaceErasures)
+        .set({ mediaKeys })
+        .where(eq(schema.workspaceErasures.workspaceId, input.workspaceId))
+
+      // One delete. The organization cascades to the workspace, and the workspace cascades
+      // to every tenant-owned table.
+      await db.delete(schema.organization).where(eq(schema.organization.id, input.workspaceId))
+
+      rowsDeleted = true
+      await db
+        .update(schema.workspaceErasures)
+        .set({ rowsDeleted: true })
+        .where(eq(schema.workspaceErasures.workspaceId, input.workspaceId))
+
+      input.logger?.info('workspace rows deleted', {
+        workspaceId: input.workspaceId,
+        conversations: conversations.length,
+        media: mediaKeys.length,
+      })
+    }
+  }
+
+  const outcome = await removeMedia(blob, mediaKeys, input.logger)
+  const failedKeys = outcome.failedKeys
+  const done = failedKeys.length === 0
+  await db
+    .update(schema.workspaceErasures)
+    .set({
+      mediaKeys: failedKeys,
+      mediaRemoved: record.mediaRemoved + outcome.removed,
+      mediaFailed: failedKeys.length,
+      ...(done ? { completedAt: new Date() } : {}),
+    })
+    .where(eq(schema.workspaceErasures.workspaceId, input.workspaceId))
+
+  if (done) {
+    await db.insert(schema.platformAuditLog).values({
+      id: newId(),
+      actorUserId: record.requestedByUserId,
+      action: 'tenant.erased',
+      targetType: 'tenant',
+      targetId: input.workspaceId,
+      meta: {
+        slug: record.slug,
+        name: record.name,
+        media: record.mediaRemoved + outcome.removed,
+      },
+    })
+  }
+
+  return {
+    skipped: false,
+    rowsDeleted,
+    media: outcome.removed,
+    mediaFailed: failedKeys.length,
   }
 }

@@ -14,7 +14,7 @@ import type { Runtime } from './runtime'
 
 export type IngestOutcome =
   | { ok: true; inboundEventId: string; duplicate: boolean }
-  | { ok: false; reason: 'channel_not_found' | 'invalid_signature' }
+  | { ok: false; reason: 'channel_not_found' | 'invalid_signature' | 'workspace_suspended' }
 
 /** Stable id for an identical retried delivery. */
 async function fingerprint(rawBody: string): Promise<string> {
@@ -29,12 +29,26 @@ export async function ingestWebhook(
   request: WebhookRequest,
 ): Promise<IngestOutcome> {
   const rows = await db
-    .select()
+    .select({ channel: schema.channels, status: schema.workspaces.status })
     .from(schema.channels)
+    .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.channels.workspaceId))
     .where(eq(schema.channels.id, channelId))
     .limit(1)
-  const channel = rows[0]
+  const channel = rows[0]?.channel
   if (!channel?.enabled) return { ok: false, reason: 'channel_not_found' }
+
+  /**
+   * A tenant that is not active accepts nothing, and is told so before the signature is
+   * checked so that no raw payload is persisted for a workspace nobody may read.
+   *
+   * A workspace being deleted reads as a channel that does not exist, because in a moment
+   * it will not. A suspended one is distinguished so the route can answer the platform
+   * politely: LINE and Meta disable an endpoint that errors, and a suspension is meant to
+   * be reversible without the operator having to re-register their webhooks.
+   */
+  const status = rows[0]?.status
+  if (status === 'suspended') return { ok: false, reason: 'workspace_suspended' }
+  if (status !== 'active') return { ok: false, reason: 'channel_not_found' }
 
   const adapter = getAdapter(channel.type)
   const config = adapter.parseConfig(

@@ -125,10 +125,19 @@ export async function slugExists(db: Database, slug: string): Promise<boolean> {
 /** Postgres' unique-violation code, so a race on a slug reads as a conflict, not a crash. */
 export const UNIQUE_VIOLATION = '23505'
 
+/**
+ * Whether this error is Postgres refusing a duplicate.
+ *
+ * The chain has to be walked: Drizzle wraps the driver's error in a `DrizzleQueryError`
+ * that carries the query and the parameters but not the code, so the thing worth checking
+ * is one `cause` further down than it looks.
+ */
 export function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: unknown }).code === UNIQUE_VIOLATION
-  )
+  let current: unknown = error
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    if (typeof current !== 'object') return false
+    if ((current as { code?: unknown }).code === UNIQUE_VIOLATION) return true
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
 }

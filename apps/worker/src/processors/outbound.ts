@@ -2,7 +2,7 @@ import { splitText } from '@ci/channels'
 import type { EffectPorts, Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
-import { loadChannel } from '@ci/infra'
+import { loadChannel, workspaceIsWorkable } from '@ci/infra'
 import type { NormalizedMessage } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 
@@ -20,6 +20,11 @@ export async function processOutbound(
   job: OutboundJob,
 ): Promise<void> {
   const { db, env, publisher } = runtime
+
+  // The only processor that gains a query here rather than reusing one it already made.
+  // It is a primary-key lookup, and it is what stops a message queued a second before a
+  // suspension going out a second after it.
+  if (!(await workspaceIsWorkable(db, job.workspaceId, logger, 'outbound'))) return
 
   const rows = await db
     .select()

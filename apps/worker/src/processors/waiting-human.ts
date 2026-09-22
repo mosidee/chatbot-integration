@@ -1,7 +1,7 @@
 import { applyEffects, type EffectPorts, type Logger, transition } from '@ci/core'
 import { schema } from '@ci/db'
 import type { Runtime, WaitingHumanTimeoutJob } from '@ci/infra'
-import { loadWorkspaceSettings } from '@ci/infra'
+import { workspaceIsWorkable } from '@ci/infra'
 import { and, eq } from 'drizzle-orm'
 
 /**
@@ -32,7 +32,12 @@ export async function processWaitingHumanTimeout(
   const conversation = rows[0]
   if (!conversation) return
 
-  const settings = await loadWorkspaceSettings(db, job.workspaceId)
+  // A timer that fires during a suspension is dropped and does not re-arm on restore: the
+  // customer has been waiting the whole time, and a fallback about a delay is not what they
+  // need once the tenant is back.
+  const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'waiting_human')
+  if (!workspace) return
+  const settings = workspace.settings
 
   const { effects } = transition(
     {

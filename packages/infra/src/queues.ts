@@ -19,6 +19,7 @@ export const QUEUE_NAMES = {
   knowledgeIngest: 'knowledge_ingest',
   retention: 'retention',
   customerErasure: 'customer_erasure',
+  workspaceErasure: 'workspace_erasure',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
@@ -76,6 +77,19 @@ export type CustomerErasureJob = {
   requestedByUserId: string | null
 }
 
+/**
+ * Erasing a whole tenant, once a platform admin has asked for it.
+ *
+ * A job rather than a request for the same reason customer erasure is one: it removes
+ * stored media as well as rows, and a half-finished erasure is worse than a slow one. What
+ * makes it safe to retry is the `workspace_erasures` row written before the job is queued —
+ * the processor deletes nothing it finds no record for.
+ */
+export type WorkspaceErasureJob = {
+  workspaceId: string
+  requestedByUserId: string | null
+}
+
 export type KnowledgeIngestJob = {
   workspaceId: string
   sourceId: string
@@ -114,6 +128,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     summarize: make(QUEUE_NAMES.summarize),
     retention: make(QUEUE_NAMES.retention),
     customer_erasure: make(QUEUE_NAMES.customerErasure),
+    workspace_erasure: make(QUEUE_NAMES.workspaceErasure),
   }
 }
 

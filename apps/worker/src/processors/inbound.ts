@@ -8,10 +8,10 @@ import {
   conversationForReceipt,
   enrichIdentityProfile,
   loadChannel,
-  loadWorkspaceSettings,
   resolveConversation,
   resolveInboundMedia,
   storeMessage,
+  workspaceIsWorkable,
 } from '@ci/infra'
 import { hasImages } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
@@ -57,7 +57,11 @@ export async function processInbound(
     return
   }
 
-  const settings = await loadWorkspaceSettings(db, job.workspaceId)
+  const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'inbound')
+  // The row is left unprocessed on purpose: nothing was read from it, and a restored
+  // workspace should not have to explain a gap in its own audit trail.
+  if (!workspace) return
+  const settings = workspace.settings
   const { channel, adapter, config } = await loadChannel(db, job.channelId, env.APP_SECRET_KEY)
 
   try {

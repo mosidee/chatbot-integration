@@ -8,11 +8,11 @@ import {
   loadAiConfig,
   loadToolDefinitions,
   loadTurnContext,
-  loadWorkspaceSettings,
   recordTrace,
   resolveExternalRetrieval,
   usableSlot,
   workspaceHasKnowledge,
+  workspaceIsWorkable,
 } from '@ci/infra'
 
 /**
@@ -34,7 +34,9 @@ export async function processSuggestion(
   const context = await loadTurnContext(db, job.workspaceId, job.conversationId)
   if (!context) return
 
-  const settings = await loadWorkspaceSettings(db, job.workspaceId)
+  const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'suggestion')
+  if (!workspace) return
+  const settings = workspace.settings
   const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
 
   // Falls back to the chat slot so suggestions work before anyone configures a cheaper one.

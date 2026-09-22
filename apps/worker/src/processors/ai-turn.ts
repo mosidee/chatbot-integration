@@ -31,6 +31,7 @@ import {
   updateConversation,
   usableSlot,
   workspaceHasKnowledge,
+  workspaceIsWorkable,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
 import { eq } from 'drizzle-orm'
@@ -60,7 +61,18 @@ export async function processAiTurn(
     return
   }
 
-  const settings = await loadWorkspaceSettings(db, job.workspaceId)
+  /**
+   * The one place this codebase lets an AI turn end without a message or a handoff.
+   *
+   * Everywhere else, going silent is the bug that rule exists to prevent: the customer is
+   * left waiting for a reply no colleague knows is owed. A suspended or deleted workspace is
+   * the exception, and deliberately so — there is nobody to hand off to, because every agent
+   * in the tenant is locked out of the console as well. Sending on behalf of a tenant whose
+   * operator has been suspended is the worse outcome.
+   */
+  const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'ai_turn')
+  if (!workspace) return
+  const settings = workspace.settings
   const { conversation, customer, notes, recentMessages } = context
 
   // The last line of defence for the product's central rule.

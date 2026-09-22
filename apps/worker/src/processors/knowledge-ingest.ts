@@ -4,10 +4,10 @@ import {
   indexSource,
   type KnowledgeIngestJob,
   loadAiConfig,
-  loadWorkspaceSettings,
   parseDocument,
   type Runtime,
   usableSlot,
+  workspaceIsWorkable,
 } from '@ci/infra'
 import { and, eq } from 'drizzle-orm'
 
@@ -47,7 +47,11 @@ export async function processKnowledgeIngest(
     return
   }
 
-  const settings = await loadWorkspaceSettings(db, job.workspaceId)
+  // The source is left `pending`, so restoring the workspace leaves it visibly unfinished
+  // rather than silently empty.
+  const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'knowledge_ingest')
+  if (!workspace) return
+  const settings = workspace.settings
   const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
   const embedSlot = usableSlot(aiConfig, 'embed')
 
