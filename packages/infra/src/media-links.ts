@@ -20,6 +20,16 @@ import { signPayload, verifySignedPayload } from '@ci/channels'
 export type MediaClaims = {
   /** The object key. Always begins with the workspace id, which is what scopes it. */
   key: string
+  /**
+   * The workspace the link was minted for.
+   *
+   * The signature proves we made the link, not that its holder may see that tenant's file.
+   * Carrying the workspace and checking the key still begins with it is the same rule the
+   * authenticated `/api/v1/uploads/*` route enforces, kept rather than dropped because this
+   * route is public. Today only the outbound job mints links; this is what stops a future
+   * caller handing out a path into somebody else's tenant by accident.
+   */
+  ws: string
   exp: number
 }
 
@@ -34,8 +44,13 @@ const mediaClaimsSchema = {
     if (!claims || typeof claims.key !== 'string' || claims.key.length === 0) {
       return { success: false }
     }
+    if (typeof claims.ws !== 'string' || claims.ws.length === 0) return { success: false }
     if (typeof claims.exp !== 'number') return { success: false }
-    return { success: true, data: { key: claims.key, exp: claims.exp } }
+
+    // The key has to be inside the workspace the link was minted for.
+    if (!claims.key.startsWith(`${claims.ws}/`)) return { success: false }
+
+    return { success: true, data: { key: claims.key, ws: claims.ws, exp: claims.exp } }
   },
 }
 
@@ -50,6 +65,7 @@ export const DAY_MS = 24 * 60 * 60 * 1000
  * token.
  */
 export async function signMediaUrl(input: {
+  workspaceId: string
   storageKey: string
   fileName?: string | null
   secret: string
@@ -57,9 +73,16 @@ export async function signMediaUrl(input: {
   ttlDays: number
   now?: Date
 }): Promise<string> {
+  if (!input.storageKey.startsWith(`${input.workspaceId}/`)) {
+    // Refused rather than signed: a key outside the workspace is a bug upstream, and this
+    // is the last point at which it is still cheap to notice.
+    throw new Error('refusing to sign a link for a file outside its workspace')
+  }
+
   const now = input.now ?? new Date()
   const claims: MediaClaims = {
     key: input.storageKey,
+    ws: input.workspaceId,
     exp: Math.floor((now.getTime() + input.ttlDays * DAY_MS) / 1000),
   }
 
@@ -99,7 +122,7 @@ function safeFileName(name: string): string {
  */
 export async function withMediaLinks<T extends { kind: string }>(
   message: T,
-  options: { secret: string; baseUrl: string; ttlDays: number; now?: Date },
+  options: { workspaceId: string; secret: string; baseUrl: string; ttlDays: number; now?: Date },
 ): Promise<T> {
   const media = message as T & {
     attachments?: { storageKey: string | null; sourceUrl: string | null; fileName: string | null }[]
@@ -112,6 +135,7 @@ export async function withMediaLinks<T extends { kind: string }>(
       return {
         ...attachment,
         sourceUrl: await signMediaUrl({
+          workspaceId: options.workspaceId,
           storageKey: attachment.storageKey,
           fileName: attachment.fileName,
           secret: options.secret,

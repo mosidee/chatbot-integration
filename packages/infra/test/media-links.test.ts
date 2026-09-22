@@ -17,6 +17,7 @@ const tokenOf = (url: string): string => url.split('/api/media/')[1]?.split('/')
 describe('a signed media link', () => {
   test('names the file it is for, and reads back', async () => {
     const url = await signMediaUrl({
+      workspaceId: 'ws-1',
       storageKey: 'ws-1/invoice.pdf',
       fileName: 'invoice.pdf',
       secret: SECRET,
@@ -34,6 +35,7 @@ describe('a signed media link', () => {
 
   test('cannot be edited into a link for another file', async () => {
     const mine = await signMediaUrl({
+      workspaceId: 'ws-1',
       storageKey: 'ws-1/mine.pdf',
       secret: SECRET,
       baseUrl: BASE,
@@ -55,6 +57,7 @@ describe('a signed media link', () => {
 
   test('is refused once it has expired', async () => {
     const url = await signMediaUrl({
+      workspaceId: 'ws-1',
       storageKey: 'ws-1/old.png',
       secret: SECRET,
       baseUrl: BASE,
@@ -71,6 +74,7 @@ describe('a signed media link', () => {
 
   test('is refused when signed with a different secret', async () => {
     const url = await signMediaUrl({
+      workspaceId: 'ws-1',
       storageKey: 'ws-1/x.png',
       secret: SECRET,
       baseUrl: BASE,
@@ -81,6 +85,7 @@ describe('a signed media link', () => {
 
   test('honours the lifetime it is given', async () => {
     const url = await signMediaUrl({
+      workspaceId: 'ws-1',
       storageKey: 'ws-1/x.png',
       secret: SECRET,
       baseUrl: BASE,
@@ -115,7 +120,7 @@ describe('turning a stored file into something sendable', () => {
   test('gives an attachment we hold a link a platform can fetch', async () => {
     const message = await withMediaLinks(
       { kind: 'file', text: 'here it is', attachments: [attachment] },
-      { secret: SECRET, baseUrl: BASE, ttlDays: 7 },
+      { workspaceId: 'ws-1', secret: SECRET, baseUrl: BASE, ttlDays: 7 },
     )
     expect(message.attachments[0]?.sourceUrl?.startsWith(`${BASE}/api/media/`)).toBe(true)
     // Untouched otherwise.
@@ -127,7 +132,7 @@ describe('turning a stored file into something sendable', () => {
     const fromPlatform = { ...attachment, sourceUrl: 'https://cdn.line.me/abc' }
     const message = await withMediaLinks(
       { kind: 'image', text: null, attachments: [fromPlatform] },
-      { secret: SECRET, baseUrl: BASE, ttlDays: 7 },
+      { workspaceId: 'ws-1', secret: SECRET, baseUrl: BASE, ttlDays: 7 },
     )
     expect(message.attachments[0]?.sourceUrl).toBe('https://cdn.line.me/abc')
   })
@@ -136,11 +141,57 @@ describe('turning a stored file into something sendable', () => {
     const message = await withMediaLinks(
       { kind: 'text', text: 'hello' },
       {
+        workspaceId: 'ws-1',
         secret: SECRET,
         baseUrl: BASE,
         ttlDays: 7,
       },
     )
     expect(message).toEqual({ kind: 'text', text: 'hello' })
+  })
+})
+
+describe('the workspace on a link', () => {
+  /**
+   * The signature proves we minted the link, not that its holder may see that tenant's
+   * file. Key prefix is the tenancy boundary here — the authenticated uploads route
+   * enforces exactly this — so the public route keeps it rather than dropping it.
+   */
+  test('refuses to sign a key outside the workspace it names', async () => {
+    await expect(
+      signMediaUrl({
+        workspaceId: 'ws-1',
+        storageKey: 'ws-2/theirs.pdf',
+        secret: SECRET,
+        baseUrl: BASE,
+        ttlDays: 7,
+      }),
+    ).rejects.toThrow(/outside its workspace/)
+  })
+
+  test('refuses a link whose key was swapped for another tenant', async () => {
+    // Forged with a valid-looking pair, which is what an attacker who learned the shape
+    // would try. The mismatch alone is enough; the signature never has to be checked.
+    const forged = btoa(JSON.stringify({ key: 'ws-2/theirs.pdf', ws: 'ws-1', exp: 9_999_999_999 }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+    const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+
+    await expect(verifyMediaToken(`${header}.${forged}.nonsense`, SECRET)).rejects.toThrow()
+  })
+
+  test('names the workspace it was minted for', async () => {
+    const url = await signMediaUrl({
+      workspaceId: 'ws-1',
+      storageKey: 'ws-1/ok.pdf',
+      secret: SECRET,
+      baseUrl: BASE,
+      ttlDays: 7,
+    })
+    expect((await verifyMediaToken(tokenOf(url), SECRET)).ws).toBe('ws-1')
   })
 })

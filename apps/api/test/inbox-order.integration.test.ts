@@ -421,6 +421,7 @@ describe('sending a file to a customer', () => {
     const storageKey = (uploaded.body as { storageKey: string }).storageKey
 
     const link = await signMediaUrl({
+      workspaceId: fixture.workspaceId,
       storageKey,
       fileName: 'receipt.pdf',
       secret: env.APP_SECRET_KEY,
@@ -439,6 +440,7 @@ describe('sending a file to a customer', () => {
     const uploaded = await upload('private.pdf', 'application/pdf', 'secret')
     const storageKey = (uploaded.body as { storageKey: string }).storageKey
     const link = await signMediaUrl({
+      workspaceId: fixture.workspaceId,
       storageKey,
       secret: env.APP_SECRET_KEY,
       baseUrl: 'http://localhost',
@@ -459,6 +461,7 @@ describe('sending a file to a customer', () => {
 
   test('refuses a link for a file that is not there', async () => {
     const link = await signMediaUrl({
+      workspaceId: 'nobody',
       storageKey: 'nobody/nothing.pdf',
       secret: env.APP_SECRET_KEY,
       baseUrl: 'http://localhost',

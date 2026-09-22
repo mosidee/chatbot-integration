@@ -90,6 +90,7 @@ export async function processOutbound(
      * Signed and short-lived rather than public and permanent; see `signMediaUrl`.
      */
     const outbound = await withMediaLinks(message.content, {
+      workspaceId: job.workspaceId,
       secret: env.APP_SECRET_KEY,
       baseUrl: env.WEBHOOK_BASE_URL,
       ttlDays: env.MEDIA_LINK_TTL_DAYS,

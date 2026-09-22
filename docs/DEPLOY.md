@@ -47,7 +47,8 @@ WEBHOOK_BASE_URL=https://chat.example.com
 # How long a link to a file an agent sent stays valid. LINE and Messenger fetch outbound
 # media from a URL rather than taking the bytes, so the link has to work without a session;
 # it is signed and expires. They cache what they fetch, so a customer keeps the file after
-# the link dies. Seven days if unset.
+# the link dies. Seven days if unset. A change applies to links minted afterwards: one
+# already sent keeps the lifetime it was signed with, which is how signed URLs work.
 MEDIA_LINK_TTL_DAYS=7
 
 SEED_ADMIN_EMAIL=you@example.com
