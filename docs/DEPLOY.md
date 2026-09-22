@@ -175,6 +175,21 @@ docker compose up -d --build
 Migrations apply on API start, and the worker waits for the API to report healthy, so a
 schema change lands before any job runs against it.
 
+### One-off: taking markdown out of replies already sent
+
+Replies the AI wrote before the plain-text conversion landed still carry `**bold**` and
+`- bullets` in `messages.text`, which is what the console shows an agent. The customer has
+already read whatever they read; this only tidies the record and the inbox.
+
+```bash
+docker compose exec api bun run backfill:plain-text            # counts and one example
+docker compose exec api bun run backfill:plain-text --write    # applies it
+```
+
+It rewrites only rows the AI wrote. What a customer typed is evidence and is never
+touched, an agent's own words are left as they wrote them, and `content` keeps the
+original in every case. Safe to run twice: a row already converted does not change again.
+
 ## Backups
 
 What matters is Postgres and `APP_SECRET_KEY`.

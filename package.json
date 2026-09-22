@@ -17,6 +17,7 @@
     "infra:reset": "docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d",
     "db:generate": "cd packages/db && bun run generate",
     "db:migrate": "bun run packages/db/src/migrate.ts",
+    "backfill:plain-text": "bun run packages/infra/src/backfill-plain-text.ts",
     "db:seed": "bun run packages/db/src/seed.ts",
     "auth:generate": "bunx auth@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts --yes",
     "test": "bun test apps packages",

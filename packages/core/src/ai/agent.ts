@@ -1,6 +1,7 @@
 import { generateText, stepCountIs } from 'ai'
 import type { Logger } from '../ports'
 import { estimateCost } from './cost'
+import { toPlainText } from './plain-text'
 import { buildMessages, buildSystemPrompt } from './prompt'
 import { stripReasoning } from './reasoning'
 import { runWithFallback } from './registry'
@@ -133,9 +134,15 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
               .join('; ')}`,
           }
         : null)
-    // Some gateways leave a reasoning model's thinking inside the message content. It is
-    // not an answer and must never reach a customer.
-    const text = stripReasoning(result.text)
+    /**
+     * What the customer will actually read.
+     *
+     * Two things the model's raw output is not. Some gateways leave a reasoning model's
+     * thinking inside the message content, which is not an answer at all. And a model
+     * writes markdown by habit, which every channel this product speaks renders as
+     * literal asterisks and hashes.
+     */
+    const text = toPlainText(stripReasoning(result.text))
 
     const trace: TraceRecord = {
       task: chatSlot.task,
