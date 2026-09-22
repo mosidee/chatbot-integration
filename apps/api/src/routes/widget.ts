@@ -263,6 +263,22 @@ export function widgetRoutes(ctx: ApiContext) {
           const session = await readSession(params.channelId, headers['x-widget-session'])
           if (!session) return status(401, { error: 'No widget session' })
 
+          /**
+           * The poll answers the same way the other two routes do.
+           *
+           * Without this a widget already open on a suspended tenant's site goes on
+           * rendering the conversation every few seconds and only discovers anything is
+           * wrong when the person tries to send. Whether the chat looks alive is decided
+           * here, not on the send path.
+           */
+          const loaded = await loadChannel(params.channelId)
+          if (!loaded) return status(404, { error: 'Unknown widget channel' })
+          if (!loaded.config) {
+            return loaded.suspended
+              ? status(403, { error: 'This workspace is suspended', code: 'workspace_suspended' })
+              : status(404, { error: 'Unknown widget channel' })
+          }
+
           const conversation = await conversationFor(params.channelId, session.externalId)
           if (!conversation) return { messages: [], conversationId: null }
 

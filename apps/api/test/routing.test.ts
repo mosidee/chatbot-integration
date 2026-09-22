@@ -55,7 +55,17 @@ describe('the console', () => {
   })
 
   test('is served for a client-side route the server knows nothing about', async () => {
-    for (const path of ['/login', '/settings', '/knowledge', '/simulator']) {
+    for (const path of [
+      '/login',
+      '/settings',
+      '/knowledge',
+      '/simulator',
+      '/admin',
+      '/platform',
+      // The invitation page is opened by somebody with no session at all, so it has to be
+      // served rather than bounced to a sign-in form they cannot use.
+      '/invite/some-token',
+    ]) {
       const response = await get(path)
       expect(response.status).toBe(200)
       expect(await response.text()).toContain('<div id="root">')
@@ -123,10 +133,21 @@ describe('the API', () => {
       // Listing tools exposes which hosts this workspace reaches, so it is not public
       // either, even though the credentials themselves are never returned.
       '/api/v1/settings/tools',
+      // Who is in a workspace, and which workspaces exist at all.
+      '/api/v1/admin/members',
+      '/api/v1/platform/tenants',
     ]) {
       const response = await get(path)
       expect(response.status).toBe(401)
     }
+  })
+
+  test('answers an unknown invitation token with 404 rather than 401', async () => {
+    // This one is deliberately public: the caller has no account yet, which is the point of
+    // the link. An unknown token must look the same as a spent or expired one.
+    const response = await get('/api/invitations/not-a-real-token')
+    expect(response.status).toBe(404)
+    expect(await response.text()).not.toContain('<div id="root">')
   })
 
   test('returns JSON for an unknown API path, never the console', async () => {

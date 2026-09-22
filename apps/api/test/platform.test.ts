@@ -209,17 +209,40 @@ describe('platform admins', () => {
   })
 
   test('refuse to remove the last one', async () => {
-    // Only the fixture admin holds it at this point in the file.
-    const all = await ctx.db.select().from(schema.platformAdmins)
-    if (all.length !== 1) return // Another seeded admin exists locally; the rule is covered above.
+    /**
+     * The set is made to contain exactly one, rather than hoping it already does.
+     *
+     * A seeded installation has its own platform admin, so branching on the count meant
+     * this assertion ran on a clean database and silently did nothing on a developer's
+     * machine — which is precisely where somebody would be exercising the page by hand.
+     * Losing the last platform admin is the one irreversible mistake here, so the rule gets
+     * a test that always runs.
+     */
+    const others = await ctx.db.select().from(schema.platformAdmins)
+    const toRestore = others.filter((row) => row.userId !== fixture.admin.userId)
+    for (const row of toRestore) {
+      await ctx.db.delete(schema.platformAdmins).where(eq(schema.platformAdmins.userId, row.userId))
+    }
 
-    const response = await fixture.as(
-      fixture.admin,
-      `/api/v1/platform/admins/${fixture.admin.userId}`,
-      { method: 'DELETE' },
-    )
-    expect(response.status).toBe(409)
-    expect((await response.json()).error).toContain('at least one')
+    try {
+      const response = await fixture.as(
+        fixture.admin,
+        `/api/v1/platform/admins/${fixture.admin.userId}`,
+        { method: 'DELETE' },
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain('at least one')
+
+      // And it is still there: a refusal must not half-succeed.
+      const still = await ctx.db
+        .select({ userId: schema.platformAdmins.userId })
+        .from(schema.platformAdmins)
+      expect(still.map((row) => row.userId)).toEqual([fixture.admin.userId])
+    } finally {
+      for (const row of toRestore) {
+        await ctx.db.insert(schema.platformAdmins).values(row).onConflictDoNothing()
+      }
+    }
   })
 
   test('refuse an address with no account', async () => {

@@ -80,15 +80,39 @@ test.describe('the platform page', () => {
       data: { email, role: 'agent' },
     })
     const { link } = (await invited.json()) as { link: string }
+    let userId: string | null = null
 
-    await page.goto(link)
-    await page.getByTestId('invite-name').fill('Plain Agent')
-    await page.getByTestId('invite-password').fill('a-good-password-1')
-    await page.getByTestId('invite-submit').click()
-    await page.waitForURL('**/', { timeout: 20_000 })
+    try {
+      await page.goto(link)
+      await page.getByTestId('invite-name').fill('Plain Agent')
+      await page.getByTestId('invite-password').fill('a-good-password-1')
+      await page.getByTestId('invite-submit').click()
+      await page.waitForURL('**/', { timeout: 20_000 })
 
-    // Neither page is in their navigation, and the platform route refuses them directly.
-    await expect(page.getByRole('link', { name: /platform|ผู้ดูแลระบบ/i })).toHaveCount(0)
-    await expect(page.getByRole('link', { name: /^people$|^ผู้ใช้งาน$/i })).toHaveCount(0)
+      // Neither page is in their navigation.
+      await expect(page.getByRole('link', { name: /platform|ผู้ดูแลระบบ/i })).toHaveCount(0)
+      await expect(page.getByRole('link', { name: /^people$|^ผู้ใช้งาน$/i })).toHaveCount(0)
+
+      // And the routes behind them refuse, which is the guard that actually matters.
+      const asAgent = await page.request.get(`${API_URL}/api/v1/platform/tenants`)
+      expect(asAgent.status()).toBe(403)
+
+      const members = await request.get(`${API_URL}/api/v1/admin/members`)
+      const body = (await members.json()) as { members: { email: string; userId: string }[] }
+      userId = body.members.find((member) => member.email === email)?.userId ?? null
+      expect(userId).toBeTruthy()
+    } finally {
+      /**
+       * Put the seeded workspace back as it was.
+       *
+       * Every run of this spec would otherwise leave another member behind. Nothing asserts
+       * a member count today, so it would never fail — it would just grow, which is the
+       * same shape as the stale tenant tools that made a previous milestone's failure read
+       * like a product bug.
+       */
+      if (userId) {
+        await request.delete(`${API_URL}/api/v1/admin/members/${userId}`)
+      }
+    }
   })
 })
