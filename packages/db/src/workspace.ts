@@ -1,4 +1,4 @@
-import type { WorkspaceStatus } from '@ci/shared'
+import { isReservedSlug, type WorkspaceStatus } from '@ci/shared'
 import { eq } from 'drizzle-orm'
 import type { Database } from './client'
 import { newId } from './id'
@@ -81,6 +81,15 @@ export async function createWorkspace(
     status?: WorkspaceStatus
   },
 ): Promise<CreatedWorkspace> {
+  /**
+   * Checked here rather than only in the route, because the seed reaches this function
+   * directly with `slugify(SEED_WORKSPACE_NAME)` and would otherwise be able to create a
+   * tenant that no URL can ever open.
+   */
+  if (isReservedSlug(input.slug)) {
+    throw new Error(`"${input.slug}" is a path the console uses; choose another slug`)
+  }
+
   const workspaceId = input.id ?? newId()
 
   await db.insert(schema.organization).values({
