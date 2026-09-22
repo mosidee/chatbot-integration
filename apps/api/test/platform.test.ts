@@ -99,6 +99,21 @@ describe('creating a tenant', () => {
     expect((await createTenant(slug)).status).toBe(200)
     expect((await createTenant(slug)).status).toBe(409)
   })
+
+  /**
+   * A tenant slugged `settings` would be unreachable at `/settings`, because the console's
+   * own route outranks the slug parameter. Refusing it at creation is the only point at
+   * which somebody can still choose another name.
+   */
+  test('refuses a slug the console already uses as a path', async () => {
+    for (const slug of ['settings', 'admin', 'platform', 'login', 'api']) {
+      const response = await fixture.as(fixture.admin, '/api/v1/platform/tenants', {
+        method: 'POST',
+        body: JSON.stringify({ name: slug, slug, adminEmail: 'owner@example.com' }),
+      })
+      expect(response.status).toBe(422)
+    }
+  })
 })
 
 describe('suspending and restoring', () => {

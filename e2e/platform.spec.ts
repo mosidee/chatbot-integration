@@ -115,4 +115,38 @@ test.describe('the platform page', () => {
       }
     }
   })
+
+  /**
+   * The point of a slug in the address bar: sending somebody a link to a workspace.
+   *
+   * The seeded workspace is used because it is the one this browser is already a member of,
+   * and a slug nobody belongs to must be indistinguishable from one that does not exist.
+   */
+  test('a slug in the address bar opens that workspace, and a stranger sees nothing', async ({
+    page,
+    request,
+  }) => {
+    const slugged = await request.get(`${API_URL}/api/v1/settings/me`)
+    const { workspace } = (await slugged.json()) as { workspace: { slug: string } }
+
+    await signIn(page)
+
+    // A workspace they belong to lands them on the inbox.
+    await page.goto(`/${workspace.slug}`)
+    await page.waitForURL((url) => url.pathname === '/', { timeout: 15_000 })
+
+    // A workspace they do not belong to says so without confirming it exists.
+    await page.goto('/not-a-workspace-of-mine')
+    await expect(page.getByTestId('not-found')).toBeVisible({ timeout: 15_000 })
+
+    // A real page still wins over the slug parameter: it stays on /settings and is not
+    // treated as the name of a workspace.
+    await page.goto('/settings')
+    await expect(page.getByTestId('not-found')).toHaveCount(0)
+    expect(new URL(page.url()).pathname).toBe('/settings')
+
+    // And a deeper mistyped address gets the same screen rather than two bare words.
+    await page.goto('/nope/nope')
+    await expect(page.getByTestId('not-found')).toBeVisible({ timeout: 15_000 })
+  })
 })

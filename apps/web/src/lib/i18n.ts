@@ -380,6 +380,14 @@ const th = {
     noneHint: 'กรุณาขอคำเชิญจากผู้ดูแล',
     switch: 'เปลี่ยนพื้นที่ทำงาน',
   },
+  notFound: {
+    title: 'ไม่พบหน้านี้',
+    hint: 'ที่อยู่อาจพิมพ์ผิด หรือหน้านี้ถูกย้ายไปแล้ว',
+    backToInbox: 'กลับไปที่กล่องข้อความ',
+    noWorkspace: 'ไม่พบพื้นที่ทำงานนี้',
+    noWorkspaceHint: 'อาจสะกดผิด หรือบัญชีของคุณไม่ได้อยู่ในพื้นที่ทำงานนี้',
+    switching: 'กำลังเปลี่ยนพื้นที่ทำงาน...',
+  },
   common: {
     loading: 'กำลังโหลด...',
     error: 'เกิดข้อผิดพลาด',
@@ -771,6 +779,14 @@ const en: typeof th = {
     none: 'Your account is not in any workspace',
     noneHint: 'Ask an admin to invite you.',
     switch: 'Switch workspace',
+  },
+  notFound: {
+    title: 'That page does not exist',
+    hint: 'The address may be mistyped, or the page may have moved.',
+    backToInbox: 'Back to the inbox',
+    noWorkspace: 'No workspace by that name',
+    noWorkspaceHint: 'It may be spelled differently, or your account may not be in it.',
+    switching: 'Switching workspace...',
   },
   common: {
     loading: 'Loading...',

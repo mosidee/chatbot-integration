@@ -123,6 +123,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [M6] **People**: an admin invites a colleague with a single-use link, changes a role, renames somebody, removes a membership, and issues a password-reset link for anyone locked out. The last admin can be neither demoted nor removed
 - [M6] **Platform**: a platform admin creates, renames, suspends, restores and deletes tenants, and grants or revokes other platform admins. Deleting asks for the slug to be typed
 - [M6] Workspace switcher for anybody who belongs to more than one, and a locked screen naming the reason when the current workspace is suspended or being deleted
+- [M6] `/<slug>` opens that workspace, so a link to a tenant can be shared; a mistyped address gets a page that offers the way back rather than two bare words
 - [v1] Thai + English i18n; mobile-friendly responsive layout
 - [later] Charts dashboard; agent performance; CSAT survey to customer
 
@@ -434,6 +435,15 @@ in silence. Everywhere else, going quiet is the bug that rule exists to prevent.
 is no colleague to hand off to, because every agent in the tenant is locked out of the
 console too, and sending on behalf of a suspended operator is the worse outcome. It is
 commented as an exception at the call site so the next reader does not take it for the bug.
+
+**A slug is a name, and now also a link.** It was never a route: the workspace comes from
+the session, and every console path is fixed. That is still true — `/<slug>` switches the
+session and redirects, rather than becoming a prefix on every route, so there remains exactly
+one place that decides which tenant you are in and no handler has to be taught about the URL.
+The lookup runs over the caller's own memberships, so the address bar cannot be used to find
+out which tenants exist. The cost is that a tenant may not be named after a console path,
+since a static route outranks the parameter; those names are refused at creation, which is
+the only moment anybody can still choose another.
 
 **Erasing a tenant is staged because it has to be.** The rows cascade from one delete and
 the stored media does not, so the keys are collected while the rows that name them still

@@ -280,6 +280,14 @@ without spending money.
 - The seed grants platform admin to `SEED_ADMIN_EMAIL`. An installation seeded before M6
   must re-run `bun run db:seed`, or the platform page is invisible to everybody and no
   second tenant can ever be created.
+- A bare `/<slug>` in the console switches to that workspace, so **a tenant cannot be named
+  after a console path**: a static route outranks the `$slug` parameter, and a tenant slugged
+  `settings` would be unreachable by URL while looking perfectly normal in every list.
+  `RESERVED_SLUGS` in `packages/shared/src/workspace.ts` refuses them at creation. Add to it
+  when you add a top-level route.
+- The slug route resolves against the caller's own memberships, never a lookup by slug. A
+  workspace somebody does not belong to must be indistinguishable from one that does not
+  exist, or the URL becomes a way to enumerate the tenants on an installation.
 - `session.activeOrganizationId` is plain text with no foreign key. It survives being
   removed from a workspace and survives that workspace being deleted, so `chooseMembership`
   falls back rather than trusting it.

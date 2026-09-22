@@ -9,10 +9,12 @@ import {
 } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { useTranslation } from 'react-i18next'
 import { api } from './lib/api'
 import './lib/i18n'
 import './styles.css'
 import { Layout } from './components/Layout'
+import { NotFound } from './components/NotFound'
 import { Admin } from './routes/Admin'
 import { Dashboard } from './routes/Dashboard'
 import { Inbox } from './routes/Inbox'
@@ -87,6 +89,44 @@ const appRoute = createRoute({
   },
 })
 
+/**
+ * A bare workspace slug in the address bar opens that workspace.
+ *
+ * This is how a link to a tenant is shared: `/salon-saas` switches the session to it and
+ * lands on the inbox. It is deliberately a redirect rather than a prefix on every route —
+ * the workspace still comes from the session, so nothing else in the console has to learn
+ * about the URL, and there is exactly one place that decides which tenant you are in.
+ *
+ * The lookup is over the caller's own memberships, which `/settings/me` already returns. A
+ * slug they do not belong to is indistinguishable from one that does not exist, so this
+ * cannot be used to discover which tenants are on the installation.
+ *
+ * Static routes outrank a parameter, so `/settings` is the settings page rather than a
+ * tenant. That is also why those names are refused as slugs: see RESERVED_SLUGS.
+ */
+const workspaceRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/$slug',
+  beforeLoad: async ({ params }) => {
+    const me = await api.settings.me()
+    const match = me.memberships.find((membership) => membership.slug === params.slug)
+
+    // Not one of theirs: fall through and let the component explain.
+    if (!match) return
+
+    if (me.workspace?.id !== match.id) {
+      await api.auth.setActiveWorkspace(match.id)
+      // Everything held belongs to the workspace being left.
+      queryClient.clear()
+    }
+    throw redirect({ to: '/' })
+  },
+  component: function UnknownWorkspace() {
+    const { t } = useTranslation()
+    return <NotFound title={t('notFound.noWorkspace')} hint={t('notFound.noWorkspaceHint')} />
+  },
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   inviteRoute,
@@ -98,10 +138,16 @@ const routeTree = rootRoute.addChildren([
     createRoute({ getParentRoute: () => appRoute, path: '/settings', component: Settings }),
     createRoute({ getParentRoute: () => appRoute, path: '/admin', component: Admin }),
     createRoute({ getParentRoute: () => appRoute, path: '/platform', component: Platform }),
+    workspaceRoute,
   ]),
 ])
 
-const router = createRouter({ routeTree })
+const router = createRouter({
+  routeTree,
+  // Anything with more segments than a slug, which the route above cannot catch. Wrapped
+  // because the router passes its own props and this component takes overrides.
+  defaultNotFoundComponent: () => <NotFound />,
+})
 
 declare module '@tanstack/react-router' {
   interface Register {

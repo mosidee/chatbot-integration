@@ -49,6 +49,8 @@ Three guards, each resolving its own shape: `auth: 'agent'` (a user, a workspace
 
 **Erasure.** `requestWorkspaceErasure` sets the status and writes a `workspace_erasures` row in one transaction, then enqueues. `eraseWorkspace` refuses without that row, saves the media keys onto it (message attachments *and* `knowledge_sources.storage_key`, which the retention sweep never reads) before deleting the organization row, then removes the objects and shrinks the list to whatever failed, so a retry works on the remainder.
 
+**Slug URLs.** `/<slug>` is not a route into a tenant; it switches the session to that workspace and redirects to the inbox, so the workspace still comes from the session and nothing else in the console learns about the URL. The lookup is over the caller's own memberships, so a slug they do not belong to is indistinguishable from one that does not exist. Console path names are refused as slugs (`RESERVED_SLUGS`), because a static route outranks the parameter.
+
 **Invitations.** A single-use token, stored as a SHA-256 hash, with a purpose of `invite` or `password_reset` and an expiry. The accept route spends the token and writes the membership in one transaction; accounts are created through a second Better Auth instance that allows sign-up and is never mounted, so the public API stays invite-only. A password reset goes through `auth.$context.internalAdapter`, because `setPassword` refuses an account that already has one.
 
 ## Review queue (packages/infra/src/review.ts)

@@ -34,6 +34,32 @@ export const workspaceStatusSchema = z.enum(['active', 'suspended', 'deleting'])
 export type WorkspaceStatus = z.infer<typeof workspaceStatusSchema>
 
 /**
+ * Paths the console already owns, which therefore cannot be a tenant's slug.
+ *
+ * Opening `/<slug>` switches to that workspace, and a static route always wins over the
+ * parameter, so a tenant slugged `settings` would be permanently unreachable by URL while
+ * looking perfectly normal in every list. Refusing the name at creation is the only moment
+ * anybody is in a position to choose a different one.
+ *
+ * The server's own prefixes are here too. They never reach the console at all, so a tenant
+ * named after one would fail in a way that looks like the product is broken.
+ */
+export const RESERVED_SLUGS = [
+  'admin',
+  'api',
+  'dashboard',
+  'healthz',
+  'invite',
+  'knowledge',
+  'login',
+  'platform',
+  'settings',
+  'simulator',
+  'widget',
+  'ws',
+] as const
+
+/**
  * A slug is part of a URL and part of how an operator refers to a tenant out loud, so it is
  * kept to the shape that survives both: lowercase, digits and inner hyphens, 1–40 characters.
  */
@@ -43,6 +69,14 @@ export const workspaceSlugSchema = z
     /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/,
     'lowercase letters, digits and hyphens, not starting or ending with a hyphen',
   )
+  .refine((slug) => !(RESERVED_SLUGS as readonly string[]).includes(slug), {
+    message: 'that name is used by the console itself',
+  })
+
+/** True when the console owns this path, so the caller can explain rather than just refuse. */
+export function isReservedSlug(slug: string): boolean {
+  return (RESERVED_SLUGS as readonly string[]).includes(slug)
+}
 
 /** The seed's own slugifier, shared so the console can suggest exactly what the API accepts. */
 export function slugify(name: string): string {
