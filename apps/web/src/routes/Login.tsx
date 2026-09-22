@@ -18,7 +18,7 @@ export function Login() {
       await api.auth.signIn(email, password)
       // Return to whatever was being asked for before the guard intervened.
       const next = new URLSearchParams(location.search).get('next')
-      location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/'
+      location.href = next?.startsWith('/') && !next.startsWith('//') ? next : '/'
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : t('auth.failed'))
     } finally {

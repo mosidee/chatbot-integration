@@ -39,7 +39,7 @@ let bodies: Record<string, unknown>[] = []
 /** Answers like an OpenAI-compatible embeddings endpoint, recording what it was sent. */
 function stubEmbeddings(size: number): void {
   bodies = []
-  const stub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const stub = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const sent = JSON.parse(String(init?.body ?? '{}')) as { input?: string | string[] }
     bodies.push(sent as Record<string, unknown>)
     const count = Array.isArray(sent.input) ? sent.input.length : 1

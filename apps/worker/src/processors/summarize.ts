@@ -14,7 +14,7 @@ import {
   recordTrace,
   usableSlot,
 } from '@ci/infra'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 
 /**
  * Rewrite a customer's rolling summary, and index the conversation for recall.

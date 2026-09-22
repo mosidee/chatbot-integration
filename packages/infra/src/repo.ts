@@ -3,13 +3,7 @@ import type { Logger } from '@ci/core'
 import { type RedactionOptions, redactMessage } from '@ci/core'
 import { type Database, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
-import type {
-  ConversationMode,
-  HandoffReason,
-  Language,
-  NormalizedMessage,
-  SenderType,
-} from '@ci/shared'
+import type { ConversationMode, Language, NormalizedMessage, SenderType } from '@ci/shared'
 import { messageToText } from '@ci/shared'
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
 

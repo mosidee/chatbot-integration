@@ -232,7 +232,7 @@ function toMessengerPayloads(message: NormalizedMessage): OutboundPayload[] {
 
     case 'image': {
       const urls = message.attachments.flatMap((a) =>
-        a.sourceUrl && a.sourceUrl.startsWith('http') ? [a.sourceUrl] : [],
+        a.sourceUrl?.startsWith('http') ? [a.sourceUrl] : [],
       )
       if (urls.length === 0) return [{ text: message.text ?? '[image]' }]
       return urls.map((url) => ({

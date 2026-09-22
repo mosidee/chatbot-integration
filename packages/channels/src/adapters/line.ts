@@ -53,15 +53,6 @@ function userIdOf(source: webhook.Source | undefined): string | null {
   return withUser.userId ?? null
 }
 
-function attachmentPlaceholder(
-  mime: string,
-): NormalizedMessage['kind'] extends never ? never : 'image' | 'file' | 'audio' | 'video' {
-  if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('audio/')) return 'audio'
-  if (mime.startsWith('video/')) return 'video'
-  return 'file'
-}
-
 /**
  * Media arrives as a message id. The attachment is recorded with that id in `sourceUrl`
  * under a `line:` scheme, and the worker exchanges it for bytes; `storageKey` stays null
@@ -203,7 +194,7 @@ function toLineMessages(message: NormalizedMessage): messagingApi.Message[] {
     case 'image': {
       // LINE needs publicly reachable HTTPS URLs for images it must fetch itself.
       const urls = message.attachments.flatMap((a) =>
-        a.sourceUrl && a.sourceUrl.startsWith('http') ? [a.sourceUrl] : [],
+        a.sourceUrl?.startsWith('http') ? [a.sourceUrl] : [],
       )
       if (urls.length === 0) {
         return [{ type: 'text', text: message.text ?? '[image]' }]

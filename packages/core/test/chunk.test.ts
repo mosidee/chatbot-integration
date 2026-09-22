@@ -26,7 +26,7 @@ describe('chunkText', () => {
   })
 
   test('overlaps consecutive chunks so a split answer stays retrievable', () => {
-    const chunks = chunkText('a'.repeat(300) + 'MARKER' + 'b'.repeat(300), {
+    const chunks = chunkText(`${'a'.repeat(300)}MARKER${'b'.repeat(300)}`, {
       size: 320,
       overlap: 100,
       minSize: 10,

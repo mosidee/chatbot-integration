@@ -17,7 +17,18 @@ import { createApiContext } from '../src/context'
  * arrangement down.
  */
 
-const env = { ...loadEnv(), NODE_ENV: 'production' as const }
+/**
+ * Production mode, because that is when the API serves the built console rather than
+ * deferring to Vite. The egress flag is forced off with it: `createRuntime` refuses to
+ * start when it is on in production, and a developer who set it in their own `.env` to run
+ * the browser tests would otherwise see this file fail with a message about production that
+ * has nothing to do with what it asserts.
+ */
+const env = {
+  ...loadEnv(),
+  NODE_ENV: 'production' as const,
+  TOOL_EGRESS_ALLOW_PRIVATE: false,
+}
 const ctx = createApiContext(env)
 const app = createApp(ctx)
 

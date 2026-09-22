@@ -1,7 +1,7 @@
 import { chunkQa, chunkText, embedTexts, type SlotConfig } from '@ci/core'
 import { type Database, EMBEDDING_DIMENSIONS, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 /**
  * Turning knowledge into something retrievable.
