@@ -12,6 +12,7 @@ owed is worse than a reply that says "let me fetch someone".
 - **How it is put together**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Decisions taken while building**: [docs/adr/](docs/adr/)
 - **Running it on a server**: [docs/DEPLOY.md](docs/DEPLOY.md)
+- **Letting the AI read a customer's account**: [docs/IDENTITY-VERIFICATION.md](docs/IDENTITY-VERIFICATION.md)
 
 ## What works today
 

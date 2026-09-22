@@ -70,6 +70,11 @@ Whether the token counts as proof is a workspace setting (**Settings → Proving
 customer is**). Switching it off leaves identification working — the same person still keeps
 one history across browsers — while withdrawing every tool bound to it.
 
+This is one of two ways to prove who a customer is, and the only one available inside the
+widget. On LINE and Messenger there is no token to present, so a one-time verification link
+does the same job: see [IDENTITY-VERIFICATION.md](IDENTITY-VERIFICATION.md), which also
+describes the page you have to build for it.
+
 ## What the widget may see
 
 A session token is minted by us after we decide who the visitor is, signed with the
