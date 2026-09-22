@@ -208,6 +208,27 @@ export async function findWebChannelId(request: APIRequestContext): Promise<stri
  * conversation simply leaves the default view.
  */
 export async function clearInbox(request: APIRequestContext): Promise<void> {
+  /**
+   * Local only, and refused loudly otherwise.
+   *
+   * This resolves every open conversation in the workspace, not merely the ones a test
+   * made — there is nothing on a conversation that says which run created it. Against a
+   * shared or staging environment that would quietly close a real queue, so it refuses the
+   * same way `db:reset` refuses a database that is not local.
+   */
+  const host = (() => {
+    try {
+      return new URL(API_URL).hostname
+    } catch {
+      return ''
+    }
+  })()
+  if (!['localhost', '127.0.0.1', '::1'].includes(host)) {
+    throw new Error(
+      `Refusing to resolve open conversations against ${host}: clearInbox is for a local database only.`,
+    )
+  }
+
   for (let page = 0; page < 40; page += 1) {
     const response = await request.get(`${API_URL}/api/v1/conversations?status=open&limit=100`)
     if (!response.ok()) return

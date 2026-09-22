@@ -134,3 +134,19 @@ describe('a workspace that is not active', () => {
     }
   })
 })
+
+describe('the member list the inbox reads', () => {
+  /**
+   * The inbox labels each row with who owns the customer, and the owner control in the
+   * sidebar lists colleagues. Both read this endpoint, so a viewer has to be able to: if it
+   * were admin-only the badges would simply be absent for viewers, with no error to notice.
+   */
+  test('is readable by everyone who can read the inbox', async () => {
+    for (const actor of [fixture.admin, fixture.agent, fixture.viewer]) {
+      const response = await fixture.as(actor, '/api/v1/settings/members')
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as { members: { userId: string }[] }
+      expect(body.members).toHaveLength(3)
+    }
+  })
+})
