@@ -251,6 +251,32 @@ without spending money.
   account a reset link is ever issued for. Go through `auth.$context` and the internal
   adapter — `password.hash`, `findCredentialAccount`, `updatePassword`, then
   `deleteUserSessions` — which is what its own reset flow does.
+- **The public webhook route serves only adapters that verify a platform signature**
+  (`capabilities.publicWebhook`). The web and test channels do not: their callers are our own
+  widget and console, authenticated by session before ingestion, so they come in through
+  `ingestInternal` and the public route answers for them as if the channel did not exist. A
+  web channel id is printed in the embed code on the host's own page, so it is public
+  knowledge, and an honest refusal would confirm which ids are real.
+- **A proved identity reaches `resolveConversation` from the envelope, never from a parsed
+  body.** Only `ingestInternal` writes `trusted`, and only the widget session route passes
+  one. The web adapter used to accept a `verified` block inside the request and copy it onto
+  the event; it was written to `channel_identities.verified_subject` and bound into the
+  tenant's tool calls from there, and the public route reached that adapter with an id
+  anybody could read. The adapter no longer knows the concept exists.
+- **A workspace admin may reset a password only for a member whose sole membership is that
+  workspace and who is not a platform admin.** A reset link sets the password on a global
+  account, so anything wider is a takeover of access the issuer has no authority over.
+  Everyone else is recovered from `/platform/users/reset-link`; see ADR 0005.
+- **`storeMessage` refuses an attachment whose storage key is outside the workspace.** The
+  key arrives in a request body on the agent-send and simulator routes and nothing downstream
+  re-derives it: vision reads those bytes and erasure deletes them. `mediaKeysOf` filters by
+  the same prefix, because deletion is irreversible and a row written before the rule existed
+  must not take another tenant's file with it.
+- **A last-admin check and the change it guards share one transaction.** The `FOR UPDATE`
+  lock over the admin set lives only as long as its transaction: checking in one and mutating
+  after it returned let two concurrent demotions both through, which is the outcome the lock
+  exists to prevent. Return the refusal from inside the transaction rather than calling
+  `tx.rollback()`, which throws and surfaces as a 500.
 - The API holds a **second auth instance** (`ctx.authSignUp`) that allows sign-up, and it is
   never mounted. `disableSignUp` is checked inside Better Auth's handler, per instance, so
   this is what lets an invitation create an account while the public API stays invite-only.

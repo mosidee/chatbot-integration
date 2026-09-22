@@ -4,6 +4,7 @@ import {
   countReviewQueue,
   createEffectPorts,
   deleteFeedback,
+  ForeignStorageKeyError,
   identityProofAccepted,
   inReviewQueue,
   isInReviewQueue,
@@ -459,16 +460,27 @@ export function conversationRoutes(ctx: ApiContext) {
           if (!loaded) return status(404, { error: 'Conversation not found' })
 
           const settings = await loadWorkspaceSettings(db, workspaceId)
-          const stored = await storeMessage(db, {
-            workspaceId,
-            conversationId: params.id,
-            direction: 'outbound',
-            senderType: 'human',
-            senderUserId: user.id,
-            message: body.message,
-            status: 'queued',
-            redaction: settings.redaction,
-          })
+          // An attachment names a storage key the caller chose. `storeMessage` refuses one
+          // outside this workspace, which is the only thing standing between a valid
+          // session and another tenant's objects.
+          let stored: Awaited<ReturnType<typeof storeMessage>>
+          try {
+            stored = await storeMessage(db, {
+              workspaceId,
+              conversationId: params.id,
+              direction: 'outbound',
+              senderType: 'human',
+              senderUserId: user.id,
+              message: body.message,
+              status: 'queued',
+              redaction: settings.redaction,
+            })
+          } catch (error) {
+            if (error instanceof ForeignStorageKeyError) {
+              return status(400, { error: 'Attachment does not belong to this workspace' })
+            }
+            throw error
+          }
 
           await applyTransition(workspaceId, params.id, {
             type: 'human_message',

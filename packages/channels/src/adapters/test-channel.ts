@@ -28,6 +28,7 @@ export const testChannelAdapter: ChannelAdapter<TestChannelConfig> = {
   type: 'test',
 
   capabilities: {
+    publicWebhook: false,
     maxTextLength: 2000,
     supportsQuickReplies: true,
     supportsTemplates: false,

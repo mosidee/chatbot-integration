@@ -71,6 +71,14 @@ export function Platform() {
       />
 
       <PlatformAdminsCard admins={admins.data?.admins ?? []} onChanged={refresh} onError={fail} />
+
+      <AccountRecoveryCard
+        onError={fail}
+        onLink={(link, forWhom) => {
+          setError(null)
+          setFreshLink({ link, for: forWhom })
+        }}
+      />
     </div>
   )
 }
@@ -325,6 +333,57 @@ function PlatformAdminsCard({
           onClick={() => grant.mutate()}
         >
           {t('platform.grant')}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+/**
+ * Resetting a password for somebody a tenant admin may not.
+ *
+ * `/admin` issues a reset link only for a member whose reach is that one workspace, because
+ * the link sets the password on a global account. Everybody else — anyone in two tenants,
+ * and every platform admin — is recovered here, where the authority matches the reach.
+ */
+function AccountRecoveryCard({
+  onError,
+  onLink,
+}: {
+  onError: (error: unknown) => void
+  onLink: (link: string, forWhom: string) => void
+}) {
+  const { t } = useTranslation()
+  const [email, setEmail] = useState('')
+
+  const issue = useMutation({
+    mutationFn: () => api.platform.resetLink(email.trim()).then((result) => ({ result })),
+    onSuccess: ({ result }) => {
+      onLink(result.link, email.trim())
+      setEmail('')
+    },
+    onError,
+  })
+
+  return (
+    <Card className="space-y-3" testId="platform-recovery-card">
+      <h2 className="text-sm font-semibold">{t('platform.recovery')}</h2>
+      <p className="text-[13px] text-[var(--text-muted)]">{t('platform.recoveryHint')}</p>
+
+      <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+        <Input
+          data-testid="platform-reset-email"
+          type="email"
+          placeholder={t('admin.email')}
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+        />
+        <Button
+          data-testid="platform-reset-submit"
+          disabled={!email.trim() || issue.isPending}
+          onClick={() => issue.mutate()}
+        >
+          {t('platform.issueReset')}
         </Button>
       </div>
     </Card>

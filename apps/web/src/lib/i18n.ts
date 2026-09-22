@@ -362,6 +362,10 @@ const th = {
     grant: 'ให้สิทธิ์',
     revokeAdmin: 'ถอนสิทธิ์',
     grantedBySeed: 'ตั้งค่าเริ่มต้นของระบบ',
+    recovery: 'กู้คืนบัญชี',
+    recoveryHint:
+      'ออกลิงก์ตั้งรหัสผ่านใหม่ให้บัญชีที่ผู้ดูแลพื้นที่ทำงานออกให้ไม่ได้ คือบัญชีที่อยู่มากกว่าหนึ่งพื้นที่ทำงาน หรือเป็นผู้ดูแลระบบ',
+    issueReset: 'ออกลิงก์',
   },
   invite: {
     joinTitle: 'เข้าร่วม',
@@ -774,6 +778,10 @@ const en: typeof th = {
     grant: 'Grant',
     revokeAdmin: 'Revoke',
     grantedBySeed: 'Set up by the installer',
+    recovery: 'Account recovery',
+    recoveryHint:
+      'Issue a password reset link for an account a workspace admin may not: anyone in more than one workspace, and every platform admin.',
+    issueReset: 'Issue link',
   },
   invite: {
     joinTitle: 'Join',

@@ -268,3 +268,78 @@ describe('platform admins', () => {
     expect(response.status).toBe(404)
   })
 })
+
+describe('account recovery', () => {
+  /**
+   * The other half of the rule `/admin` enforces. A tenant admin may reset only somebody
+   * whose reach is their own workspace; everyone wider is recovered here, because a
+   * platform admin's authority is the only one that covers an account spanning tenants.
+   */
+  test('issues a reset link for an account a tenant admin may not touch', async () => {
+    const response = await fixture.as(fixture.admin, '/api/v1/platform/users/reset-link', {
+      method: 'POST',
+      body: JSON.stringify({ email: fixture.agent.email }),
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { link: string; expiresAt: string }
+    expect(body.link).toContain('/invite/')
+    expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  test('the link it issues actually sets the password', async () => {
+    const issued = await fixture.as(fixture.admin, '/api/v1/platform/users/reset-link', {
+      method: 'POST',
+      body: JSON.stringify({ email: fixture.viewer.email }),
+    })
+    const { link } = (await issued.json()) as { link: string }
+    const token = link.split('/invite/')[1] ?? ''
+
+    const accepted = await app.handle(
+      new Request(`http://localhost/api/invitations/${token}/accept`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: ctx.env.PUBLIC_WEB_URL },
+        body: JSON.stringify({ password: 'a-brand-new-password-99' }),
+      }),
+    )
+    expect(accepted.status).toBe(200)
+
+    // The new one works.
+    const signedIn = await app.handle(
+      new Request('http://localhost/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: ctx.env.PUBLIC_WEB_URL },
+        body: JSON.stringify({
+          email: fixture.viewer.email,
+          password: 'a-brand-new-password-99',
+        }),
+      }),
+    )
+    expect(signedIn.status).toBe(200)
+
+    // And the old one does not.
+    const refused = await app.handle(
+      new Request('http://localhost/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: ctx.env.PUBLIC_WEB_URL },
+        body: JSON.stringify({ email: fixture.viewer.email, password: 'test-password-12345' }),
+      }),
+    )
+    expect(refused.status).not.toBe(200)
+  })
+
+  test('refuses an address with no account', async () => {
+    const response = await fixture.as(fixture.admin, '/api/v1/platform/users/reset-link', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'nobody-at-all@example.com' }),
+    })
+    expect(response.status).toBe(404)
+  })
+
+  test('is closed to somebody who is not a platform admin', async () => {
+    const response = await fixture.as(fixture.agent, '/api/v1/platform/users/reset-link', {
+      method: 'POST',
+      body: JSON.stringify({ email: fixture.viewer.email }),
+    })
+    expect(response.status).toBe(403)
+  })
+})

@@ -1,5 +1,6 @@
 import { getAdapter, type WebhookRequest } from '@ci/channels'
 import { type Database, decryptJson, newId, schema } from '@ci/db'
+import type { VerifiedIdentity } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import type { Runtime } from './runtime'
 
@@ -20,6 +21,17 @@ export type IngestOutcome =
 async function fingerprint(rawBody: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawBody))
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * The identity we proved before ingestion, carried beside the body rather than inside it.
+ *
+ * Only `ingestInternal` can set it, and only the widget session route passes one: it has
+ * just verified the host application's token and signed a session of its own. A body can
+ * never name it, which is the whole point — see `web-channel.ts`.
+ */
+export type TrustedEnvelope = {
+  verified?: VerifiedIdentity & { via: 'widget_token' }
 }
 
 export async function ingestWebhook(
@@ -51,6 +63,19 @@ export async function ingestWebhook(
   if (status !== 'active') return { ok: false, reason: 'channel_not_found' }
 
   const adapter = getAdapter(channel.type)
+
+  /**
+   * The public route serves only channels whose adapter can prove where a request came
+   * from, which means a platform signature over the exact bytes received.
+   *
+   * The web and test channels cannot. Their callers are our own widget and console, which
+   * authenticate before they reach ingestion, so they come in through `ingestInternal`
+   * instead. Reaching them here reads as a channel that does not exist rather than as a
+   * refusal, because a web channel id is public — it is printed in the embed code on the
+   * host's own page — and an honest error would confirm which ids are real.
+   */
+  if (!adapter.capabilities.publicWebhook) return { ok: false, reason: 'channel_not_found' }
+
   const config = adapter.parseConfig(
     channel.configEncrypted
       ? await decryptJson<unknown>(channel.configEncrypted, runtime.env.APP_SECRET_KEY)
@@ -98,6 +123,88 @@ export async function ingestWebhook(
   await runtime.queues.inbound.add('process', {
     workspaceId: channel.workspaceId,
     channelId,
+    inboundEventId: id,
+  })
+
+  return { ok: true, inboundEventId: id, duplicate: false }
+}
+
+/**
+ * Ingestion for a caller we have already authenticated ourselves.
+ *
+ * The widget and the simulator are not platforms: there is no signature to check, because
+ * we are both ends of the conversation. The widget presents a session this API signed, and
+ * the simulator sits behind an agent's console session. Both are verified by their route
+ * before they get here, so this one does no verification of its own — and, crucially, it is
+ * the only door through which a proved identity can arrive, in `trusted`, out of reach of
+ * anything a caller can put in a body.
+ *
+ * `expectedType` is belt and braces: a caller passing somebody else's channel id gets
+ * nothing, even if that channel were somehow internal too.
+ */
+export async function ingestInternal(
+  runtime: Runtime,
+  db: Database,
+  input: {
+    channelId: string
+    expectedType: 'web' | 'test'
+    body: unknown
+    trusted?: TrustedEnvelope
+  },
+): Promise<IngestOutcome> {
+  const rows = await db
+    .select({ channel: schema.channels, status: schema.workspaces.status })
+    .from(schema.channels)
+    .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.channels.workspaceId))
+    .where(eq(schema.channels.id, input.channelId))
+    .limit(1)
+  const channel = rows[0]?.channel
+  if (!channel?.enabled) return { ok: false, reason: 'channel_not_found' }
+  if (channel.type !== input.expectedType) return { ok: false, reason: 'channel_not_found' }
+
+  const status = rows[0]?.status
+  if (status === 'suspended') return { ok: false, reason: 'workspace_suspended' }
+  if (status !== 'active') return { ok: false, reason: 'channel_not_found' }
+
+  const rawBody = JSON.stringify(input.body)
+  const platformEventId = await fingerprint(rawBody)
+
+  const existing = await db
+    .select({ id: schema.inboundEvents.id })
+    .from(schema.inboundEvents)
+    .where(
+      and(
+        eq(schema.inboundEvents.channelId, input.channelId),
+        eq(schema.inboundEvents.platformEventId, platformEventId),
+      ),
+    )
+    .limit(1)
+  if (existing[0]) {
+    return { ok: true, inboundEventId: existing[0].id, duplicate: true }
+  }
+
+  const id = newId()
+  const inserted = await db
+    .insert(schema.inboundEvents)
+    .values({
+      id,
+      workspaceId: channel.workspaceId,
+      channelId: input.channelId,
+      platformEventId,
+      // No headers and no query: there is no signature to re-check and nothing else in a
+      // request from our own console or widget is worth keeping.
+      payload: { rawBody, headers: {}, query: {}, ...(input.trusted ?? {}) },
+    })
+    .onConflictDoNothing()
+    .returning({ id: schema.inboundEvents.id })
+
+  if (inserted.length === 0) {
+    return { ok: true, inboundEventId: id, duplicate: true }
+  }
+
+  await runtime.queues.inbound.add('process', {
+    workspaceId: channel.workspaceId,
+    channelId: input.channelId,
     inboundEventId: id,
   })
 

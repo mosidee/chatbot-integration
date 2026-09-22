@@ -10,6 +10,21 @@ import type { ChannelType, Language, NormalizedMessage, VerifiedIdentity } from 
  */
 
 export type ChannelCapabilities = {
+  /**
+   * Whether this channel may be reached through the public webhook route.
+   *
+   * True only where the adapter can prove a request came from the platform, which means a
+   * signature over the exact bytes received. The web and test channels cannot: their
+   * callers are our own widget and console, authenticated by session before they ever reach
+   * ingestion, and the only thing an adapter could check is an `Origin` header that any
+   * client can set. So they are served by `ingestInternal` and the public route answers for
+   * them as if the channel did not exist.
+   *
+   * Getting this wrong is not a small mistake. A web channel id is printed in the embed
+   * code on the host's own page, and the web body used to carry a `verified` block that
+   * became the identity a tool call was bound to.
+   */
+  publicWebhook: boolean
   /** Longest single outbound text. The adapter splits anything longer. */
   maxTextLength: number
   supportsQuickReplies: boolean

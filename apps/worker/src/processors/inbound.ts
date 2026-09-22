@@ -2,7 +2,7 @@ import type { WebhookRequest } from '@ci/channels'
 import type { EffectPorts, Logger } from '@ci/core'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
 import { type Database, schema } from '@ci/db'
-import type { InboundJob, Runtime } from '@ci/infra'
+import type { InboundJob, Runtime, TrustedEnvelope } from '@ci/infra'
 import {
   applyReceipt,
   conversationForReceipt,
@@ -68,6 +68,18 @@ export async function processInbound(
     const request = eventRow.payload as WebhookRequest
     const events = adapter.parseInbound(request, config)
 
+    /**
+     * A proved identity comes from the envelope, never from the body.
+     *
+     * `ingestInternal` is the only thing that writes `trusted`, and only the widget session
+     * route passes one, having just verified the host application's token. The adapter that
+     * parsed the body above cannot see this and cannot set it: a `verified` block inside a
+     * request used to be copied straight onto the identity row and bound into tool calls,
+     * and the public webhook route reached that adapter with a channel id printed in the
+     * host's own page source.
+     */
+    const trusted = (eventRow.payload as TrustedEnvelope).verified
+
     for (const event of events) {
       // Receipts are handled before a conversation is resolved, because resolving one
       // creates it. A receipt arriving after its conversation was resolved would otherwise
@@ -101,7 +113,7 @@ export async function processInbound(
       const resolved = await resolveConversation(db, {
         workspaceId: job.workspaceId,
         channelId: job.channelId,
-        event,
+        event: trusted ? { ...event, verified: trusted } : event,
         defaultMode: channel.defaultMode ?? settings.defaultMode,
         defaultLanguage: settings.defaultLanguage,
         messagingWindowHours: adapter.capabilities.messagingWindowHours,

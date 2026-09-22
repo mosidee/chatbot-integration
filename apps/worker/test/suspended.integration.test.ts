@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createEffectPorts, ingestWebhook, schema, toWebhookRequest } from '@ci/infra'
+import { createEffectPorts, ingestInternal, schema } from '@ci/infra'
 import { eq } from 'drizzle-orm'
 import {
   type MockServer,
@@ -48,20 +48,15 @@ describe('a suspended workspace', () => {
   test('refuses the webhook politely rather than with an error', async () => {
     const { fixture } = await suspendedFixture()
 
-    const outcome = await ingestWebhook(
-      fixture.runtime,
-      fixture.runtime.db,
-      fixture.channelId,
-      toWebhookRequest(
-        JSON.stringify({
-          externalId: 'sim-suspended-1',
-          message: { kind: 'text', text: 'hello?' },
-          eventId: `evt-${crypto.randomUUID()}`,
-        }),
-        {},
-        {},
-      ),
-    )
+    const outcome = await ingestInternal(fixture.runtime, fixture.runtime.db, {
+      channelId: fixture.channelId,
+      expectedType: 'test',
+      body: {
+        externalId: 'sim-suspended-1',
+        message: { kind: 'text', text: 'hello?' },
+        eventId: `evt-${crypto.randomUUID()}`,
+      },
+    })
 
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.reason).toBe('workspace_suspended')

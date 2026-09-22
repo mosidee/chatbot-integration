@@ -5,7 +5,7 @@ import {
   webChannelAdapter,
 } from '@ci/channels'
 import { schema } from '@ci/db'
-import { ingestWebhook, toWebhookRequest } from '@ci/infra'
+import { ingestInternal } from '@ci/infra'
 import { identityAttributesSchema } from '@ci/shared'
 import { and, asc, eq, gt } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -211,29 +211,40 @@ export function widgetRoutes(ctx: ApiContext) {
           const session = await readSession(params.channelId, headers['x-widget-session'])
           if (!session) return status(401, { error: 'No widget session' })
 
-          const outcome = await ingestWebhook(
-            runtime,
-            db,
-            params.channelId,
-            toWebhookRequest(
-              JSON.stringify({
-                /**
-                 * The resolved identity from the signed session, prefix and all, never the
-                 * raw id from the request body. The prefix is what keeps an anonymous
-                 * browser and a logged-in account apart, and it has to be the same string
-                 * the conversation is looked up by afterwards.
-                 */
-                visitorId: session.externalId,
-                message: { kind: 'text', text: body.text },
-                eventId: `widget-${crypto.randomUUID()}`,
-                // From the session we signed, never from the request body: a widget that
-                // could assert its own identity would be no proof at all.
-                ...(session.verified ? { verified: session.verified } : {}),
-              }),
-              {},
-              {},
-            ),
-          )
+          /**
+           * Internal ingestion, not the public webhook.
+           *
+           * This request has already proved itself: `readSession` verified the session this
+           * API signed, after checking the host application's token and the embedding
+           * origin at `/session`. There is no platform signature to check because there is
+           * no platform — both ends are ours.
+           *
+           * It also used to be refused outright. The old call went through the web
+           * adapter's `verifyWebhook` with an empty header map, so any tenant that filled in
+           * `allowedOrigins` got sessions and then a rejection on every message they tried
+           * to send.
+           */
+          const outcome = await ingestInternal(runtime, db, {
+            channelId: params.channelId,
+            expectedType: 'web',
+            body: {
+              /**
+               * The resolved identity from the signed session, prefix and all, never the
+               * raw id from the request body. The prefix is what keeps an anonymous
+               * browser and a logged-in account apart, and it has to be the same string
+               * the conversation is looked up by afterwards.
+               */
+              visitorId: session.externalId,
+              message: { kind: 'text', text: body.text },
+              eventId: `widget-${crypto.randomUUID()}`,
+            },
+            /**
+             * Beside the body, out of reach of anything a caller could send. From the
+             * session we signed: a widget that could assert its own identity would be no
+             * proof at all, and a body that could carry one was exactly the hole.
+             */
+            ...(session.verified ? { trusted: { verified: session.verified } } : {}),
+          })
           if (!outcome.ok) {
             // The same answer the session endpoint gives, so a widget that was already open
             // when the tenant was suspended learns the same thing a fresh one does.

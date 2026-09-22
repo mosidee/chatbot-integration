@@ -280,6 +280,7 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
   type: 'messenger',
 
   capabilities: {
+    publicWebhook: true,
     maxTextLength: MAX_TEXT_LENGTH,
     supportsQuickReplies: true,
     supportsTemplates: true,

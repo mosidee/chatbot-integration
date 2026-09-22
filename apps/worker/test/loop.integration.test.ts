@@ -15,6 +15,7 @@ import {
   eraseCustomer,
   findVerificationCode,
   indexEntry,
+  ingestInternal,
   ingestWebhook,
   listMergeSuggestions,
   loadDashboard,
@@ -25,7 +26,6 @@ import {
   runRetention,
   sendVerificationLink,
   storeMessage,
-  toWebhookRequest,
   updateConversation,
   upsertFeedback,
   waitingHumanJobId,
@@ -85,12 +85,13 @@ async function customerSays(
     displayName: 'Nok',
   }
 
-  const outcome = await ingestWebhook(
-    f.runtime,
-    f.runtime.db,
-    f.channelId,
-    toWebhookRequest(JSON.stringify(body), {}, {}),
-  )
+  // The simulator's own path: a test channel is not reachable through the public webhook
+  // route, which serves only adapters that can verify a platform signature.
+  const outcome = await ingestInternal(f.runtime, f.runtime.db, {
+    channelId: f.channelId,
+    expectedType: 'test',
+    body,
+  })
   if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
 
   await drainQueue(f.runtime.queues.inbound)
@@ -775,10 +776,15 @@ describe('the AI and human loop', () => {
       eventId: 'evt-fixed',
       displayName: 'Nok',
     }
-    const request = toWebhookRequest(JSON.stringify(body), {}, {})
+    const send = () =>
+      ingestInternal(f.runtime, f.runtime.db, {
+        channelId: f.channelId,
+        expectedType: 'test' as const,
+        body,
+      })
 
-    const first = await ingestWebhook(f.runtime, f.runtime.db, f.channelId, request)
-    const second = await ingestWebhook(f.runtime, f.runtime.db, f.channelId, request)
+    const first = await send()
+    const second = await send()
 
     expect(first.ok && first.duplicate).toBe(false)
     expect(second.ok && second.duplicate).toBe(true)
@@ -2458,21 +2464,16 @@ describe('messages arriving at the same moment', () => {
     const ports = createEffectPorts(f.runtime, f.runtime.logger)
     const events = await Promise.all(
       ['หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า'].map(async (text) => {
-        const outcome = await ingestWebhook(
-          f.runtime,
-          f.runtime.db,
-          f.channelId,
-          toWebhookRequest(
-            JSON.stringify({
-              externalId,
-              displayName: externalId,
-              message: { kind: 'text', text },
-              eventId: `evt-${crypto.randomUUID()}`,
-            }),
-            {},
-            {},
-          ),
-        )
+        const outcome = await ingestInternal(f.runtime, f.runtime.db, {
+          channelId: f.channelId,
+          expectedType: 'test',
+          body: {
+            externalId,
+            displayName: externalId,
+            message: { kind: 'text', text },
+            eventId: `evt-${crypto.randomUUID()}`,
+          },
+        })
         if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
         return outcome.inboundEventId
       }),

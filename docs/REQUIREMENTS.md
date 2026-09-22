@@ -123,8 +123,8 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [M5] Conversation sidebar: whether this customer was proved, what the proof carried, and a button to send them a verification link
 - [v1] Review queue for unsupervised AI conversations
 - [v1] Roles `admin` / `agent` / `viewer`; email+password. (Google sign-in is wired in the auth config and still has no control on the login page)
-- [M6] **People**: an admin invites a colleague with a single-use link, changes a role, renames somebody, removes a membership, and issues a password-reset link for anyone locked out. The last admin can be neither demoted nor removed
-- [M6] **Platform**: a platform admin creates, renames, suspends, restores and deletes tenants, and grants or revokes other platform admins. Deleting asks for the slug to be typed
+- [M6] **People**: an admin invites a colleague with a single-use link, changes a role, renames somebody, removes a membership, and issues a password-reset link for a member who belongs to this workspace alone. Anyone who reaches further — a member of two tenants, or a platform admin — is recovered from the platform page instead, because a reset sets the password on a global account. The last admin can be neither demoted nor removed
+- [M6] **Platform**: a platform admin creates, renames, suspends, restores and deletes tenants, grants or revokes other platform admins, and issues a password-reset link for an account a workspace admin may not. Deleting asks for the slug to be typed
 - [M6] Workspace switcher for anybody who belongs to more than one, and a locked screen naming the reason when the current workspace is suspended or being deleted
 - [M6] `/<slug>` opens that workspace, so a link to a tenant can be shared; a mistyped address gets a page that offers the way back rather than two bare words
 - [v1] Thai + English i18n; mobile-friendly responsive layout

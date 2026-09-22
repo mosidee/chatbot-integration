@@ -5,6 +5,7 @@ import {
   issueInvitation,
   listPlatformAdmins,
   listTenants,
+  PASSWORD_RESET_TTL_MS,
   requestWorkspaceErasure,
   suspendWorkspace,
   unsuspendWorkspace,
@@ -195,6 +196,75 @@ export function platformRoutes(ctx: ApiContext) {
         },
       )
 
+      /**
+       * Account recovery, for the people a tenant admin may not reset.
+       *
+       * A reset link sets the password on the account, which is global: the same
+       * credentials open every workspace that account belongs to. `/admin` therefore issues
+       * one only for somebody whose reach is that one workspace, and sends everyone else
+       * here, because a platform admin's authority is the only one that actually covers an
+       * account spanning tenants.
+       *
+       * Still no mail transport, so this reads the same way the tenant one does: the link
+       * is shown once and the operator relays it.
+       */
+      .post(
+        '/users/reset-link',
+        async ({ body, status, user }) => {
+          const rows = await db
+            .select({ id: schema.user.id, email: schema.user.email })
+            .from(schema.user)
+            .where(sql`lower(${schema.user.email}) = ${body.email}`)
+            .limit(1)
+          const target = rows[0]
+          if (!target) return status(404, { error: 'No account with that address' })
+
+          /**
+           * An invitation belongs to a workspace, so the reset is filed under the account's
+           * oldest membership. The accept route reads the purpose and the user, never the
+           * workspace, so which one it is changes nothing — but an account belonging to no
+           * workspace has nowhere to file it, and there is nothing to recover access to
+           * either.
+           */
+          const memberships = await db
+            .select({ organizationId: schema.member.organizationId })
+            .from(schema.member)
+            .where(eq(schema.member.userId, target.id))
+            .orderBy(schema.member.createdAt)
+            .limit(1)
+          const workspaceId = memberships[0]?.organizationId
+          if (!workspaceId) {
+            return status(409, { error: 'That account belongs to no workspace' })
+          }
+
+          const invitation = await issueInvitation(db, {
+            workspaceId,
+            purpose: 'password_reset',
+            email: target.email.toLowerCase(),
+            userId: target.id,
+            invitedByUserId: user.id,
+            ttlMs: PASSWORD_RESET_TTL_MS,
+          })
+
+          await writePlatformAudit(db, {
+            actorUserId: user.id,
+            action: 'user.reset_link_issued',
+            targetType: 'user',
+            targetId: target.id,
+            meta: { email: target.email.toLowerCase() },
+          })
+
+          return {
+            link: inviteLink(env.PUBLIC_WEB_URL, invitation.token),
+            expiresAt: invitation.expiresAt,
+          }
+        },
+        {
+          platform: true,
+          body: z.object({ email: z.email().transform((value) => value.trim().toLowerCase()) }),
+        },
+      )
+
       // ---- platform admins ---------------------------------------------------------
       .get('/admins', async () => ({ admins: await listPlatformAdmins(db) }), { platform: true })
 
@@ -238,28 +308,42 @@ export function platformRoutes(ctx: ApiContext) {
            * removed, because the question is about the count: two admins revoking each
            * other at the same instant would each see one other and both be allowed through,
            * and nobody could ever create a tenant again without a database console.
+           *
+           * The delete runs inside the same transaction as the lock. Held apart, the lock
+           * is released before the row goes and both revocations are allowed through —
+           * exactly the outcome it exists to prevent.
            */
-          const stranded = await db.transaction(async (tx) => {
+          const outcome = await db.transaction(async (tx) => {
             const admins = await tx
               .select({ userId: schema.platformAdmins.userId })
               .from(schema.platformAdmins)
               .for('update')
-            return admins.length === 1 && admins[0]?.userId === params.userId
-          })
-          if (stranded) return status(409, { error: 'The platform needs at least one admin' })
+            if (admins.length === 1 && admins[0]?.userId === params.userId) {
+              return { error: 'last_admin' as const }
+            }
 
-          const removed = await db
-            .delete(schema.platformAdmins)
-            .where(eq(schema.platformAdmins.userId, params.userId))
-            .returning({ userId: schema.platformAdmins.userId })
-          if (removed.length === 0) return status(404, { error: 'Not a platform admin' })
+            const removed = await tx
+              .delete(schema.platformAdmins)
+              .where(eq(schema.platformAdmins.userId, params.userId))
+              .returning({ userId: schema.platformAdmins.userId })
+            if (removed.length === 0) return { error: 'not_an_admin' as const }
 
-          await writePlatformAudit(db, {
-            actorUserId: user.id,
-            action: 'platform_admin.revoked',
-            targetType: 'user',
-            targetId: params.userId,
+            await writePlatformAudit(tx, {
+              actorUserId: user.id,
+              action: 'platform_admin.revoked',
+              targetType: 'user',
+              targetId: params.userId,
+            })
+
+            return { error: null }
           })
+
+          if (outcome.error === 'last_admin') {
+            return status(409, { error: 'The platform needs at least one admin' })
+          }
+          if (outcome.error === 'not_an_admin') {
+            return status(404, { error: 'Not a platform admin' })
+          }
 
           return { ok: true as const }
         },

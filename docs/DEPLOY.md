@@ -75,9 +75,14 @@ The seed creates the workspace, the admin user and the test and web channels, an
 that admin **platform admin**, which is what makes the Platform page visible and is the only
 way a second tenant can ever be created: nothing in the running API can sign anybody up.
 
-Change the admin password after first sign-in, from People → the reset link beside your own
-row. The seed is idempotent, so **an installation that predates M6 must run it again** to
-receive the platform-admin grant; re-running it changes nothing else.
+Change the admin password after first sign-in, from **Platform → Account recovery**, giving
+your own address. Not from People: that page issues a link only for a member who belongs to
+one workspace and is not a platform admin, and the seeded account is both. A reset sets the
+password on the account itself, so only a platform admin may issue one for an account that
+reaches further than a single tenant.
+
+The seed is idempotent, so **an installation that predates M6 must run it again** to receive
+the platform-admin grant; re-running it changes nothing else.
 
 Migrations run automatically when the API container starts.
 

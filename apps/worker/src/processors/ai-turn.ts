@@ -101,7 +101,7 @@ export async function processAiTurn(
   }
 
   const visionSlot = usableSlot(aiConfig, 'vision')
-  const images = visionSlot ? await readImages(runtime, recentMessages) : []
+  const images = visionSlot ? await readImages(runtime, job.workspaceId, recentMessages) : []
 
   // Tools the workspace defined for itself, and the values the system will bind into them.
   // The subject comes from a proof recorded on the channel identity, never from anything
@@ -412,9 +412,15 @@ function toTurn(message: typeof schema.messages.$inferSelect): ConversationTurn 
 /**
  * Read images from the newest customer message out of object storage.
  * Bytes, not URLs: the provider never reaches into our bucket (ADR 0001).
+ *
+ * A key outside the workspace is skipped rather than read. `storeMessage` refuses to write
+ * one, so this only ever fires for a row written before that rule existed — but a foreign
+ * image read here would be described by the model into this tenant's conversation, which is
+ * the leak this product refuses to accept.
  */
 async function readImages(
   runtime: Runtime,
+  workspaceId: string,
   messages: (typeof schema.messages.$inferSelect)[],
 ): Promise<ImageInput[]> {
   const newest = [...messages].reverse().find((m) => m.direction === 'inbound')
@@ -425,6 +431,13 @@ async function readImages(
   const images: ImageInput[] = []
   for (const attachment of content.attachments) {
     if (!attachment.storageKey) continue
+    if (!attachment.storageKey.startsWith(`${workspaceId}/`)) {
+      runtime.logger.warn('skipped an attachment outside the workspace', {
+        workspaceId,
+        storageKey: attachment.storageKey,
+      })
+      continue
+    }
     try {
       const object = await runtime.blob.get(attachment.storageKey)
       images.push({ data: object.data, mime: object.mime || attachment.mime })

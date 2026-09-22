@@ -35,7 +35,11 @@ export type PurgeResult = {
  * SQL. It loads more than it needs to, and it is the version whose behaviour is obvious to
  * the next person deleting a customer's data, which is not a place for a clever query.
  */
-async function mediaKeysOf(db: Database, conversationIds: string[]): Promise<string[]> {
+async function mediaKeysOf(
+  db: Database,
+  workspaceId: string,
+  conversationIds: string[],
+): Promise<string[]> {
   if (conversationIds.length === 0) return []
 
   const keys = new Set<string>()
@@ -49,7 +53,16 @@ async function mediaKeysOf(db: Database, conversationIds: string[]): Promise<str
     for (const row of rows) {
       const content = row.content as { attachments?: { storageKey?: string | null }[] }
       for (const attachment of content.attachments ?? []) {
-        if (attachment.storageKey) keys.add(attachment.storageKey)
+        /**
+         * Only this workspace's own objects are ever deleted.
+         *
+         * The conversations are scoped, but a key inside one of their messages is only as
+         * trustworthy as whatever wrote it. `storeMessage` now refuses a foreign key, so
+         * this is the second lock on the same door: deletion is irreversible, and a row
+         * written before that rule existed must not take another tenant's file with it.
+         */
+        const key = attachment.storageKey
+        if (key?.startsWith(`${workspaceId}/`)) keys.add(key)
       }
     }
   }
@@ -92,7 +105,7 @@ export async function purgeConversations(
 ): Promise<PurgeResult> {
   if (input.conversationIds.length === 0) return { conversations: 0, media: 0, mediaFailed: 0 }
 
-  const keys = await mediaKeysOf(db, input.conversationIds)
+  const keys = await mediaKeysOf(db, input.workspaceId, input.conversationIds)
 
   const deleted: { id: string }[] = []
   for (let index = 0; index < input.conversationIds.length; index += CHUNK) {
@@ -178,6 +191,7 @@ export async function eraseCustomer(
 
   const keys = await mediaKeysOf(
     db,
+    input.workspaceId,
     conversations.map((row) => row.id),
   )
 
@@ -292,6 +306,7 @@ export async function eraseWorkspace(
 
       const fromMessages = await mediaKeysOf(
         db,
+        input.workspaceId,
         conversations.map((row) => row.id),
       )
 
@@ -306,7 +321,11 @@ export async function eraseWorkspace(
       mediaKeys = [
         ...new Set([
           ...fromMessages,
-          ...sources.flatMap((row) => (row.storageKey ? [row.storageKey] : [])),
+          // Keyed `<workspaceId>/knowledge/<id>-<name>` by the upload route, so the same
+          // prefix rule applies to them as to message attachments.
+          ...sources.flatMap((row) =>
+            row.storageKey?.startsWith(`${input.workspaceId}/`) ? [row.storageKey] : [],
+          ),
         ]),
       ]
 

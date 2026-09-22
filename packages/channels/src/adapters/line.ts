@@ -323,6 +323,7 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
   type: 'line',
 
   capabilities: {
+    publicWebhook: true,
     maxTextLength: MAX_TEXT_LENGTH,
     supportsQuickReplies: true,
     supportsTemplates: true,

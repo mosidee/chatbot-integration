@@ -36,6 +36,11 @@ export function adminRoutes(ctx: ApiContext) {
    * question is about the count. Two admins demoting each other at the same instant would
    * each see one other admin and each be allowed through, and the workspace would be left
    * with nobody who can invite anyone.
+   *
+   * The lock lives only as long as the transaction that took it, so the caller must do its
+   * update inside the same one. An earlier version checked in a transaction of its own and
+   * mutated after it returned, which is the same as not locking at all: both demotions read
+   * two admins, both were allowed through, and the workspace was stranded anyway.
    */
   const wouldStrandWorkspace = async (
     tx: Transaction,
@@ -107,57 +112,68 @@ export function adminRoutes(ctx: ApiContext) {
       .patch(
         '/members/:userId',
         async ({ workspaceId, params, body, status, user }) => {
-          const existing = await db
-            .select({ role: schema.member.role })
-            .from(schema.member)
-            .where(
-              and(
-                eq(schema.member.organizationId, workspaceId),
-                eq(schema.member.userId, params.userId),
-              ),
-            )
-            .limit(1)
-          if (existing.length === 0) return status(404, { error: 'Not a member' })
-
-          if (body.role && body.role !== 'admin') {
-            const stranded = await db.transaction((tx) =>
-              wouldStrandWorkspace(tx, workspaceId, params.userId),
-            )
-            if (stranded) {
-              return status(409, { error: 'A workspace needs at least one admin' })
-            }
-          }
-
-          if (body.role) {
-            await db
-              .update(schema.member)
-              .set({ role: body.role })
+          /**
+           * The whole change is one transaction: the lock, the count it answers, the update
+           * and the audit row. Returning a refusal from inside it commits nothing, because
+           * nothing was written; `tx.rollback()` would throw and surface as a 500.
+           */
+          const outcome = await db.transaction(async (tx) => {
+            const existing = await tx
+              .select({ role: schema.member.role })
+              .from(schema.member)
               .where(
                 and(
                   eq(schema.member.organizationId, workspaceId),
                   eq(schema.member.userId, params.userId),
                 ),
               )
-          }
+              .limit(1)
+            if (existing.length === 0) return { error: 'not_a_member' as const }
 
-          // Only after the membership check above, so this cannot rename a stranger.
-          if (body.name) {
-            await db
-              .update(schema.user)
-              .set({ name: body.name, updatedAt: new Date() })
-              .where(eq(schema.user.id, params.userId))
-          }
+            if (body.role && body.role !== 'admin') {
+              if (await wouldStrandWorkspace(tx, workspaceId, params.userId)) {
+                return { error: 'last_admin' as const }
+              }
+            }
 
-          await audit(db, {
-            workspaceId,
-            actorUserId: user.id,
-            action: 'member.updated',
-            targetId: params.userId,
-            meta: {
-              ...(body.role ? { role: body.role, was: existing[0]?.role } : {}),
-              ...(body.name ? { renamed: true } : {}),
-            },
+            if (body.role) {
+              await tx
+                .update(schema.member)
+                .set({ role: body.role })
+                .where(
+                  and(
+                    eq(schema.member.organizationId, workspaceId),
+                    eq(schema.member.userId, params.userId),
+                  ),
+                )
+            }
+
+            // Only after the membership check above, so this cannot rename a stranger.
+            if (body.name) {
+              await tx
+                .update(schema.user)
+                .set({ name: body.name, updatedAt: new Date() })
+                .where(eq(schema.user.id, params.userId))
+            }
+
+            await audit(tx, {
+              workspaceId,
+              actorUserId: user.id,
+              action: 'member.updated',
+              targetId: params.userId,
+              meta: {
+                ...(body.role ? { role: body.role, was: existing[0]?.role } : {}),
+                ...(body.name ? { renamed: true } : {}),
+              },
+            })
+
+            return { error: null }
           })
+
+          if (outcome.error === 'not_a_member') return status(404, { error: 'Not a member' })
+          if (outcome.error === 'last_admin') {
+            return status(409, { error: 'A workspace needs at least one admin' })
+          }
 
           return { ok: true as const }
         },
@@ -171,28 +187,38 @@ export function adminRoutes(ctx: ApiContext) {
       .delete(
         '/members/:userId',
         async ({ workspaceId, params, status, user }) => {
-          const stranded = await db.transaction((tx) =>
-            wouldStrandWorkspace(tx, workspaceId, params.userId),
-          )
-          if (stranded) return status(409, { error: 'A workspace needs at least one admin' })
+          // One transaction, for the reason the update above gives: a lock released before
+          // the delete protects nothing.
+          const outcome = await db.transaction(async (tx) => {
+            if (await wouldStrandWorkspace(tx, workspaceId, params.userId)) {
+              return { error: 'last_admin' as const }
+            }
 
-          const removed = await db
-            .delete(schema.member)
-            .where(
-              and(
-                eq(schema.member.organizationId, workspaceId),
-                eq(schema.member.userId, params.userId),
-              ),
-            )
-            .returning({ id: schema.member.id })
-          if (removed.length === 0) return status(404, { error: 'Not a member' })
+            const removed = await tx
+              .delete(schema.member)
+              .where(
+                and(
+                  eq(schema.member.organizationId, workspaceId),
+                  eq(schema.member.userId, params.userId),
+                ),
+              )
+              .returning({ id: schema.member.id })
+            if (removed.length === 0) return { error: 'not_a_member' as const }
 
-          await audit(db, {
-            workspaceId,
-            actorUserId: user.id,
-            action: 'member.removed',
-            targetId: params.userId,
+            await audit(tx, {
+              workspaceId,
+              actorUserId: user.id,
+              action: 'member.removed',
+              targetId: params.userId,
+            })
+
+            return { error: null }
           })
+
+          if (outcome.error === 'last_admin') {
+            return status(409, { error: 'A workspace needs at least one admin' })
+          }
+          if (outcome.error === 'not_a_member') return status(404, { error: 'Not a member' })
 
           return { ok: true as const }
         },
@@ -301,6 +327,37 @@ export function adminRoutes(ctx: ApiContext) {
             .limit(1)
           const target = rows[0]
           if (!target) return status(404, { error: 'Not a member' })
+
+          /**
+           * How far this account reaches decides who may reset it.
+           *
+           * A reset link sets the password on the *account*, and an account is global: the
+           * same credentials open every workspace it belongs to, and platform
+           * administration on top if it has that. So an admin of one tenant issuing a link
+           * for somebody who also belongs to another is not resetting their own member's
+           * password, it is taking over a stranger's access — and if the member is a
+           * platform admin, the whole installation with it.
+           *
+           * Membership of this workspace alone is the case this route was built for and
+           * keeps. Everything wider goes to a platform admin, who is the only person on the
+           * installation whose authority actually covers it.
+           */
+          const reach = await db
+            .select({
+              memberships: sql<number>`count(distinct ${schema.member.organizationId})::int`,
+              platformAdmin: sql<boolean>`bool_or(${schema.platformAdmins.userId} is not null)`,
+            })
+            .from(schema.member)
+            .leftJoin(schema.platformAdmins, eq(schema.platformAdmins.userId, schema.member.userId))
+            .where(eq(schema.member.userId, params.userId))
+          const memberships = reach[0]?.memberships ?? 1
+          if (memberships > 1 || reach[0]?.platformAdmin) {
+            return status(403, {
+              error:
+                'This account can reach more than this workspace, so a platform admin must issue the reset',
+              code: 'reset_requires_platform' as const,
+            })
+          }
 
           const invitation = await issueInvitation(db, {
             workspaceId,

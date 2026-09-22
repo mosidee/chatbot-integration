@@ -390,6 +390,43 @@ export async function resolveConversation(
   })
 }
 
+/**
+ * A storage key named by a message must belong to the workspace storing it.
+ *
+ * An attachment's `storageKey` arrives in the request body on the agent send and simulator
+ * routes, and nothing downstream re-derives it: the AI's vision step reads those bytes, and
+ * erasure deletes every key it finds in a message's content. So a key naming another
+ * tenant's object would have that object described to this tenant's AI, and later deleted
+ * by this tenant's retention sweep. Keys are not guessable, but they are not secrets either
+ * — one leaked link or log line is enough.
+ *
+ * Checked here because this is the only path that writes a message row. `uploads.ts` applies
+ * the same prefix rule when serving one, and `signMediaUrl` again when a link is minted.
+ */
+export class ForeignStorageKeyError extends Error {
+  constructor(readonly storageKey: string) {
+    super('attachment does not belong to this workspace')
+    this.name = 'ForeignStorageKeyError'
+  }
+}
+
+/** The first attachment key that is not this workspace's, or null when all of them are. */
+export function foreignStorageKey(workspaceId: string, message: NormalizedMessage): string | null {
+  const media = message as NormalizedMessage & { attachments?: { storageKey?: string | null }[] }
+  if (!Array.isArray(media.attachments)) return null
+
+  for (const attachment of media.attachments) {
+    const key = attachment.storageKey
+    if (key && !key.startsWith(`${workspaceId}/`)) return key
+  }
+  return null
+}
+
+function assertAttachmentsAreOurs(workspaceId: string, message: NormalizedMessage): void {
+  const key = foreignStorageKey(workspaceId, message)
+  if (key) throw new ForeignStorageKeyError(key)
+}
+
 /** Store a message, redacting it first. Nothing sensitive is ever written. */
 export async function storeMessage(
   db: Database,
@@ -406,6 +443,8 @@ export async function storeMessage(
     redaction: RedactionOptions
   },
 ): Promise<{ id: string; message: NormalizedMessage; text: string; duplicate: boolean }> {
+  assertAttachmentsAreOurs(input.workspaceId, input.message)
+
   const { message, findings } = redactMessage(input.message, input.redaction)
   const text = messageToText(message)
   const id = newId()

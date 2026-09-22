@@ -733,6 +733,9 @@ export const api = {
     admins: () => get<{ admins: PlatformAdmin[] }>('/v1/platform/admins'),
     grantAdmin: (email: string) => post<{ userId: string }>('/v1/platform/admins', { email }),
     revokeAdmin: (userId: string) => del<{ ok: true }>(`/v1/platform/admins/${userId}`),
+    /** For the accounts `/admin` refuses: anyone in more than one tenant, or a platform admin. */
+    resetLink: (email: string) =>
+      post<{ link: string; expiresAt: string }>('/v1/platform/users/reset-link', { email }),
   },
 
   /** Public: the caller may have no account yet, which is the whole point. */

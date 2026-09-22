@@ -1,5 +1,5 @@
 import { schema } from '@ci/db'
-import { ingestWebhook, toWebhookRequest } from '@ci/infra'
+import { foreignStorageKey, ingestInternal } from '@ci/infra'
 import { normalizedMessageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -54,12 +54,22 @@ export function simulatorRoutes(ctx: ApiContext) {
           return status(400, { error: 'The simulator only drives test channels' })
         }
 
-        const outcome = await ingestWebhook(
-          runtime,
-          db,
-          params.channelId,
-          toWebhookRequest(JSON.stringify(body), {}, {}),
-        )
+        // Refused here rather than in the worker, so the caller is told. `storeMessage`
+        // refuses it again downstream; this is the same rule, answered in the request.
+        if (foreignStorageKey(workspaceId, body.message)) {
+          return status(400, { error: 'Attachment does not belong to this workspace' })
+        }
+
+        /**
+         * Internal ingestion: the caller is an agent with a console session, checked by the
+         * guard on this route, not a platform with a signature. The test adapter has no
+         * signature to offer and the public webhook route no longer serves it.
+         */
+        const outcome = await ingestInternal(runtime, db, {
+          channelId: params.channelId,
+          expectedType: 'test',
+          body,
+        })
 
         if (!outcome.ok) return status(400, { error: outcome.reason })
         return { received: true, duplicate: outcome.duplicate }
