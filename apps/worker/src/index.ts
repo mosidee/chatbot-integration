@@ -10,10 +10,13 @@ import {
   type JobMeta,
   type KnowledgeIngestJob,
   type OutboundJob,
+  pendingSummary,
+  pruneOutbox,
   QUEUE_NAMES,
   type RetentionJob,
   type Runtime,
   type SuggestionJob,
+  startRelay,
   type WaitingHumanTimeoutJob,
   type WorkspaceErasureJob,
 } from '@ci/infra'
@@ -39,6 +42,9 @@ import { processWaitingHumanTimeout } from './processors/waiting-human'
  * and must answer in milliseconds, while AI turns run for seconds and ingestion for
  * minutes. Concurrency is set per queue for the same reason.
  */
+
+/** How long a promise may sit unrelayed before this worker calls itself unhealthy. */
+const OUTBOX_STALL_MS = 60_000
 
 const CONCURRENCY = {
   inbound: 10,
@@ -192,11 +198,31 @@ async function main() {
   ]
 
   /**
+   * The relay: the one thing in this codebase that writes to BullMQ.
+   *
+   * Everywhere else, work is promised as a row in `outbox` inside the transaction that made
+   * it necessary — see ADR 0006. This moves those promises across, woken by the notification
+   * Postgres sends at commit and swept on a timer besides. It runs in the worker rather than
+   * the API because the API can be stopped without stopping the product, and because a
+   * second replica of it costs nothing: rows are claimed with SKIP LOCKED.
+   */
+  const relay = startRelay({
+    db: runtime.db,
+    listenClient: runtime.db.$client,
+    queues: runtime.queues,
+    logger,
+  })
+
+  /**
    * The nightly sweep.
    *
    * Registered by the worker rather than by a host cron so the schedule travels with the
    * code and exists wherever the worker runs. A scheduler keyed by name is replaced on each
    * start, so restarting or deploying never leaves two of them behind.
+   *
+   * Registering a scheduler is not enqueueing work, which is why it still speaks to the
+   * queue directly: it describes when jobs should come into being rather than asking for
+   * one, and there is nothing in the database it has to agree with.
    */
   await runtime.queues.retention.upsertJobScheduler(
     'retention-nightly',
@@ -218,7 +244,7 @@ async function main() {
       if (!new URL(request.url).pathname.startsWith('/healthz')) {
         return new Response('not found', { status: 404 })
       }
-      const [dbOk, redisOk] = await Promise.all([
+      const [dbOk, redisOk, outbox] = await Promise.all([
         runtime.db
           .execute('select 1')
           .then(() => true)
@@ -227,21 +253,56 @@ async function main() {
           .ping()
           .then(() => true)
           .catch(() => false),
+        pendingSummary(runtime.db).catch(() => ({ pending: -1, oldestAgeMs: -1 })),
       ])
-      const healthy = dbOk && redisOk
+      /**
+       * A backlog of promises nobody has relayed is this service failing at its job, even
+       * with both dependencies answering. Nothing downstream would notice on its own: the
+       * rows are safe, the customers are simply not being answered.
+       */
+      const draining = outbox.oldestAgeMs >= 0 && outbox.oldestAgeMs <= OUTBOX_STALL_MS
+      const healthy = dbOk && redisOk && draining
       return Response.json(
-        { status: healthy ? 'ok' : 'degraded', db: dbOk, redis: redisOk, queues: workers.length },
+        {
+          status: healthy ? 'ok' : 'degraded',
+          db: dbOk,
+          redis: redisOk,
+          queues: workers.length,
+          outbox,
+        },
         { status: healthy ? 200 : 503 },
       )
     },
   })
 
-  logger.info('worker started', { queues: workers.length, healthPort: health.port })
+  logger.info('worker started', {
+    queues: workers.length,
+    healthPort: health.port,
+    outboxRelay: true,
+  })
+
+  /**
+   * Housekeeping for the outbox: relayed rows are kept a day, long enough to answer "did
+   * that ever get queued?" while somebody still cares, and then dropped. Hourly, because a
+   * busy tenant writes one of these per message.
+   */
+  const pruning = setInterval(
+    () =>
+      void pruneOutbox(runtime.db).catch((error: unknown) => {
+        logger.warn('pruning the outbox failed', {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }),
+    60 * 60 * 1000,
+  )
+  pruning.unref?.()
 
   const shutdown = async (signal: string) => {
     logger.info('shutting down', { signal })
     // Close workers first so in-flight jobs finish before their dependencies disappear.
     health.stop(true)
+    clearInterval(pruning)
+    await relay.stop()
     await Promise.allSettled(workers.map((w) => w.close()))
     await runtime.close()
     process.exit(0)

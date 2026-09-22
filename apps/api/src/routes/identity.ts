@@ -120,10 +120,16 @@ export function identityRoutes(ctx: ApiContext) {
         redaction: settings.redaction,
       })
 
-      await runtime.queues.outbound.add('send', {
+      await runtime.outbox.enqueue(db, {
+        queue: 'outbound',
+        name: 'send',
         workspaceId: consumed.workspaceId,
-        conversationId: consumed.conversationId,
-        messageId: stored.id,
+        payload: {
+          workspaceId: consumed.workspaceId,
+          conversationId: consumed.conversationId,
+          messageId: stored.id,
+        },
+        jobId: `outbound-${stored.id}`,
       })
 
       await runtime.publisher.publish(consumed.workspaceId, {
@@ -135,10 +141,18 @@ export function identityRoutes(ctx: ApiContext) {
       // the AI gets another turn with the identity it was missing. The processor re-reads
       // the mode, so a conversation a human has taken over is left alone.
       if (conversation.mode === 'ai') {
-        await runtime.queues.ai_turn.add('run', {
+        await runtime.outbox.enqueue(db, {
+          queue: 'ai_turn',
+          name: 'run',
           workspaceId: consumed.workspaceId,
-          conversationId: consumed.conversationId,
-          deliver: 'send',
+          payload: {
+            workspaceId: consumed.workspaceId,
+            conversationId: consumed.conversationId,
+            deliver: 'send',
+          },
+          // Keyed on the confirmation message this turn follows, since no customer message
+          // prompted it. A link spent twice owes exactly one answer.
+          jobId: `ai-turn-verify-${stored.id}`,
         })
       }
 

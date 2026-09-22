@@ -1,4 +1,5 @@
 export * from './app'
 export * from './auth'
 export * from './knowledge'
+export * from './outbox'
 export * from './platform'

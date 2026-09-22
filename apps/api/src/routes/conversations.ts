@@ -465,15 +465,29 @@ export function conversationRoutes(ctx: ApiContext) {
           // session and another tenant's objects.
           let stored: Awaited<ReturnType<typeof storeMessage>>
           try {
-            stored = await storeMessage(db, {
-              workspaceId,
-              conversationId: params.id,
-              direction: 'outbound',
-              senderType: 'human',
-              senderUserId: user.id,
-              message: body.message,
-              status: 'queued',
-              redaction: settings.redaction,
+            // Stored and promised together. An agent whose reply is in the thread but was
+            // never queued has told the customer nothing while believing they answered.
+            stored = await db.transaction(async (tx) => {
+              const message = await storeMessage(tx, {
+                workspaceId,
+                conversationId: params.id,
+                direction: 'outbound',
+                senderType: 'human',
+                senderUserId: user.id,
+                message: body.message,
+                status: 'queued',
+                redaction: settings.redaction,
+              })
+
+              await runtime.outbox.enqueue(tx, {
+                queue: 'outbound',
+                name: 'send',
+                workspaceId,
+                payload: { workspaceId, conversationId: params.id, messageId: message.id },
+                jobId: `outbound-${message.id}`,
+              })
+
+              return message
             })
           } catch (error) {
             if (error instanceof ForeignStorageKeyError) {
@@ -486,12 +500,6 @@ export function conversationRoutes(ctx: ApiContext) {
             type: 'human_message',
             at: new Date(),
             userId: user.id,
-          })
-
-          await runtime.queues.outbound.add('send', {
-            workspaceId,
-            conversationId: params.id,
-            messageId: stored.id,
           })
 
           await runtime.publisher.publish(workspaceId, {
@@ -660,10 +668,14 @@ export function conversationRoutes(ctx: ApiContext) {
 
           // Queued rather than done here: it deletes stored media as well as rows, and the
           // request should not hang on object storage.
-          await runtime.queues.customer_erasure.add('erase', {
+          await runtime.outbox.enqueue(db, {
+            queue: 'customer_erasure',
+            name: 'erase',
             workspaceId,
-            customerId,
-            requestedByUserId: user.id,
+            payload: { workspaceId, customerId, requestedByUserId: user.id },
+            // One erasure per customer: asking twice must not delete twice, and the second
+            // ask is somebody wondering whether the first one took.
+            jobId: `customer-erasure-${customerId}`,
           })
 
           return { queued: true, customerId }

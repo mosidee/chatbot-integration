@@ -25,7 +25,7 @@ export async function processRetention(
   logger: Logger,
   job: RetentionJob,
 ): Promise<void> {
-  const { db, blob, queues } = runtime
+  const { db, blob, outbox } = runtime
 
   if (!job.workspaceId) {
     // Active ones only. A suspended tenant's data is kept exactly as it was until somebody
@@ -35,7 +35,15 @@ export async function processRetention(
       .from(schema.workspaces)
       .where(eq(schema.workspaces.status, 'active'))
     for (const workspace of workspaces) {
-      await queues.retention.add('retention', { workspaceId: workspace.id })
+      await outbox.enqueue(db, {
+        queue: 'retention',
+        name: 'retention',
+        workspaceId: workspace.id,
+        payload: { workspaceId: workspace.id },
+        // One sweep per workspace per day. The scheduler fires nightly, and a worker
+        // restarting near that moment must not give a tenant two.
+        jobId: `retention-${workspace.id}-${new Date().toISOString().slice(0, 10)}`,
+      })
     }
     logger.info('retention sweep planned', { workspaces: workspaces.length })
     return

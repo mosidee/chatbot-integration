@@ -45,11 +45,21 @@ export type AiTurnJob = {
   workspaceId: string
   conversationId: string
   deliver: 'send' | 'draft'
+  /**
+   * The customer message this turn answers, where one prompted it.
+   *
+   * The job id is derived from it, so a retry is the same job rather than a second answer,
+   * and a turn that stops because a colleague took over can key its suggestion on the same
+   * message. Optional because a turn can also follow a completed identity proof, which no
+   * message prompted.
+   */
+  triggerMessageId?: string
 }
 
 export type SuggestionJob = {
   workspaceId: string
   conversationId: string
+  triggerMessageId?: string
 }
 
 export type OutboundJob = {

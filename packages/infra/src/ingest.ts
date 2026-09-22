@@ -103,30 +103,63 @@ export async function ingestWebhook(
     return { ok: true, inboundEventId: existing[0].id, duplicate: true }
   }
 
-  const id = newId()
-  const inserted = await db
-    .insert(schema.inboundEvents)
-    .values({
-      id,
-      workspaceId: channel.workspaceId,
-      channelId,
-      platformEventId,
-      payload: request,
-    })
-    .onConflictDoNothing()
-    .returning({ id: schema.inboundEvents.id })
-
-  if (inserted.length === 0) {
-    return { ok: true, inboundEventId: id, duplicate: true }
-  }
-
-  await runtime.queues.inbound.add('process', {
+  return persistAndQueue(runtime, db, {
+    id: newId(),
     workspaceId: channel.workspaceId,
     channelId,
-    inboundEventId: id,
+    platformEventId,
+    payload: request,
+  })
+}
+
+/**
+ * Store the event and promise the work, in one transaction.
+ *
+ * Held apart, a Redis failure between them lost the job and kept the row, and the platform's
+ * retry then found the row, answered `duplicate`, and queued nothing: the customer's message
+ * sat unread for ever with every part of the system believing it had been handled.
+ */
+async function persistAndQueue(
+  runtime: Runtime,
+  db: Database,
+  event: {
+    id: string
+    workspaceId: string
+    channelId: string
+    platformEventId: string
+    payload: unknown
+  },
+): Promise<IngestOutcome> {
+  const duplicate = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(schema.inboundEvents)
+      .values({
+        id: event.id,
+        workspaceId: event.workspaceId,
+        channelId: event.channelId,
+        platformEventId: event.platformEventId,
+        payload: event.payload,
+      })
+      .onConflictDoNothing()
+      .returning({ id: schema.inboundEvents.id })
+
+    if (inserted.length === 0) return true
+
+    await runtime.outbox.enqueue(tx, {
+      queue: 'inbound',
+      name: 'process',
+      workspaceId: event.workspaceId,
+      payload: {
+        workspaceId: event.workspaceId,
+        channelId: event.channelId,
+        inboundEventId: event.id,
+      },
+      jobId: `inbound-${event.id}`,
+    })
+    return false
   })
 
-  return { ok: true, inboundEventId: id, duplicate: false }
+  return { ok: true, inboundEventId: event.id, duplicate }
 }
 
 /**
@@ -183,32 +216,15 @@ export async function ingestInternal(
     return { ok: true, inboundEventId: existing[0].id, duplicate: true }
   }
 
-  const id = newId()
-  const inserted = await db
-    .insert(schema.inboundEvents)
-    .values({
-      id,
-      workspaceId: channel.workspaceId,
-      channelId: input.channelId,
-      platformEventId,
-      // No headers and no query: there is no signature to re-check and nothing else in a
-      // request from our own console or widget is worth keeping.
-      payload: { rawBody, headers: {}, query: {}, ...(input.trusted ?? {}) },
-    })
-    .onConflictDoNothing()
-    .returning({ id: schema.inboundEvents.id })
-
-  if (inserted.length === 0) {
-    return { ok: true, inboundEventId: id, duplicate: true }
-  }
-
-  await runtime.queues.inbound.add('process', {
+  return persistAndQueue(runtime, db, {
+    id: newId(),
     workspaceId: channel.workspaceId,
     channelId: input.channelId,
-    inboundEventId: id,
+    platformEventId,
+    // No headers and no query: there is no signature to re-check and nothing else in a
+    // request from our own console or widget is worth keeping.
+    payload: { rawBody, headers: {}, query: {}, ...(input.trusted ?? {}) },
   })
-
-  return { ok: true, inboundEventId: id, duplicate: false }
 }
 
 export function toWebhookRequest(

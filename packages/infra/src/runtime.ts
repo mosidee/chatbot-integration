@@ -6,6 +6,7 @@ import { createBlobStore } from './blob'
 import { createFilesystemBlobStore } from './blob-fs'
 import { createRestrictedFetch } from './egress'
 import { createLogger } from './logger'
+import { createOutbox, type Outbox } from './outbox'
 import { createPublisher } from './publisher'
 import { createQueues, type Queues } from './queues'
 import { createRedis } from './redis'
@@ -25,6 +26,12 @@ export type Runtime = {
   /** Separate connection: a subscribed client cannot issue other commands. */
   subscriberFactory: () => Redis
   queues: Queues
+  /**
+   * How work is asked for. Writes a row in the caller's own transaction; the worker's relay
+   * moves it to BullMQ afterwards. Nothing outside that relay calls a queue directly — see
+   * `outbox.ts` and ADR 0006.
+   */
+  outbox: Outbox
   blob: BlobStore
   /**
    * The client tenant-defined tools are fetched through. Restricted on purpose; see
@@ -90,6 +97,7 @@ export function createRuntime(
     redis,
     subscriberFactory: () => createRedis(env.REDIS_URL),
     queues,
+    outbox: createOutbox(),
     blob,
     toolFetch: createRestrictedFetch({ allowPrivate: allowPrivateEgress }),
     publisher,

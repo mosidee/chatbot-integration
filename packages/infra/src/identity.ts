@@ -242,7 +242,7 @@ export async function sendVerificationLink(
   runtime: Runtime,
   input: { workspaceId: string; conversationId: string },
 ): Promise<VerificationLinkResult> {
-  const { db, queues } = runtime
+  const { db } = runtime
   const settings = await loadWorkspaceSettings(db, input.workspaceId)
   const link = settings.identity.verificationLink
 
@@ -284,20 +284,32 @@ export async function sendVerificationLink(
 
   const text = (LINK_TEXT[language] ?? LINK_TEXT.en)(url.toString())
 
-  const stored = await storeMessage(db, {
-    workspaceId: input.workspaceId,
-    conversationId: input.conversationId,
-    direction: 'outbound',
-    senderType: 'system',
-    message: { kind: 'text', text },
-    status: 'queued',
-    redaction: settings.redaction,
-  })
+  // The message and the promise to deliver it commit together: a stored reply nobody was
+  // told to send is a customer waiting on a link that will never arrive.
+  const stored = await db.transaction(async (tx) => {
+    const message = await storeMessage(tx, {
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      direction: 'outbound',
+      senderType: 'system',
+      message: { kind: 'text', text },
+      status: 'queued',
+      redaction: settings.redaction,
+    })
 
-  await queues.outbound.add('send', {
-    workspaceId: input.workspaceId,
-    conversationId: input.conversationId,
-    messageId: stored.id,
+    await runtime.outbox.enqueue(tx, {
+      queue: 'outbound',
+      name: 'send',
+      workspaceId: input.workspaceId,
+      payload: {
+        workspaceId: input.workspaceId,
+        conversationId: input.conversationId,
+        messageId: message.id,
+      },
+      jobId: `outbound-${message.id}`,
+    })
+
+    return message
   })
 
   return { ok: true, messageId: stored.id, code }

@@ -429,7 +429,11 @@ function assertAttachmentsAreOurs(workspaceId: string, message: NormalizedMessag
 
 /** Store a message, redacting it first. Nothing sensitive is ever written. */
 export async function storeMessage(
-  db: Database,
+  // An `Executor`, so a caller running a unit of work can store the message inside it. The
+  // inbound processor does exactly that: the message, the state change and the queued work
+  // that follows are one commit, so a retry cannot find the message already there and skip
+  // effects that never ran.
+  db: Executor,
   input: {
     workspaceId: string
     conversationId: string
@@ -440,6 +444,14 @@ export async function storeMessage(
     platformMessageId?: string | null
     status?: 'queued' | 'sent' | 'delivered' | 'read' | 'failed'
     aiTraceId?: string | null
+    /**
+     * The AI turn that produced this reply, stable across that turn's retries.
+     *
+     * A unique index on (workspace, turn key) carries the guarantee: two attempts of the
+     * same job racing past the processor's own read cannot both answer. Null for everything
+     * a turn did not write.
+     */
+    turnKey?: string | null
     redaction: RedactionOptions
   },
 ): Promise<{ id: string; message: NormalizedMessage; text: string; duplicate: boolean }> {
@@ -466,6 +478,7 @@ export async function storeMessage(
       platformMessageId: input.platformMessageId ?? null,
       status: input.status ?? 'sent',
       aiTraceId: input.aiTraceId ?? null,
+      turnKey: input.turnKey ?? null,
     })
     .onConflictDoNothing()
     .returning({ id: schema.messages.id })
@@ -550,7 +563,7 @@ export async function loadTurnContext(
 }
 
 export async function updateConversation(
-  db: Database,
+  db: Executor,
   workspaceId: string,
   conversationId: string,
   patch: Partial<typeof schema.conversations.$inferInsert>,

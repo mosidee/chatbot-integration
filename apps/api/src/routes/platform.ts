@@ -180,7 +180,7 @@ export function platformRoutes(ctx: ApiContext) {
             return status(400, { error: 'Type the workspace slug to confirm' })
           }
 
-          const queued = await requestWorkspaceErasure(db, runtime.queues, {
+          const queued = await requestWorkspaceErasure(db, runtime.outbox, {
             workspaceId: params.id,
             actorUserId: user.id,
           })

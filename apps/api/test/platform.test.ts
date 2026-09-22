@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { loadEnv } from '@ci/config'
 import { grantPlatformAdmin, schema } from '@ci/db'
+import { relayOnce } from '@ci/infra'
 import { eq } from 'drizzle-orm'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
@@ -182,6 +183,9 @@ describe('deleting a tenant', () => {
     expect(record[0]?.slug).toBe(slug)
     expect(record[0]?.rowsDeleted).toBe(false)
 
+    // The request writes the job as an outbox row inside the same transaction that marked
+    // the workspace; the worker's relay is what puts it on the queue.
+    await relayOnce(ctx.runtime.db, ctx.runtime.queues)
     const job = await ctx.runtime.queues.workspace_erasure.getJob(`workspace-erasure-${id}`)
     expect(job).toBeTruthy()
     await job?.remove()

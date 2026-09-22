@@ -157,7 +157,7 @@ describe('erasing a workspace', () => {
     const fixture = await createFixture()
     const { runtime, workspaceId } = fixture
 
-    const queued = await requestWorkspaceErasure(runtime.db, runtime.queues, {
+    const queued = await requestWorkspaceErasure(runtime.db, runtime.outbox, {
       workspaceId,
       actorUserId: null,
     })
@@ -222,7 +222,7 @@ describe('erasing a workspace', () => {
     const fixture = await createFixture()
     const { runtime, workspaceId } = fixture
 
-    await requestWorkspaceErasure(runtime.db, runtime.queues, { workspaceId, actorUserId: null })
+    await requestWorkspaceErasure(runtime.db, runtime.outbox, { workspaceId, actorUserId: null })
     await eraseWorkspace(runtime.db, runtime.blob, { workspaceId, logger: runtime.logger })
 
     // The retry finds the rows deleted and no media left, and neither throws nor duplicates.

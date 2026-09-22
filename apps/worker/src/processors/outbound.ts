@@ -1,5 +1,5 @@
 import { splitText } from '@ci/channels'
-import type { EffectPorts, Logger } from '@ci/core'
+import { aiMaySend, type EffectPorts, type Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
 import { customerLanguage, loadChannel, withMediaLinks, workspaceIsWorkable } from '@ci/infra'
@@ -39,7 +39,57 @@ export async function processOutbound(
     logger.warn('outbound message vanished', { messageId: job.messageId })
     return
   }
-  if (message.status === 'sent' || message.status === 'delivered') return
+  /**
+   * `read` belongs here too. Receipts only ever raise a status, so a message the customer
+   * has already opened is as sent as one can be — and leaving it out meant a retry sent it
+   * to them a second time.
+   */
+  if (message.status === 'sent' || message.status === 'delivered' || message.status === 'read') {
+    return
+  }
+
+  /**
+   * An AI reply a human has since overtaken is not delivered.
+   *
+   * The turn checks the mode before it stores the reply, but this job can sit in the queue
+   * behind others, and a colleague who took the conversation over in between has answered
+   * the customer themselves by now. Only the AI's own words are held back: a human's
+   * message and a system acknowledgement were never subject to the rule.
+   */
+  if (message.senderType === 'ai') {
+    const modeRows = await db
+      .select({ mode: schema.conversations.mode })
+      .from(schema.conversations)
+      .where(
+        and(
+          eq(schema.conversations.id, job.conversationId),
+          eq(schema.conversations.workspaceId, job.workspaceId),
+        ),
+      )
+      .limit(1)
+    const mode = modeRows[0]?.mode
+    if (mode !== undefined && !aiMaySend(mode)) {
+      logger.info('an AI reply was not delivered: a human took the conversation over', {
+        conversationId: job.conversationId,
+        messageId: message.id,
+        mode,
+      })
+      await db
+        .update(schema.messages)
+        .set({ status: 'failed', error: 'A human took over before delivery' })
+        .where(eq(schema.messages.id, message.id))
+      await publisher
+        .publish(job.workspaceId, {
+          type: 'message.updated',
+          conversationId: job.conversationId,
+          messageId: message.id,
+        })
+        .catch(() => {
+          // The row is already right; the console will catch up on its next poll.
+        })
+      return
+    }
+  }
 
   const conversationRows = await db
     .select()
@@ -68,15 +118,43 @@ export async function processOutbound(
 
   const replyToken = replyTokenIsFresh ? conversation.replyToken : null
 
-  // Cleared before the attempt, not after it. A reply token is single-use whatever the
-  // outcome, so clearing it on success only would leave a spent token behind for the retry
-  // to present again, and LINE would reject it again.
+  /**
+   * Claimed before the attempt, not cleared after it.
+   *
+   * A reply token is single-use whatever the outcome, so releasing it only on success would
+   * leave a spent token for the retry to present again. And the claim is conditional on the
+   * token still being the one that was read: two jobs for one conversation — a reply and a
+   * verification link, say — would otherwise both present it, and LINE would reject the
+   * second.
+   */
+  let claimedToken: string | null = null
   if (replyToken) {
-    await db
+    const claimed = await db
       .update(schema.conversations)
       .set({ replyToken: null, replyTokenExpiresAt: null })
-      .where(eq(schema.conversations.id, conversation.id))
+      .where(
+        and(
+          eq(schema.conversations.id, conversation.id),
+          eq(schema.conversations.replyToken, replyToken),
+        ),
+      )
+      .returning({ id: schema.conversations.id })
+    if (claimed.length > 0) claimedToken = replyToken
   }
+
+  const announce = () =>
+    publisher
+      .publish(job.workspaceId, {
+        type: 'message.updated',
+        conversationId: job.conversationId,
+        messageId: message.id,
+      })
+      .catch((error: unknown) => {
+        logger.warn('could not announce a delivery outcome', {
+          messageId: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
 
   try {
     /**
@@ -106,28 +184,36 @@ export async function processOutbound(
       : undefined
 
     const parts = toSendableParts(outbound, adapter.capabilities.maxTextLength)
-    let lastPlatformId: string | null = null
+    let lastPlatformId: string | null = message.platformMessageId
 
+    /**
+     * Resume where the last attempt stopped.
+     *
+     * Long text goes out as several sends, and a failure on the third used to start the
+     * retry at the first: the customer read the opening of the message twice. Each part is
+     * checkpointed as the platform takes it.
+     */
     for (const [index, part] of parts.entries()) {
+      if (index < message.sentParts) continue
+
       const result = await adapter.send(identity.externalId, part, config, {
         messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
         ...(language ? { language } : {}),
         // Only the first part can use the token; the rest are pushes.
-        ...(index === 0 && replyToken ? { replyToken } : {}),
+        ...(index === 0 && claimedToken ? { replyToken: claimedToken } : {}),
       })
       lastPlatformId = result.platformMessageId
+
+      await db
+        .update(schema.messages)
+        .set({ sentParts: index + 1, platformMessageId: lastPlatformId })
+        .where(eq(schema.messages.id, message.id))
     }
 
     await db
       .update(schema.messages)
       .set({ status: 'sent', platformMessageId: lastPlatformId, error: null })
       .where(eq(schema.messages.id, message.id))
-
-    await publisher.publish(job.workspaceId, {
-      type: 'message.updated',
-      conversationId: job.conversationId,
-      messageId: message.id,
-    })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     await db
@@ -135,13 +221,18 @@ export async function processOutbound(
       .set({ status: 'failed', error: reason })
       .where(eq(schema.messages.id, message.id))
 
-    await publisher.publish(job.workspaceId, {
-      type: 'message.updated',
-      conversationId: job.conversationId,
-      messageId: message.id,
-    })
+    await announce()
     throw error
   }
+
+  /**
+   * Telling the console is not part of delivering.
+   *
+   * This used to sit inside the try above, so a Redis hiccup after a successful send marked
+   * the message failed and threw — and the retry sent the customer the same words again.
+   * Delivery state is decided by the platform's answer and nothing else.
+   */
+  await announce()
 }
 
 /** Split only text; other kinds go out as one message. */

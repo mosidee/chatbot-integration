@@ -396,10 +396,34 @@ export const messages = pgTable(
     status: messageStatusEnum('status').notNull().default('sent'),
     error: text('error'),
     aiTraceId: text('ai_trace_id'),
+    /**
+     * The AI turn that wrote this reply, stable across every retry of that turn.
+     *
+     * A turn is queued per customer message and its BullMQ job id is derived from that
+     * message, so a retry carries the same key. Finding a row with it means an earlier
+     * attempt already called the model and already answered: the turn resumes at delivery
+     * instead of paying for a second answer and sending the customer two.
+     */
+    turnKey: text('turn_key'),
+    /**
+     * How many parts of a split message the platform has taken.
+     *
+     * Long text goes out as several sends. Without a checkpoint a failure on part three
+     * meant the retry began again at part one, and the customer read the opening twice.
+     */
+    sentParts: integer('sent_parts').notNull().default(0),
     createdAt: ts('created_at').defaultNow().notNull(),
   },
   (t) => [
     index('messages_conversation_idx').on(t.conversationId, t.createdAt),
+    /**
+     * One reply per AI turn, enforced rather than merely intended.
+     *
+     * The turn reads this key before calling the model, which catches the ordinary retry.
+     * This catches the race the read cannot: two attempts of the same job in flight at
+     * once, both past the read, both about to answer.
+     */
+    uniqueIndex('messages_turn_key_uq').on(t.workspaceId, t.turnKey),
     /** The review queue asks "is there an AI message here, and a human one?" per conversation. */
     index('messages_conversation_sender_idx').on(t.conversationId, t.senderType, t.createdAt),
     index('messages_workspace_idx').on(t.workspaceId),

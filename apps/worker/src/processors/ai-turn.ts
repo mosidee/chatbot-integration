@@ -34,15 +34,23 @@ import {
   workspaceIsWorkable,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 /**
  * Run one AI turn and deliver the outcome.
  *
- * The mode is re-read here, not trusted from the job payload. A human may have taken the
- * conversation over in the seconds between enqueueing and running, and the rule that the
- * AI never sends while a human owns the conversation has to hold at the moment of sending,
- * not the moment of deciding.
+ * The mode is read three times, and that is the point. A model call takes seconds, and a
+ * colleague can take the conversation over during any of them — so it is checked before the
+ * call is worth making, again before the tenant's own systems are written to, and again
+ * before the reply is stored and queued. The rule is that the AI never sends while a human
+ * owns the conversation, and it has to hold at the moment of sending rather than the moment
+ * of deciding. Until recently only the first check existed, and the comment here claimed
+ * otherwise.
+ *
+ * The turn is also idempotent. Its job id is the customer message that prompted it, written
+ * onto the reply as `turn_key`, so a retry that finds one knows an earlier attempt already
+ * answered: it resumes at delivery rather than paying for a second answer and sending the
+ * customer two.
  */
 export async function processAiTurn(
   runtime: Runtime,
@@ -51,7 +59,7 @@ export async function processAiTurn(
   job: AiTurnJob,
   meta?: JobMeta,
 ): Promise<void> {
-  const { db, env, publisher, queues } = runtime
+  const { db, env, publisher } = runtime
 
   const context = await loadTurnContext(db, job.workspaceId, job.conversationId)
   if (!context) {
@@ -75,17 +83,70 @@ export async function processAiTurn(
   const settings = workspace.settings
   const { conversation, customer, notes, recentMessages } = context
 
-  // The last line of defence for the product's central rule.
+  // The first of three. Cheapest to ask before a model is called at all.
   if (job.deliver === 'send' && !aiMaySend(conversation.mode)) {
     logger.info('AI turn abandoned: a human owns the conversation', {
       conversationId: job.conversationId,
       mode: conversation.mode,
     })
-    await queues.suggestion.add('run', {
-      workspaceId: job.workspaceId,
-      conversationId: job.conversationId,
-    })
+    await suggestInstead(runtime, job)
     return
+  }
+
+  /**
+   * Did an earlier attempt of this same turn already answer?
+   *
+   * The job id is stable across retries, so a reply carrying it means the model has already
+   * been called and the customer already has an answer — or is about to, if the failure was
+   * in queueing delivery. Either way the work owed is delivery, not another turn. Without
+   * this a throw anywhere after the reply was stored bought a second model call, a second
+   * reply to the customer and a second pass over the tenant's writes.
+   */
+  const turnKey = meta?.jobId ?? null
+  if (turnKey) {
+    const already = await db
+      .select({ id: schema.messages.id })
+      .from(schema.messages)
+      .where(
+        and(eq(schema.messages.workspaceId, job.workspaceId), eq(schema.messages.turnKey, turnKey)),
+      )
+      .limit(1)
+    const answered = already[0]
+    if (answered) {
+      logger.info('AI turn already answered on an earlier attempt; delivering only', {
+        conversationId: job.conversationId,
+        messageId: answered.id,
+      })
+      await runtime.outbox.enqueue(db, {
+        queue: 'outbound',
+        name: 'send',
+        workspaceId: job.workspaceId,
+        payload: {
+          workspaceId: job.workspaceId,
+          conversationId: job.conversationId,
+          messageId: answered.id,
+        },
+        jobId: `outbound-${answered.id}`,
+      })
+      return
+    }
+  }
+
+  /** Is the AI still the one answering? Asked again where it matters. */
+  const stillAiOwned = async (): Promise<boolean> => {
+    if (job.deliver !== 'send') return true
+    const rows = await db
+      .select({ mode: schema.conversations.mode })
+      .from(schema.conversations)
+      .where(
+        and(
+          eq(schema.conversations.id, job.conversationId),
+          eq(schema.conversations.workspaceId, job.workspaceId),
+        ),
+      )
+      .limit(1)
+    const mode = rows[0]?.mode
+    return mode !== undefined && aiMaySend(mode)
   }
 
   const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
@@ -109,7 +170,7 @@ export async function processAiTurn(
   const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
   const bound = boundIdentityFor(context, settings)
   // Stable across a retry of this job, so a write that is sent twice carries one key.
-  const turnKey = meta?.jobId ?? `turn-${job.conversationId}-${Date.now()}`
+  const writeKey = turnKey ?? `turn-${job.conversationId}-${Date.now()}`
 
   // Retrieval is bound to this workspace, customer and conversation before the model sees
   // it, so the tools it is offered cannot widen their own scope.
@@ -170,7 +231,7 @@ export async function processAiTurn(
     prices: aiConfig.prices,
     mode: job.deliver === 'draft' ? 'suggest' : 'answer',
     bound,
-    turnKey,
+    turnKey: writeKey,
     logger,
     toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
     // Offered only where it can actually be honoured. `draft` is excluded because that
@@ -228,6 +289,20 @@ export async function processAiTurn(
   // stored. A customer must never read "done" for something that then failed, so a failed
   // write discards the reply and fetches a person instead.
   if (result.pendingWrites.length > 0) {
+    /**
+     * The second check, and the one with teeth. Everything past here changes something in
+     * the tenant's own systems, and a colleague who took the conversation over during the
+     * model call has not agreed to any of it.
+     */
+    if (!(await stillAiOwned())) {
+      logger.info('a human took over during the turn; the writes were not carried out', {
+        conversationId: job.conversationId,
+        tools: result.pendingWrites.map((write) => write.tool),
+      })
+      await suggestInstead(runtime, job)
+      return
+    }
+
     const outcome = await runPendingWrites(toolDefinitions, result.pendingWrites, bound, runtime)
     if (outcome.failed) {
       logger.warn('a tenant tool write failed; the reply was held back', {
@@ -294,23 +369,78 @@ export async function processAiTurn(
     return
   }
 
-  const stored = await storeMessage(db, {
-    workspaceId: job.workspaceId,
-    conversationId: job.conversationId,
-    direction: 'outbound',
-    senderType: 'ai',
-    message: { kind: 'text', text: result.text },
-    status: 'queued',
-    aiTraceId: traceId,
-    redaction: settings.redaction,
-  })
+  /**
+   * The third check, immediately before the reply becomes real.
+   *
+   * A human who took over while the model was writing has answered the customer themselves
+   * by now. Sending on top of them is the thing the product's central rule exists to stop,
+   * and the gap between deciding and sending is exactly where it used to be possible.
+   */
+  if (!(await stillAiOwned())) {
+    logger.info('a human took over during the turn; the reply was not sent', {
+      conversationId: job.conversationId,
+      wrote: result.pendingWrites.map((write) => write.tool),
+    })
+    await suggestInstead(runtime, job)
+    return
+  }
 
-  await updateConversation(db, job.workspaceId, job.conversationId, { lastMessageAt: new Date() })
+  /**
+   * Stored, dated and queued as one commit.
+   *
+   * A reply in the thread that nothing was told to deliver is a customer waiting on an
+   * answer everybody else believes was given. `turnKey` goes on the row here; the unique
+   * index behind it is what stops two attempts of the same job both answering.
+   */
+  await db.transaction(async (tx) => {
+    const message = await storeMessage(tx, {
+      workspaceId: job.workspaceId,
+      conversationId: job.conversationId,
+      direction: 'outbound',
+      senderType: 'ai',
+      message: { kind: 'text', text: result.text },
+      status: 'queued',
+      aiTraceId: traceId,
+      turnKey,
+      redaction: settings.redaction,
+    })
 
-  await queues.outbound.add('send', {
-    workspaceId: job.workspaceId,
-    conversationId: job.conversationId,
-    messageId: stored.id,
+    /**
+     * The index caught what the read at the top of this function could not: two attempts
+     * of this job in flight at once, both past that read. The insert did nothing, so the
+     * id in hand names no row — the reply that exists is the other attempt's, and delivery
+     * is what is owed for it.
+     */
+    let messageId = message.id
+    if (message.duplicate && turnKey) {
+      const winner = await tx
+        .select({ id: schema.messages.id })
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.workspaceId, job.workspaceId),
+            eq(schema.messages.turnKey, turnKey),
+          ),
+        )
+        .limit(1)
+      if (winner[0]) messageId = winner[0].id
+    }
+
+    await updateConversation(tx, job.workspaceId, job.conversationId, {
+      lastMessageAt: new Date(),
+    })
+
+    await runtime.outbox.enqueue(tx, {
+      queue: 'outbound',
+      name: 'send',
+      workspaceId: job.workspaceId,
+      payload: {
+        workspaceId: job.workspaceId,
+        conversationId: job.conversationId,
+        messageId,
+      },
+      jobId: `outbound-${messageId}`,
+    })
   })
 
   // Queued after the reply so the customer is told why before being handed a login
@@ -353,6 +483,27 @@ export async function processAiTurn(
       )
     }
   }
+}
+
+/**
+ * Hand what the AI wrote to a person instead of the customer.
+ *
+ * Used wherever a turn stops because a colleague has taken the conversation over. The
+ * suggestion is keyed on the same customer message, so the person sees one draft however
+ * many times the job was retried.
+ */
+async function suggestInstead(runtime: Runtime, job: AiTurnJob): Promise<void> {
+  await runtime.outbox.enqueue(runtime.db, {
+    queue: 'suggestion',
+    name: 'run',
+    workspaceId: job.workspaceId,
+    payload: {
+      workspaceId: job.workspaceId,
+      conversationId: job.conversationId,
+      ...(job.triggerMessageId ? { triggerMessageId: job.triggerMessageId } : {}),
+    },
+    ...(job.triggerMessageId ? { jobId: `suggestion-${job.triggerMessageId}` } : {}),
+  })
 }
 
 async function handOff(

@@ -26,8 +26,20 @@ import type { ApiContext } from '../context'
 export function knowledgeRoutes(ctx: ApiContext) {
   const { db, env, runtime } = ctx
 
+  /**
+   * No stable job id on purpose.
+   *
+   * Every edit owes a fresh pass over the source, so collapsing two re-ingests would leave
+   * the index describing a version nobody can see any more. The row's own id is used, which
+   * is still stable across relay attempts of that one request.
+   */
   const enqueueIngest = (workspaceId: string, sourceId: string) =>
-    runtime.queues.knowledge_ingest.add('ingest', { workspaceId, sourceId })
+    runtime.outbox.enqueue(db, {
+      queue: 'knowledge_ingest',
+      name: 'ingest',
+      workspaceId,
+      payload: { workspaceId, sourceId },
+    })
 
   return (
     new Elysia({ prefix: '/knowledge' })

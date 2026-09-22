@@ -64,6 +64,13 @@
       "when": 1790052579351,
       "tag": "0008_supreme_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790092305479,
+      "tag": "0009_acoustic_killer_shrike",
+      "breakpoints": true
     }
   ]
 }

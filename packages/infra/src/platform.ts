@@ -1,7 +1,7 @@
 import { type Database, type Executor, newId, schema } from '@ci/db'
 import type { WorkspaceStatus } from '@ci/shared'
 import { count, desc, eq, sql } from 'drizzle-orm'
-import type { Queues } from './queues'
+import type { Outbox } from './outbox'
 
 /**
  * Running the platform: the tenants on it, and what may be done to them.
@@ -125,7 +125,7 @@ export async function unsuspendWorkspace(
  */
 export async function requestWorkspaceErasure(
   db: Database,
-  queues: Queues,
+  outbox: Outbox,
   input: { workspaceId: string; actorUserId: string | null },
 ): Promise<boolean> {
   const queued = await db.transaction(async (tx) => {
@@ -163,17 +163,24 @@ export async function requestWorkspaceErasure(
       meta: { slug: details.slug, name: details.name },
     })
 
+    /**
+     * Inside the transaction that set the status, which is what makes the request
+     * answerable a second time. Enqueued afterwards, a Redis failure left the workspace
+     * marked `deleting` with no job coming and no way to ask again: the status said
+     * somebody already had.
+     */
+    await outbox.enqueue(tx, {
+      queue: 'workspace_erasure',
+      name: 'erase',
+      workspaceId: input.workspaceId,
+      payload: { workspaceId: input.workspaceId, requestedByUserId: input.actorUserId },
+      jobId: `workspace-erasure-${input.workspaceId}`,
+    })
+
     return true
   })
 
-  if (!queued) return false
-
-  await queues.workspace_erasure.add(
-    'erase',
-    { workspaceId: input.workspaceId, requestedByUserId: input.actorUserId },
-    { jobId: `workspace-erasure-${input.workspaceId}` },
-  )
-  return true
+  return queued
 }
 
 /** Whether an erasure is on record, which is what the worker asks before it deletes. */

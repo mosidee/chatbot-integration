@@ -12,6 +12,17 @@ import type { HandoffReason, Language, NormalizedMessage } from '@ci/shared'
 export type EffectContext = {
   workspaceId: string
   conversationId: string
+  /**
+   * The customer message this work answers, where there is one.
+   *
+   * Carried so the queue can name a job after it. A retry of the same turn is then the same
+   * job rather than a second answer, and the processor can tell that an earlier attempt
+   * already replied. A plain string, because `packages/core` describes what the domain
+   * needs and knows nothing about queues.
+   */
+  triggerMessageId?: string
+  /** An explicit key where no message prompted the work, such as a completed identity proof. */
+  turnKey?: string
 }
 
 export type NotifyReason = 'handoff' | 'draft_ready' | 'timeout'

@@ -2,7 +2,7 @@ import { loadEnv } from '@ci/config'
 import type { SlotConfig } from '@ci/core'
 import { defaultWorkspaceSettings, encryptJson, encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
-import { createRuntime, type Runtime } from '@ci/infra'
+import { createRuntime, type Runtime, relayOnce } from '@ci/infra'
 import type { HttpToolConfig, WorkspaceStatus } from '@ci/shared'
 import type { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
@@ -263,8 +263,17 @@ export async function createFixture(options: {
   }
 }
 
-/** Drain a BullMQ queue's pending jobs, returning their payloads. */
-export async function drainQueue<T>(queue: Queue): Promise<T[]> {
+/**
+ * Drain a BullMQ queue's pending jobs, returning their payloads.
+ *
+ * Relays first, because nothing writes to a queue directly any more: work is promised as an
+ * outbox row inside the transaction that made it necessary, and the worker's relay moves it
+ * across. A test that looked straight at the queue would see an empty one and conclude that
+ * nothing had been asked for. `relayOnce` is what the running worker does on a timer; here
+ * it is called at the moment the test wants the answer.
+ */
+export async function drainQueue<T>(f: Fixture, queue: Queue): Promise<T[]> {
+  await relayOnce(f.runtime.db, f.runtime.queues)
   const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized'])
   const payloads = jobs.map((job) => job.data as T)
   await Promise.all(jobs.map((job) => job.remove().catch(() => {})))
