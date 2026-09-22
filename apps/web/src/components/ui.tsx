@@ -146,7 +146,7 @@ export function ChannelBadge({
 
 export function Spinner({ label }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
+    <div role="status" className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
       <span
         className="size-4 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--color-brand-500)]"
         aria-hidden
@@ -167,10 +167,78 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
 
 export function ErrorNote({ message }: { message: string }) {
   return (
-    <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+    // `alert`, so a failure announces itself. Several of these render far from whatever the
+    // person just pressed, and somebody using a screen reader would otherwise press Save
+    // and hear nothing at all.
+    <div
+      role="alert"
+      className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
+    >
       {message}
     </div>
   )
+}
+
+/**
+ * The few glyphs this console needs, drawn inline.
+ *
+ * No icon library: seven shapes do not justify a dependency, and these inherit `currentColor`
+ * so they follow whatever text colour they sit in. Every one of them is decorative — the
+ * button around it carries the name — hence `aria-hidden` throughout.
+ */
+const ICON_PATHS: Record<string, string> = {
+  back: 'M10 4 4 10l6 6M4 10h12',
+  close: 'M5 5l10 10M15 5 5 15',
+  attach: 'M13 7.5 8.6 12a2 2 0 0 0 2.8 2.8l4.6-4.6a3.5 3.5 0 0 0-5-5l-5 5a5 5 0 0 0 7 7',
+  sparkle: 'M10 3l1.8 4.2L16 9l-4.2 1.8L10 15l-1.8-4.2L4 9l4.2-1.8z',
+  check: 'M4 10.5 8 14.5 16 5.5',
+  more: 'M5 10h.01M10 10h.01M15 10h.01',
+}
+
+export function Icon({ name, className }: { name: keyof typeof ICON_PATHS; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className={cn('size-4 shrink-0', className)}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={ICON_PATHS[name]} />
+    </svg>
+  )
+}
+
+/**
+ * The day a run of messages belongs to.
+ *
+ * A thread can run for months, and every bubble showed only a clock time — so a reply from
+ * March and one from this morning were indistinguishable at a glance. "Today" and
+ * "Yesterday" rather than a date for the two days an agent is usually reading.
+ */
+export function dayLabel(iso: string, language: string): string {
+  const date = new Date(iso)
+  const midnight = (value: Date) =>
+    new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+  const days = Math.round((midnight(new Date()) - midnight(date)) / 86_400_000)
+
+  if (days === 0 || days === 1) {
+    return new Intl.RelativeTimeFormat(language, { numeric: 'auto' }).format(-days, 'day')
+  }
+  return new Intl.DateTimeFormat(language, {
+    day: 'numeric',
+    month: 'short',
+    ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' }),
+  }).format(date)
+}
+
+/** True when two instants fall on different calendar days, in the reader's own timezone. */
+export function isNewDay(previous: string | null, current: string): boolean {
+  if (!previous) return true
+  return new Date(previous).toDateString() !== new Date(current).toDateString()
 }
 
 /** Relative time that stays readable in a dense list. */

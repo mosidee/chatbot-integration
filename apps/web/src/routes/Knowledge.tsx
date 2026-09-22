@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import {
   Button,
   Card,
+  ConfirmButton,
   cn,
   EmptyState,
   ErrorNote,
@@ -115,9 +116,12 @@ function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: ()
         <Button size="sm" variant="ghost" onClick={() => reindex.mutate()}>
           {t('knowledge.reindex')}
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => remove.mutate()}>
-          ✕
-        </Button>
+        <ConfirmButton
+          testId={`knowledge-remove-${source.id}`}
+          label={t('common.remove')}
+          armedLabel={t('common.removeConfirm')}
+          onConfirm={() => remove.mutate()}
+        />
       </div>
 
       {source.error ? (

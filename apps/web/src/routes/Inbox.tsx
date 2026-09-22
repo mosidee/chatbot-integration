@@ -18,10 +18,13 @@ import {
   Button,
   ChannelBadge,
   cn,
+  dayLabel,
   EmptyState,
   ErrorNote,
   formatTime,
+  Icon,
   Input,
+  isNewDay,
   Label,
   ModeBadge,
   Spinner,
@@ -326,6 +329,8 @@ function ConversationPane({
    */
   const [insertedSuggestionId, setInsertedSuggestionId] = useState<string | null>(null)
   const [showSidebar, setShowSidebar] = useState(false)
+  const [returning, setReturning] = useState(false)
+  const [returnNote, setReturnNote] = useState('')
   const [promoting, setPromoting] = useState<Message | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement>(null)
@@ -527,13 +532,20 @@ function ConversationPane({
 
   const mode = data.conversation.mode
   const isHumanOwned = mode === 'human'
+  const threadItems = buildThread(data)
 
   return (
     <div className="flex min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3">
-          <Button size="sm" variant="ghost" className="md:hidden" onClick={onBack}>
-            ←
+          <Button
+            size="sm"
+            variant="ghost"
+            className="md:hidden"
+            aria-label={t('conversation.backToList')}
+            onClick={onBack}
+          >
+            <Icon name="back" />
           </Button>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -551,14 +563,19 @@ function ConversationPane({
             </div>
             {data.conversation.handoffReason ? (
               <span className="text-[11px] text-[var(--text-muted)]">
-                {t('conversation.handoffReason')}: {data.conversation.handoffReason}
+                {t('conversation.handoffReason')}:{' '}
+                {t(`conversation.handoffReasons.${data.conversation.handoffReason}`)}
               </span>
             ) : null}
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
             {isHumanOwned ? (
-              <Button size="sm" data-testid="return-to-ai" onClick={() => returnToAi.mutate('')}>
+              <Button
+                size="sm"
+                data-testid="return-to-ai"
+                onClick={() => setReturning((open) => !open)}
+              >
                 {t('conversation.returnToAi')}
               </Button>
             ) : (
@@ -586,12 +603,53 @@ function ConversationPane({
               size="sm"
               variant="ghost"
               className="lg:hidden"
+              data-testid="toggle-ai-panel"
+              aria-expanded={showSidebar}
+              aria-label={t('sidebar.title')}
               onClick={() => setShowSidebar((v) => !v)}
             >
-              AI
+              <Icon name="sparkle" />
             </Button>
           </div>
         </header>
+
+        {returning ? (
+          /**
+           * What to tell the AI on the way back.
+           *
+           * The string for this existed and nothing collected it: returning always passed
+           * an empty note, so whatever the colleague had just sorted out was invisible to
+           * the next turn and it could contradict them.
+           */
+          <div className="shrink-0 space-y-2 border-b border-[var(--border)] bg-[var(--surface-muted)] p-3">
+            <Label htmlFor="return-note">{t('conversation.returnNote')}</Label>
+            <Textarea
+              id="return-note"
+              rows={2}
+              data-testid="return-note"
+              value={returnNote}
+              onChange={(event) => setReturnNote(event.target.value)}
+            />
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                data-testid="return-to-ai-confirm"
+                disabled={returnToAi.isPending}
+                onClick={() => {
+                  returnToAi.mutate(returnNote.trim())
+                  setReturnNote('')
+                  setReturning(false)
+                }}
+              >
+                {t('conversation.returnToAi')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setReturning(false)}>
+                {t('common.cancel')}
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         <div
           ref={threadRef}
@@ -616,50 +674,66 @@ function ConversationPane({
               </Button>
             </div>
           ) : null}
-          {data.messages.length === 0 ? (
+          {threadItems.length === 0 ? (
             <EmptyState title={t('conversation.noMessages')} />
           ) : (
-            data.messages.map((message) => (
-              <Bubble
-                key={message.id}
-                message={message}
-                onPromote={
-                  message.direction === 'outbound' && message.text
-                    ? () => setPromoting(message)
-                    : undefined
-                }
-                feedback={{
-                  mine: mineFor('message', message.id),
-                  canWrite,
-                  onRate: (rating, reason, note) =>
-                    rate.mutate({
-                      targetType: 'message',
-                      targetId: message.id,
-                      rating,
-                      reason,
-                      note,
-                    }),
-                  onRemove: () => {
-                    const mine = mineFor('message', message.id)
-                    if (mine) unrate.mutate(mine.id)
-                  },
-                }}
-              />
+            threadItems.map((item, index) => (
+              <div key={item.key} className="contents">
+                {/* A thread can run for months and every bubble showed only a clock time,
+                    so March and this morning were indistinguishable at a glance. */}
+                {isNewDay(threadItems[index - 1]?.at ?? null, item.at) ? (
+                  <div className="flex justify-center py-1">
+                    <span className="rounded-full bg-[var(--surface-muted)] px-2.5 py-0.5 text-[11px] text-[var(--text-muted)]">
+                      {dayLabel(item.at, i18n.language)}
+                    </span>
+                  </div>
+                ) : null}
+
+                {item.kind === 'note' ? (
+                  <div className="mx-auto max-w-lg rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-1.5 text-[13px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                    <span className="font-medium">{t('conversation.internalNote')}: </span>
+                    {item.note.body}
+                  </div>
+                ) : (
+                  <Bubble
+                    message={item.message}
+                    onPromote={
+                      item.message.direction === 'outbound' && item.message.text
+                        ? () => setPromoting(item.message)
+                        : undefined
+                    }
+                    feedback={{
+                      mine: mineFor('message', item.message.id),
+                      canWrite,
+                      onRate: (rating, reason, note) =>
+                        rate.mutate({
+                          targetType: 'message',
+                          targetId: item.message.id,
+                          rating,
+                          reason,
+                          note,
+                        }),
+                      onRemove: () => {
+                        const mine = mineFor('message', item.message.id)
+                        if (mine) unrate.mutate(mine.id)
+                      },
+                    }}
+                  />
+                )}
+              </div>
             ))
           )}
-          {data.notes.map((note) => (
-            <div
-              key={note.id}
-              className="mx-auto max-w-lg rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-1.5 text-[13px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-            >
-              <span className="font-medium">{t('conversation.internalNote')}: </span>
-              {note.body}
-            </div>
-          ))}
           <div ref={bottomRef} />
         </div>
 
-        <footer className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] p-2">
+        <footer
+          className={cn(
+            'shrink-0 border-t border-[var(--border)] bg-[var(--surface)] p-2',
+            // The panel covers the thread below `lg`, and a Send button floating over
+            // somebody's customer record is worse than no Send button at all.
+            showSidebar ? 'hidden lg:block' : '',
+          )}
+        >
           {attachment ? (
             <div
               data-testid="composer-attachment"
@@ -681,6 +755,7 @@ function ConversationPane({
                 size="sm"
                 variant="ghost"
                 data-testid="remove-attachment"
+                aria-label={t('common.remove')}
                 onClick={clearAttachment}
               >
                 ✕
@@ -709,10 +784,12 @@ function ConversationPane({
             <Button
               variant="secondary"
               data-testid="attach"
+              aria-label={t('conversation.attach')}
+              title={t('conversation.attach')}
               disabled={upload.isPending || send.isPending}
               onClick={() => fileInput.current?.click()}
             >
-              {upload.isPending ? t('common.loading') : t('conversation.attach')}
+              {upload.isPending ? <Spinner /> : <Icon name="attach" />}
             </Button>
             <Textarea
               rows={2}
@@ -726,16 +803,18 @@ function ConversationPane({
                 if (!next.trim()) setInsertedSuggestionId(null)
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && draft.trim()) {
-                  e.preventDefault()
-                  send.mutate({ text: draft.trim(), ...fromSuggestion() })
-                }
+                if (e.key !== 'Enter' || e.shiftKey) return
+                e.preventDefault()
+                // Enter used to send whatever was typed even while a file was still
+                // uploading, so the note went and the attachment did not.
+                if (!canSend || send.isPending || upload.isPending) return
+                send.mutate({ text: draft.trim(), ...fromSuggestion() })
               }}
             />
             <Button
               variant="primary"
               data-testid="send"
-              disabled={!canSend || send.isPending}
+              disabled={!canSend || send.isPending || upload.isPending}
               onClick={() => send.mutate({ text: draft.trim(), ...fromSuggestion() })}
             >
               {t('conversation.send')}
@@ -751,6 +830,7 @@ function ConversationPane({
       <AiSidebar
         detail={data}
         className={cn(showSidebar ? 'flex' : 'hidden', 'lg:flex')}
+        onClose={() => setShowSidebar(false)}
         language={i18n.language}
         canWrite={canWrite}
         feedbackFor={(suggestionId) => mineFor('suggestion', suggestionId)}
@@ -775,6 +855,43 @@ function ConversationPane({
       />
     </div>
   )
+}
+
+/**
+ * One item in the thread: a message, or an internal note written at that moment.
+ *
+ * Notes used to render in a block after every message, so a note written on the first day
+ * sat below this morning's reply and read as a comment on it. Interleaving puts each one
+ * where it was actually written, which is the only position that explains anything.
+ */
+type ThreadItem =
+  | { kind: 'message'; key: string; at: string; message: Message }
+  | { kind: 'note'; key: string; at: string; note: ConversationDetail['notes'][number] }
+
+function buildThread(data: ConversationDetail): ThreadItem[] {
+  const messages: ThreadItem[] = data.messages.map((message) => ({
+    kind: 'message',
+    key: `m-${message.id}`,
+    at: message.createdAt,
+    message,
+  }))
+
+  /**
+   * Notes are not windowed by the endpoint, but messages are.
+   *
+   * So a note older than the oldest loaded message has nothing to sit beside: placing it by
+   * its timestamp would put it above the first bubble, where it reads as the beginning of
+   * the conversation. It is held back until somebody scrolls far enough up for its
+   * surroundings to exist. Once the whole thread is loaded, every note is shown.
+   */
+  const oldestLoaded = data.messages[0]?.createdAt
+  const clamp = data.hasMoreMessages && oldestLoaded ? Date.parse(oldestLoaded) : null
+
+  const notes: ThreadItem[] = data.notes
+    .filter((note) => clamp === null || Date.parse(note.createdAt) >= clamp)
+    .map((note) => ({ kind: 'note', key: `n-${note.id}`, at: note.createdAt, note }))
+
+  return [...messages, ...notes].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
 }
 
 /** Attachments that made it into storage. Anything still uploading has no key yet. */
@@ -913,6 +1030,7 @@ function Bubble({
 function AiSidebar({
   detail,
   className,
+  onClose,
   language,
   canWrite,
   feedbackFor,
@@ -927,6 +1045,8 @@ function AiSidebar({
 }: {
   detail: ConversationDetail
   className?: string
+  /** Shut the panel again. Only reachable below `lg`, where it covers the thread. */
+  onClose: () => void
   language: string
   canWrite: boolean
   feedbackFor: (suggestionId: string) => Feedback | null
@@ -962,10 +1082,34 @@ function AiSidebar({
   return (
     <aside
       className={cn(
-        'w-full shrink-0 flex-col gap-3 overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-3 lg:w-80',
+        /**
+         * A panel beside the thread on a wide screen, and the whole screen on a phone.
+         *
+         * It used to be an in-flow element that simply took the thread's place, which left
+         * the composer mounted underneath it: the Send button floated over the customer's
+         * details, and the header carrying the only way back scrolled out of reach. Fixed
+         * and full-height, with a close button of its own.
+         */
+        'fixed inset-0 z-30 w-full shrink-0 flex-col gap-3 overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-3',
+        'lg:static lg:inset-auto lg:z-auto lg:w-80',
         className,
       )}
+      data-testid="ai-panel"
     >
+      <div className="sticky -top-3 z-10 -mx-3 -mt-3 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2 lg:hidden">
+        <span className="text-sm font-semibold">{t('sidebar.title')}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto"
+          data-testid="close-ai-panel"
+          aria-label={t('common.close')}
+          onClick={onClose}
+        >
+          <Icon name="close" />
+        </Button>
+      </div>
+
       {detail.inReviewQueue ? (
         <section
           data-testid="review-panel"
@@ -1058,11 +1202,13 @@ function AiSidebar({
             account is only offered once this says yes, so it is worth showing plainly. */}
         <IdentityBadge detail={detail} canWrite={canWrite} />
 
+        {/* A fixed label column and a value that wraps. The label used to shrink with the
+            value, so a Thai key broke one syllable per line while its value truncated. */}
         <dl className="space-y-1 text-[13px]">
           {Object.entries(detail.customer?.fields ?? {}).map(([key, value]) => (
             <div key={key} className="flex gap-2">
-              <dt className="text-[var(--text-muted)]">{key}</dt>
-              <dd className="truncate">{value}</dd>
+              <dt className="w-24 shrink-0 text-[var(--text-muted)]">{fieldLabel(t, key)}</dt>
+              <dd className="min-w-0 flex-1 break-words">{value}</dd>
             </div>
           ))}
         </dl>
@@ -1350,6 +1496,18 @@ function PromoteToKnowledge({ message, onClose }: { message: Message; onClose: (
 }
 
 /**
+ * A customer field's name in the reader's language.
+ *
+ * The five keys the AI may record are a closed set, so they get proper labels. Anything
+ * else — a key a summariser invented, or one from before that set existed — is shown as it
+ * is rather than guessed at.
+ */
+function fieldLabel(t: (key: string) => string, key: string): string {
+  const known = ['phone', 'email', 'order_id', 'account_id', 'company']
+  return known.includes(key) ? t(`sidebar.fields.${key}`) : key
+}
+
+/**
  * Whether this customer was proved, and a way to ask them to prove it.
  *
  * `fields` in the sidebar above is what somebody typed into a chat window. This is what a
@@ -1393,8 +1551,8 @@ function IdentityBadge({ detail, canWrite }: { detail: ConversationDetail; canWr
             <dl className="space-y-0.5 text-[12px]">
               {Object.entries(identity.verifiedAttributes).map(([key, value]) => (
                 <div key={key} className="flex gap-2">
-                  <dt className="text-[var(--text-muted)]">{key}</dt>
-                  <dd className="truncate">{value}</dd>
+                  <dt className="w-24 shrink-0 text-[var(--text-muted)]">{key}</dt>
+                  <dd className="min-w-0 flex-1 break-words">{value}</dd>
                 </div>
               ))}
             </dl>

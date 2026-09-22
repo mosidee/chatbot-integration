@@ -134,7 +134,12 @@ export function Simulator() {
               className="size-12 rounded object-cover"
             />
             <span className="min-w-0 flex-1 truncate text-[13px]">{attachment.fileName}</span>
-            <Button size="sm" variant="ghost" onClick={() => setAttachment(null)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={t('common.remove')}
+              onClick={() => setAttachment(null)}
+            >
               ✕
             </Button>
           </div>

@@ -21,6 +21,7 @@ import {
 import {
   Button,
   Card,
+  ConfirmButton,
   cn,
   EmptyState,
   ErrorNote,
@@ -347,9 +348,12 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
               {t('settings.keySet')}
             </span>
           ) : null}
-          <Button size="sm" variant="ghost" onClick={() => remove.mutate(provider.id)}>
-            ✕
-          </Button>
+          <ConfirmButton
+            testId={`provider-remove-${provider.id}`}
+            label={t('common.remove')}
+            armedLabel={t('common.removeConfirm')}
+            onConfirm={() => remove.mutate(provider.id)}
+          />
         </div>
       ))}
 
@@ -641,9 +645,12 @@ function CannedResponsesCard() {
             /{response.shortcut}
           </code>
           <p className="min-w-0 flex-1 whitespace-pre-wrap text-[13px]">{response.body}</p>
-          <Button size="sm" variant="ghost" onClick={() => remove.mutate(response.id)}>
-            ✕
-          </Button>
+          <ConfirmButton
+            testId={`canned-remove-${response.id}`}
+            label={t('common.remove')}
+            armedLabel={t('common.removeConfirm')}
+            onConfirm={() => remove.mutate(response.id)}
+          />
         </div>
       ))}
 
@@ -971,9 +978,12 @@ function ToolsCard() {
           >
             {t('common.edit')}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => remove.mutate(tool.id)}>
-            ✕
-          </Button>
+          <ConfirmButton
+            testId={`tool-remove-${tool.name}`}
+            label={t('common.remove')}
+            armedLabel={t('common.removeConfirm')}
+            onConfirm={() => remove.mutate(tool.id)}
+          />
         </div>
       ))}
 
@@ -1276,6 +1286,7 @@ function ToolEditor({
             <Button
               size="sm"
               variant="ghost"
+              aria-label={t('common.remove')}
               onClick={() => {
                 patchConfig({ args: config.args.filter((_, i) => i !== index) })
                 setArgKeys((keys) => keys.filter((_, i) => i !== index))

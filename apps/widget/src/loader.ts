@@ -68,7 +68,7 @@ function mount(settings: Settings): void {
   const sizeFrame = () => {
     frame.style.cssText = [
       'border:0',
-      'display:' + (open ? 'block' : 'none'),
+      `display:${open ? 'block' : 'none'}`,
       'background:#fff',
       ...(phone()
         ? ['position:fixed', 'inset:0', 'width:100%', 'height:100dvh', 'border-radius:0']

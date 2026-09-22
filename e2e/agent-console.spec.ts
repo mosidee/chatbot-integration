@@ -123,7 +123,11 @@ test('an agent hands the conversation back to the AI', async ({ page, request })
   await page.getByTestId('take-over').click()
   await expect(page.getByTestId('return-to-ai')).toBeVisible()
 
+  // Handing back now asks what to tell the AI, so whatever the colleague sorted out is not
+  // invisible to the next turn. The note is optional; this one leaves one.
   await page.getByTestId('return-to-ai').click()
+  await page.getByTestId('return-note').fill('Refund already issued, do not offer another.')
+  await page.getByTestId('return-to-ai-confirm').click()
   await expect(page.getByTestId('take-over')).toBeVisible()
 })
 

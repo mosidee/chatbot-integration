@@ -52,7 +52,7 @@ test.describe('inviting a colleague', () => {
 
       // They land in the console, signed in, with no admin page offered to them.
       await joinerPage.waitForURL('**/', { timeout: 20_000 })
-      await expect(joinerPage.getByTestId('member-row-' + email)).toHaveCount(0)
+      await expect(joinerPage.getByTestId(`member-row-${email}`)).toHaveCount(0)
     } finally {
       await joiner.close()
     }
