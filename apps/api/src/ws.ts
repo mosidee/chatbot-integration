@@ -2,6 +2,7 @@ import { subscribeToWorkspace, type WorkspaceSubscriber } from '@ci/infra'
 import type { WsEvent } from '@ci/shared'
 import { wsClientMessageSchema } from '@ci/shared'
 import Elysia from 'elysia'
+import { workspaceRefusal } from './auth-plugin'
 import type { ApiContext } from './context'
 import { resolveMembership } from './context'
 
@@ -87,6 +88,15 @@ export function createWsRoutes(ctx: ApiContext) {
         )
         if (!membership) {
           ws.send(JSON.stringify({ type: 'error', message: 'No workspace membership' }))
+          ws.close()
+          return
+        }
+
+        // The same refusal the HTTP guard makes. A socket opened before a suspension keeps
+        // its own room until it drops, which is why the suspend also publishes a status
+        // event: the console reacts to that rather than waiting to be disconnected.
+        if (membership.status !== 'active') {
+          ws.send(JSON.stringify({ type: 'error', ...workspaceRefusal(membership.status) }))
           ws.close()
           return
         }

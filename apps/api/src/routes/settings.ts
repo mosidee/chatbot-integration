@@ -6,6 +6,7 @@ import {
   EMBEDDING_DIMENSIONS,
   encryptJson,
   encryptSecret,
+  isPlatformAdmin,
   newId,
   schema,
 } from '@ci/db'
@@ -17,6 +18,7 @@ import Elysia from 'elysia'
 import { z } from 'zod'
 import { authPlugin } from '../auth-plugin'
 import type { ApiContext } from '../context'
+import { chooseMembership, loadMemberships } from '../context'
 
 /**
  * Workspace configuration: providers, task slots, channels, settings and people.
@@ -117,18 +119,52 @@ export function settingsRoutes(ctx: ApiContext) {
       )
 
       /**
-       * Who the caller is in this workspace.
+       * Who the caller is, and everywhere they belong.
        *
        * The console needs it to decide whether to offer controls only an admin may use.
        * Hiding one is a courtesy, not the guard: every such route checks the role itself.
+       *
+       * Guarded by the session alone, not by a workspace role, and that matters. Somebody
+       * whose only workspace has been suspended still has to be told which one and why, and
+       * a platform admin has to reach the platform page from a console that cannot load a
+       * single tenant endpoint. Behind `auth: 'viewer'` this endpoint would refuse exactly
+       * the people who most need an answer from it.
        */
       .get(
         '/me',
-        ({ user, membership }) => ({
-          userId: user.id,
-          role: membership.role,
-        }),
-        { auth: 'viewer' },
+        async ({ user, activeOrganizationId }) => {
+          const memberships = await loadMemberships(db, user.id)
+          const current = chooseMembership(memberships, activeOrganizationId)
+
+          return {
+            userId: user.id,
+            email: user.email,
+            name: user.name,
+            /** Null when they belong nowhere; the console shows a locked screen for it. */
+            role: current?.role ?? null,
+            workspace: current
+              ? {
+                  id: current.workspaceId,
+                  name: current.name,
+                  slug: current.slug,
+                  status: current.status,
+                }
+              : null,
+            /**
+             * Every membership, suspended ones included. The switcher is how somebody
+             * leaves a suspended workspace, so hiding it would trap them in one.
+             */
+            memberships: memberships.map((m) => ({
+              id: m.workspaceId,
+              name: m.name,
+              slug: m.slug,
+              role: m.role,
+              status: m.status,
+            })),
+            platformAdmin: await isPlatformAdmin(db, user.id),
+          }
+        },
+        { session: true },
       )
 
       .patch(
