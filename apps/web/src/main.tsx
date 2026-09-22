@@ -13,10 +13,13 @@ import { api } from './lib/api'
 import './lib/i18n'
 import './styles.css'
 import { Layout } from './components/Layout'
+import { Admin } from './routes/Admin'
 import { Dashboard } from './routes/Dashboard'
 import { Inbox } from './routes/Inbox'
+import { Invite } from './routes/Invite'
 import { Knowledge } from './routes/Knowledge'
 import { Login } from './routes/Login'
+import { Platform } from './routes/Platform'
 import { Settings } from './routes/Settings'
 import { Simulator } from './routes/Simulator'
 
@@ -47,6 +50,22 @@ const loginRoute = createRoute({
 })
 
 /**
+ * Accepting an invitation, which is the one page that must work with no session.
+ *
+ * Deliberately a sibling of the sign-in page rather than a child of the app shell: the
+ * person opening it may have no account at all yet, and the shell's guard would bounce them
+ * to a sign-in form they cannot use.
+ */
+const inviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/invite/$token',
+  component: function InviteRoute() {
+    const { token } = inviteRoute.useParams()
+    return <Invite token={token} />
+  },
+})
+
+/**
  * Everything inside the console requires a session.
  *
  * Without this the shell rendered for anyone who opened the address: the navigation and an
@@ -70,12 +89,15 @@ const appRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  inviteRoute,
   appRoute.addChildren([
     createRoute({ getParentRoute: () => appRoute, path: '/', component: Inbox }),
     createRoute({ getParentRoute: () => appRoute, path: '/dashboard', component: Dashboard }),
     createRoute({ getParentRoute: () => appRoute, path: '/knowledge', component: Knowledge }),
     createRoute({ getParentRoute: () => appRoute, path: '/simulator', component: Simulator }),
     createRoute({ getParentRoute: () => appRoute, path: '/settings', component: Settings }),
+    createRoute({ getParentRoute: () => appRoute, path: '/admin', component: Admin }),
+    createRoute({ getParentRoute: () => appRoute, path: '/platform', component: Platform }),
   ]),
 ])
 

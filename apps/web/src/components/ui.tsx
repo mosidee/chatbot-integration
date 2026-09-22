@@ -1,8 +1,10 @@
-import type {
-  ButtonHTMLAttributes,
-  InputHTMLAttributes,
-  ReactNode,
-  TextareaHTMLAttributes,
+import {
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+  useEffect,
+  useState,
 } from 'react'
 
 /**
@@ -67,9 +69,18 @@ export function Label({ children, htmlFor }: { children: ReactNode; htmlFor?: st
   )
 }
 
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
+export function Card({
+  children,
+  className,
+  testId,
+}: {
+  children: ReactNode
+  className?: string
+  testId?: string
+}) {
   return (
     <div
+      data-testid={testId}
       className={cn('rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4', className)}
     >
       {children}
@@ -141,5 +152,105 @@ export function timeAgo(iso: string | null, language: string): string {
 export function formatTime(iso: string, language: string): string {
   return new Intl.DateTimeFormat(language, { hour: '2-digit', minute: '2-digit' }).format(
     new Date(iso),
+  )
+}
+
+/**
+ * A destructive action that takes two clicks.
+ *
+ * The same idiom as `EraseCustomer`, extracted because removing a member, suspending a
+ * tenant and revoking a platform admin all want it. A browser `confirm` was rejected for
+ * these: it blocks the page, cannot be translated, and is the one dialog people dismiss by
+ * reflex. The armed state expires on its own, so a button left armed by accident stops
+ * being dangerous without anybody noticing it was.
+ */
+export function ConfirmButton({
+  label,
+  armedLabel,
+  onConfirm,
+  disabled,
+  size = 'sm',
+  testId,
+  armedForMs = 5000,
+}: {
+  label: string
+  armedLabel: string
+  onConfirm: () => void
+  disabled?: boolean
+  size?: 'sm' | 'md'
+  testId?: string
+  armedForMs?: number
+}) {
+  const [armed, setArmed] = useState(false)
+
+  useEffect(() => {
+    if (!armed) return
+    const timer = setTimeout(() => setArmed(false), armedForMs)
+    return () => clearTimeout(timer)
+  }, [armed, armedForMs])
+
+  return (
+    <Button
+      size={size}
+      variant={armed ? 'danger' : 'ghost'}
+      disabled={disabled}
+      data-testid={testId}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onConfirm()
+      }}
+    >
+      {armed ? armedLabel : label}
+    </Button>
+  )
+}
+
+/**
+ * A secret shown once, with a button to copy it.
+ *
+ * Invitation and reset links cannot be read back: only their hash is stored. So the one
+ * moment they exist in the console is this one, and the affordance has to make that
+ * obvious rather than letting somebody navigate away and come back for it.
+ */
+export function CopyOnce({
+  value,
+  hint,
+  copyLabel,
+  copiedLabel,
+  testId,
+}: {
+  value: string
+  hint: string
+  copyLabel: string
+  copiedLabel: string
+  testId?: string
+}) {
+  const [copied, setCopied] = useState(false)
+
+  return (
+    <div className="space-y-1.5 rounded-lg border border-[var(--color-brand-500)] bg-[var(--surface-muted)] p-2.5">
+      <p className="text-[12px] text-[var(--text-muted)]">{hint}</p>
+      <div className="flex items-center gap-2">
+        <Input readOnly value={value} data-testid={testId} className="font-mono text-[12px]" />
+        <Button
+          size="sm"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(value)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 2000)
+            } catch {
+              // A browser that refuses the clipboard still shows the link to select by hand.
+            }
+          }}
+        >
+          {copied ? copiedLabel : copyLabel}
+        </Button>
+      </div>
+    </div>
   )
 }

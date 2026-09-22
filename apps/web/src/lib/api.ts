@@ -12,6 +12,8 @@ import type {
   NormalizedMessage,
   SenderType,
   ToolSummary,
+  UserRoleName,
+  WorkspaceStatus,
 } from '@ci/shared'
 
 /**
@@ -72,7 +74,13 @@ const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 const put = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PUT', body: JSON.stringify(body) })
-const del = <T>(path: string) => request<T>(path, { method: 'DELETE' })
+/** A body on a DELETE is unusual and deliberate here: deleting a tenant is confirmed by
+ * typing its slug, and the slug belongs in the request rather than in the URL. */
+const del = <T>(path: string, body?: unknown) =>
+  request<T>(path, {
+    method: 'DELETE',
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -314,10 +322,66 @@ export type CannedResponse = {
 
 export type Member = {
   userId: string
-  role: string
+  role: UserRoleName
   name: string
   email: string
   image: string | null
+  joinedAt?: string
+  isSelf?: boolean
+}
+
+export type PendingInvitation = {
+  id: string
+  email: string
+  role: string | null
+  expiresAt: string
+  createdAt: string
+  invitedByName: string | null
+}
+
+export type Membership = {
+  id: string
+  name: string
+  slug: string
+  role: UserRoleName
+  status: WorkspaceStatus
+}
+
+export type Me = {
+  userId: string
+  email: string
+  name: string
+  /** Null when they belong to no workspace at all. */
+  role: UserRoleName | null
+  workspace: { id: string; name: string; slug: string; status: WorkspaceStatus } | null
+  memberships: Membership[]
+  platformAdmin: boolean
+}
+
+export type Tenant = {
+  id: string
+  name: string
+  slug: string
+  status: WorkspaceStatus
+  memberCount: number
+  createdAt: string
+}
+
+export type PlatformAdmin = {
+  userId: string
+  email: string
+  name: string
+  grantedByUserId: string | null
+  createdAt: string
+}
+
+/** What the page behind an invitation link needs before anybody types anything. */
+export type InvitationInfo = {
+  purpose: 'invite' | 'password_reset'
+  email: string
+  role: string | null
+  workspaceName: string
+  existingAccount: boolean
 }
 
 export type DashboardDay = {
@@ -569,7 +633,7 @@ export const api = {
 
   settings: {
     workspace: () => get<{ settings: WorkspaceSettings }>('/v1/settings/workspace'),
-    me: () => get<{ userId: string; role: string }>('/v1/settings/me'),
+    me: () => get<Me>('/v1/settings/me'),
     updateWorkspace: (patchBody: Partial<WorkspaceSettings>) =>
       patch<{ settings: WorkspaceSettings }>('/v1/settings/workspace', patchBody),
     providers: () => get<{ providers: Provider[] }>('/v1/settings/providers'),
@@ -620,6 +684,49 @@ export const api = {
       post<ToolTestResult>(`/v1/settings/tools/${id}/test`, body),
   },
 
+  /** People in this workspace. Admin-only on the server; the console hides it too. */
+  admin: {
+    members: () =>
+      get<{ members: Member[]; invitations: PendingInvitation[] }>('/v1/admin/members'),
+    updateMember: (userId: string, body: { role?: UserRoleName; name?: string }) =>
+      patch<{ ok: true }>(`/v1/admin/members/${userId}`, body),
+    removeMember: (userId: string) => del<{ ok: true }>(`/v1/admin/members/${userId}`),
+    createInvitation: (body: { email: string; role: UserRoleName }) =>
+      post<{ id: string; link: string; expiresAt: string; existingAccount: boolean }>(
+        '/v1/admin/invitations',
+        body,
+      ),
+    revokeInvitation: (id: string) => del<{ ok: true }>(`/v1/admin/invitations/${id}`),
+    resetLink: (userId: string) =>
+      post<{ link: string; expiresAt: string }>(`/v1/admin/members/${userId}/reset-link`),
+  },
+
+  /** The tenants themselves. Only a platform admin sees any of this. */
+  platform: {
+    tenants: () => get<{ tenants: Tenant[] }>('/v1/platform/tenants'),
+    createTenant: (body: { name: string; slug: string; adminEmail: string }) =>
+      post<{ id: string; inviteLink: string; inviteExpiresAt: string }>(
+        '/v1/platform/tenants',
+        body,
+      ),
+    updateTenant: (id: string, body: { name?: string; slug?: string }) =>
+      patch<{ ok: true }>(`/v1/platform/tenants/${id}`, body),
+    suspend: (id: string) => post<{ status: string }>(`/v1/platform/tenants/${id}/suspend`),
+    unsuspend: (id: string) => post<{ status: string }>(`/v1/platform/tenants/${id}/unsuspend`),
+    deleteTenant: (id: string, slug: string) =>
+      del<{ queued: true }>(`/v1/platform/tenants/${id}`, { slug }),
+    admins: () => get<{ admins: PlatformAdmin[] }>('/v1/platform/admins'),
+    grantAdmin: (email: string) => post<{ userId: string }>('/v1/platform/admins', { email }),
+    revokeAdmin: (userId: string) => del<{ ok: true }>(`/v1/platform/admins/${userId}`),
+  },
+
+  /** Public: the caller may have no account yet, which is the whole point. */
+  invitations: {
+    get: (token: string) => get<InvitationInfo>(`/invitations/${token}`),
+    accept: (token: string, body: { name?: string; password?: string }) =>
+      post<{ workspaceId: string; userId: string }>(`/invitations/${token}/accept`, body),
+  },
+
   auth: {
     /** Null when nobody is signed in. Used by the route guard, so it must never throw. */
     session: async (): Promise<{
@@ -639,5 +746,14 @@ export const api = {
     signIn: (email: string, password: string) =>
       post<{ user: { id: string } }>('/auth/sign-in/email', { email, password }),
     signOut: () => post<unknown>('/auth/sign-out'),
+    /**
+     * Choose which workspace this session is about.
+     *
+     * Better Auth's own endpoint: it checks the membership and re-issues the session
+     * cookie. Nothing wrote this field before multi-workspace existed, so a person in two
+     * tenants landed in whichever one the database returned first.
+     */
+    setActiveWorkspace: (organizationId: string) =>
+      post<unknown>('/auth/organization/set-active', { organizationId }),
   },
 }
