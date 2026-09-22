@@ -81,7 +81,7 @@ async function fixture(...args: Parameters<typeof createFixture>): Promise<Fixtu
  * do the same, or it sees an empty queue and concludes nothing was asked for.
  */
 async function relay(f: Fixture): Promise<void> {
-  await relayOnce(f.runtime.db, f.runtime.queues)
+  await relayOnce(f.runtime.db, f.queues)
 }
 
 /** Send a customer message through the same path a real webhook takes. */
@@ -106,7 +106,7 @@ async function customerSays(
   })
   if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
 
-  await drainQueue(f, f.runtime.queues.inbound)
+  await drainQueue(f, f.queues.inbound)
   const ports = createEffectPorts(f.runtime, f.runtime.logger)
   await processInbound(f.runtime, ports, f.runtime.logger, {
     workspaceId: f.workspaceId,
@@ -128,13 +128,13 @@ async function runQueuedWork(f: Fixture): Promise<void> {
     workspaceId: string
     conversationId: string
     deliver: 'send' | 'draft'
-  }>(f, f.runtime.queues.ai_turn)) {
+  }>(f, f.queues.ai_turn)) {
     await processAiTurn(f.runtime, ports, f.runtime.logger, job)
   }
 
   for (const job of await drainQueue<{ workspaceId: string; conversationId: string }>(
     f,
-    f.runtime.queues.suggestion,
+    f.queues.suggestion,
   )) {
     await processSuggestion(f.runtime, ports, f.runtime.logger, job)
   }
@@ -215,7 +215,7 @@ describe('the AI and human loop', () => {
     expect(messages[1]?.text ?? '').toBe('แพ็กเกจเริ่มต้น 990 บาทต่อเดือนค่ะ')
 
     // The reply was queued for delivery rather than sent inline.
-    const outbound = await drainQueue<{ messageId: string }>(f, f.runtime.queues.outbound)
+    const outbound = await drainQueue<{ messageId: string }>(f, f.queues.outbound)
     expect(outbound.map((j) => j.messageId)).toContain(messages[1]?.id ?? '')
   })
 
@@ -257,7 +257,7 @@ describe('the AI and human loop', () => {
     await customerSays(f, 'second question')
 
     // No AI turn was queued at all; only a suggestion.
-    const aiJobs = await drainQueue(f, f.runtime.queues.ai_turn)
+    const aiJobs = await drainQueue(f, f.queues.ai_turn)
     expect(aiJobs).toHaveLength(0)
 
     await runQueuedWork(f)
@@ -288,7 +288,7 @@ describe('the AI and human loop', () => {
       workspaceId: string
       conversationId: string
       deliver: 'send' | 'draft'
-    }>(f, f.runtime.queues.ai_turn)
+    }>(f, f.queues.ai_turn)
     expect(queued).toHaveLength(1)
 
     // A human takes over in the meantime.
@@ -307,7 +307,7 @@ describe('the AI and human loop', () => {
     expect(messages.filter((m) => m.senderType === 'ai')).toHaveLength(0)
 
     // It converted itself into a suggestion instead of going silent.
-    const suggestionJobs = await drainQueue(f, f.runtime.queues.suggestion)
+    const suggestionJobs = await drainQueue(f, f.queues.suggestion)
     expect(suggestionJobs).toHaveLength(1)
   })
 
@@ -807,7 +807,7 @@ describe('the AI and human loop', () => {
     expect(first.ok && first.duplicate).toBe(false)
     expect(second.ok && second.duplicate).toBe(true)
 
-    await drainQueue(f, f.runtime.queues.inbound)
+    await drainQueue(f, f.queues.inbound)
     const ports = createEffectPorts(f.runtime, f.runtime.logger)
     if (!first.ok) throw new Error('first ingest failed')
     await processInbound(f.runtime, ports, f.runtime.logger, {
@@ -1005,7 +1005,7 @@ describe('customer memory', () => {
       workspaceId: string
       customerId: string
       conversationId: string
-    }>(f, f.runtime.queues.summarize)) {
+    }>(f, f.queues.summarize)) {
       await processSummarize(f.runtime, ports, f.runtime.logger, job)
     }
 
@@ -1062,7 +1062,7 @@ describe('customer memory', () => {
       workspaceId: string
       customerId: string
       conversationId: string
-    }>(f, f.runtime.queues.summarize)) {
+    }>(f, f.queues.summarize)) {
       await processSummarize(f.runtime, ports, f.runtime.logger, job)
     }
 
@@ -1106,9 +1106,7 @@ describe('the waiting-human fallback timer', () => {
     expect(conversation.mode).toBe('waiting_human')
 
     await relay(f)
-    const scheduled = await f.runtime.queues.waiting_human.getJob(
-      waitingHumanJobId(conversation.id),
-    )
+    const scheduled = await f.queues.waiting_human.getJob(waitingHumanJobId(conversation.id))
     expect(scheduled).toBeTruthy()
     expect(scheduled?.data).toMatchObject({ conversationId: conversation.id })
   })
@@ -1140,9 +1138,7 @@ describe('the waiting-human fallback timer', () => {
 
     // The cancellation is a promise like any other, so it reaches BullMQ the same way.
     await relay(f)
-    const scheduled = await f.runtime.queues.waiting_human.getJob(
-      waitingHumanJobId(conversation.id),
-    )
+    const scheduled = await f.queues.waiting_human.getJob(waitingHumanJobId(conversation.id))
     expect(scheduled).toBeUndefined()
   })
 
@@ -1204,7 +1200,7 @@ describe('LINE reply tokens', () => {
     })
     if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
 
-    await drainQueue(f, f.runtime.queues.inbound)
+    await drainQueue(f, f.queues.inbound)
     await processInbound(
       f.runtime,
       createEffectPorts(f.runtime, f.runtime.logger),
@@ -1292,7 +1288,7 @@ describe('LINE reply tokens', () => {
       workspaceId: string
       conversationId: string
       deliver: 'send' | 'draft'
-    }>(f, f.runtime.queues.ai_turn)) {
+    }>(f, f.queues.ai_turn)) {
       await processAiTurn(f.runtime, ports, f.runtime.logger, job)
     }
 
@@ -1301,7 +1297,7 @@ describe('LINE reply tokens', () => {
       workspaceId: string
       conversationId: string
       messageId: string
-    }>(f, f.runtime.queues.outbound)) {
+    }>(f, f.queues.outbound)) {
       await processOutbound(f.runtime, ports, f.runtime.logger, job).catch(() => {})
     }
 
@@ -1337,14 +1333,14 @@ describe('LINE reply tokens', () => {
       workspaceId: string
       conversationId: string
       deliver: 'send' | 'draft'
-    }>(f, f.runtime.queues.ai_turn)) {
+    }>(f, f.queues.ai_turn)) {
       await processAiTurn(f.runtime, ports, f.runtime.logger, job)
     }
     for (const job of await drainQueue<{
       workspaceId: string
       conversationId: string
       messageId: string
-    }>(f, f.runtime.queues.outbound)) {
+    }>(f, f.queues.outbound)) {
       await processOutbound(f.runtime, ports, f.runtime.logger, job).catch(() => {})
     }
 
@@ -2547,7 +2543,7 @@ describe('work that is done twice', () => {
       workspaceId: string
       conversationId: string
       deliver: 'send' | 'draft'
-    }>(f, f.runtime.queues.ai_turn)
+    }>(f, f.queues.ai_turn)
     const job = jobs[0]
     if (!job) throw new Error('no AI turn was queued')
 
@@ -2565,7 +2561,7 @@ describe('work that is done twice', () => {
     expect(provider.requests).toHaveLength(1)
 
     // Delivery is still owed, under the reply's own id, exactly once.
-    const outbound = await drainQueue<{ messageId: string }>(f, f.runtime.queues.outbound)
+    const outbound = await drainQueue<{ messageId: string }>(f, f.queues.outbound)
     expect(outbound.map((entry) => entry.messageId)).toEqual([replies[0]?.id as string])
   })
 
@@ -2578,7 +2574,7 @@ describe('work that is done twice', () => {
       workspaceId: string
       conversationId: string
       deliver: 'send' | 'draft'
-    }>(f, f.runtime.queues.ai_turn)
+    }>(f, f.queues.ai_turn)
     const job = jobs[0]
     if (!job) throw new Error('no AI turn was queued')
 
@@ -2595,9 +2591,9 @@ describe('work that is done twice', () => {
 
     const replies = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'ai')
     expect(replies).toHaveLength(0)
-    expect(await drainQueue(f, f.runtime.queues.outbound)).toHaveLength(0)
+    expect(await drainQueue(f, f.queues.outbound)).toHaveLength(0)
     // Not thrown away: the person who took over is offered what it would have said.
-    expect(await drainQueue(f, f.runtime.queues.suggestion)).toHaveLength(1)
+    expect(await drainQueue(f, f.queues.suggestion)).toHaveLength(1)
   })
 
   test('an AI reply queued before a takeover is not delivered after it', async () => {

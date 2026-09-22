@@ -8,7 +8,6 @@ import { createRestrictedFetch } from './egress'
 import { createLogger } from './logger'
 import { createOutbox, type Outbox } from './outbox'
 import { createPublisher } from './publisher'
-import { createQueues, type Queues } from './queues'
 import { createRedis } from './redis'
 
 /**
@@ -25,11 +24,14 @@ export type Runtime = {
   redis: Redis
   /** Separate connection: a subscribed client cannot issue other commands. */
   subscriberFactory: () => Redis
-  queues: Queues
   /**
-   * How work is asked for. Writes a row in the caller's own transaction; the worker's relay
-   * moves it to BullMQ afterwards. Nothing outside that relay calls a queue directly — see
-   * `outbox.ts` and ADR 0006.
+   * How work is asked for.
+   *
+   * Writes a row in the caller's own transaction; the worker's relay moves it to BullMQ
+   * afterwards. There is deliberately no `queues` here to reach past it with: the rule that
+   * nothing but the relay talks to the queue is worth more as something the types refuse
+   * than as something a comment asks for. The worker builds its own queues for the relay
+   * and its workers, because it is the one process that has to. See ADR 0006.
    */
   outbox: Outbox
   blob: BlobStore
@@ -69,7 +71,6 @@ export function createRuntime(
 
   const { db, close: closeDb } = createDb(env.DATABASE_URL)
   const redis = createRedis(env.REDIS_URL, { forQueue: true })
-  const queues = createQueues(redis, options.queuePrefix)
 
   // A file:// endpoint selects filesystem storage, which local development on macOS needs;
   // see packages/infra/src/blob-fs.ts. Anything else is treated as S3-compatible.
@@ -96,18 +97,13 @@ export function createRuntime(
     db,
     redis,
     subscriberFactory: () => createRedis(env.REDIS_URL),
-    queues,
     outbox: createOutbox(),
     blob,
     toolFetch: createRestrictedFetch({ allowPrivate: allowPrivateEgress }),
     publisher,
     logger,
     close: async () => {
-      await Promise.allSettled([
-        ...Object.values(queues).map((q) => q.close()),
-        redis.quit(),
-        closeDb(),
-      ])
+      await Promise.allSettled([redis.quit(), closeDb()])
     },
   }
 }

@@ -19,7 +19,7 @@ The browser talks to the API through a hand-written `fetch` client (`apps/web/sr
 Rule: `apps/*` are thin. Nothing in `packages/core` imports Elysia, Bun-only APIs, or React.
 
 ## Inbound flow
-channel webhook → adapter.verify + adapter.normalise → `inbound_events` (raw, idempotent on platform id) → queue `inbound` → worker: upsert identity/customer/conversation → redact → store message → publish realtime → decide by `conversation.mode`:
+channel webhook → adapter.verify + adapter.normalise → `inbound_events` (raw, idempotent on platform id) **+ an `outbox` row, one transaction** → relay → queue `inbound` → worker: upsert identity/customer/conversation → redact → store message → publish realtime → decide by `conversation.mode`:
 - `ai` → queue `ai_turn` → agent loop → send via adapter → store → trace
 - `ai_supervised` → agent loop → store draft → notify humans
 - `human` → queue `suggestion` → store suggestion (never send)
@@ -47,11 +47,28 @@ Three guards, each resolving its own shape: `auth: 'agent'` (a user, a workspace
 
 **Status.** `active | suspended | deleting`. Suspended and deleting are refused to every member including the workspace's own admin, before the role is even compared. Webhooks for a suspended tenant answer 200 and discard, so LINE and Meta do not disable the endpoint over a reversible state; the widget says plainly that the workspace is suspended, because there is a person reading it. `deleting` reads as gone everywhere public. Queued jobs check `workspaceIsWorkable` and drop with a log line — including the AI turn, which is the one deliberate exception to the rule that a turn never ends in silence, since every agent who could be handed the conversation is locked out too.
 
-**Erasure.** `requestWorkspaceErasure` sets the status and writes a `workspace_erasures` row in one transaction, then enqueues. `eraseWorkspace` refuses without that row, saves the media keys onto it (message attachments *and* `knowledge_sources.storage_key`, which the retention sweep never reads) before deleting the organization row, then removes the objects and shrinks the list to whatever failed, so a retry works on the remainder.
+**Erasure.** `requestWorkspaceErasure` sets the status, writes a `workspace_erasures` row and promises the job, all in one transaction. `eraseWorkspace` refuses without that row, saves the media keys onto it (message attachments *and* `knowledge_sources.storage_key`, which the retention sweep never reads) before deleting the organization row, then removes the objects and shrinks the list to whatever failed, so a retry works on the remainder.
 
 **Slug URLs.** `/<slug>` is not a route into a tenant; it switches the session to that workspace and redirects to the inbox, so the workspace still comes from the session and nothing else in the console learns about the URL. The lookup is over the caller's own memberships, so a slug they do not belong to is indistinguishable from one that does not exist. Console path names are refused as slugs (`RESERVED_SLUGS`), because a static route outranks the parameter.
 
 **Invitations.** A single-use token, stored as a SHA-256 hash, with a purpose of `invite` or `password_reset` and an expiry. The accept route spends the token and writes the membership in one transaction; accounts are created through a second Better Auth instance that allows sign-up and is never mounted, so the public API stays invite-only. A password reset goes through `auth.$context.internalAdapter`, because `setPassword` refuses an account that already has one.
+
+## Asking for work (packages/infra/src/outbox.ts)
+
+Nothing in the product calls BullMQ. Work is asked for by writing a row to `outbox`, in the
+same transaction as the change that made it necessary; a relay in the worker moves those rows
+to the queue. `Runtime` carries no queues at all, so a route or processor cannot reach past
+the relay even by accident.
+
+The writer chooses the job id — the message being delivered, the customer message that
+prompted a turn — which is what makes both retries safe: BullMQ ignores an `add` for an id it
+holds, and the consumer can recognise its own earlier attempt from the same id. Rows are
+claimed `FOR UPDATE SKIP LOCKED`, so a second worker replica relays alongside the first.
+
+The relay wakes on `pg_notify`, which Postgres delivers at commit and drops on rollback, and
+sweeps on a one-second timer besides. The worker's health endpoint reports the pending count
+and the age of the oldest row, and calls itself degraded past a minute. Relayed rows are
+pruned after a day. See ADR 0006.
 
 ## The inbox queue (apps/api/src/routes/conversations.ts)
 Ordered in SQL, and nothing re-sorts it in the browser. Three groups, by who owns the *customer*: yours, then nobody's, then somebody else's. Inside each, longest wait first, where waiting means either the conversation was handed to a person (`waiting_human_since`) or the customer spoke last and nobody has answered; anything nobody is waiting on falls to the bottom of its group, newest first.

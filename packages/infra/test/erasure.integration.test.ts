@@ -135,7 +135,8 @@ async function createFixture(): Promise<Fixture> {
       await db
         .delete(schema.platformAuditLog)
         .where(eq(schema.platformAuditLog.targetId, workspaceId))
-      await runtime.queues.workspace_erasure.obliterate({ force: true }).catch(() => {})
+      // The request writes an outbox row rather than a job; clearing the table is enough.
+      await db.delete(schema.outbox)
       await runtime.close()
     },
   }

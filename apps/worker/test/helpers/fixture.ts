@@ -2,7 +2,14 @@ import { loadEnv } from '@ci/config'
 import type { SlotConfig } from '@ci/core'
 import { defaultWorkspaceSettings, encryptJson, encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
-import { createRuntime, type Runtime, relayOnce } from '@ci/infra'
+import {
+  closeQueues,
+  createQueues,
+  createRuntime,
+  type Queues,
+  type Runtime,
+  relayOnce,
+} from '@ci/infra'
 import type { HttpToolConfig, WorkspaceStatus } from '@ci/shared'
 import type { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
@@ -32,6 +39,14 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = defaultWorkspaceSettings({
 
 export type Fixture = {
   runtime: Runtime
+  /**
+   * The queues, built here rather than taken from the runtime.
+   *
+   * Production code cannot reach a queue at all — it promises work through the outbox — so
+   * a test that wants to see what was asked for builds its own and relays into them, which
+   * is what the worker process does.
+   */
+  queues: Queues
   workspaceId: string
   channelId: string
   userId: string
@@ -209,8 +224,11 @@ export async function createFixture(options: {
 
   const embedBaseUrl = options.embedBaseUrl
 
+  const queues = createQueues(runtime.redis, runtime.queuePrefix)
+
   return {
     runtime,
+    queues,
     workspaceId,
     channelId,
     userId,
@@ -253,11 +271,12 @@ export async function createFixture(options: {
     cleanup: async () => {
       // Drop this fixture's queues before the workspace, so no stray job outlives it.
       await Promise.allSettled(
-        Object.values(runtime.queues).map((q) => q.obliterate({ force: true })),
+        Object.values(queues).map((q) => q.obliterate({ force: true }).catch(() => {})),
       )
       // Cascades remove channels, conversations, messages, traces and suggestions.
       await db.delete(schema.organization).where(eq(schema.organization.id, workspaceId))
       await db.delete(schema.user).where(eq(schema.user.id, userId))
+      await closeQueues(queues)
       await runtime.close()
     },
   }
@@ -273,7 +292,7 @@ export async function createFixture(options: {
  * it is called at the moment the test wants the answer.
  */
 export async function drainQueue<T>(f: Fixture, queue: Queue): Promise<T[]> {
-  await relayOnce(f.runtime.db, f.runtime.queues)
+  await relayOnce(f.runtime.db, f.queues)
   const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized'])
   const payloads = jobs.map((job) => job.data as T)
   await Promise.all(jobs.map((job) => job.remove().catch(() => {})))

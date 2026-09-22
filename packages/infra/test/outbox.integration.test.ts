@@ -3,6 +3,7 @@ import { loadEnv } from '@ci/config'
 import { newId, schema } from '@ci/db'
 import { and, eq, isNull } from 'drizzle-orm'
 import { pendingSummary, pruneOutbox, relayOnce } from '../src/outbox'
+import { closeQueues, createQueues } from '../src/queues'
 import { createRuntime } from '../src/runtime'
 
 /**
@@ -19,11 +20,14 @@ const runtime = createRuntime('test', env, {
   queuePrefix: `{outbox-${Math.random().toString(36).slice(2, 8)}}`,
   allowPrivateEgress: true,
 })
-const { db, outbox, queues } = runtime
+const { db, outbox } = runtime
+/** Built here: nothing in the product can reach a queue, which is the point of the table. */
+const queues = createQueues(runtime.redis, runtime.queuePrefix)
 
 afterAll(async () => {
   await Promise.all(Object.values(queues).map((q) => q.obliterate({ force: true }).catch(() => {})))
   await db.delete(schema.outbox)
+  await closeQueues(queues)
   await runtime.close()
 })
 

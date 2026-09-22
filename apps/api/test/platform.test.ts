@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { loadEnv } from '@ci/config'
 import { grantPlatformAdmin, schema } from '@ci/db'
-import { relayOnce } from '@ci/infra'
+import { closeQueues, createQueues, relayOnce } from '@ci/infra'
 import { eq } from 'drizzle-orm'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
@@ -185,10 +185,15 @@ describe('deleting a tenant', () => {
 
     // The request writes the job as an outbox row inside the same transaction that marked
     // the workspace; the worker's relay is what puts it on the queue.
-    await relayOnce(ctx.runtime.db, ctx.runtime.queues)
-    const job = await ctx.runtime.queues.workspace_erasure.getJob(`workspace-erasure-${id}`)
-    expect(job).toBeTruthy()
-    await job?.remove()
+    const queues = createQueues(ctx.runtime.redis, ctx.runtime.queuePrefix)
+    try {
+      await relayOnce(ctx.runtime.db, queues)
+      const job = await queues.workspace_erasure.getJob(`workspace-erasure-${id}`)
+      expect(job).toBeTruthy()
+      await job?.remove()
+    } finally {
+      await closeQueues(queues)
+    }
 
     // Asking twice is refused.
     const again = await fixture.as(fixture.admin, `/api/v1/platform/tenants/${id}`, {

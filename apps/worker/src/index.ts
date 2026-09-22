@@ -3,7 +3,9 @@ import type { EffectPorts, Logger } from '@ci/core'
 import {
   type AiTurnJob,
   type CustomerErasureJob,
+  closeQueues,
   createEffectPorts,
+  createQueues,
   createRedis,
   createRuntime,
   type InboundJob,
@@ -114,6 +116,16 @@ async function main() {
   const logger = runtime.logger
   const ports = createEffectPorts(runtime, logger)
 
+  /**
+   * The only queues in the product.
+   *
+   * `Runtime` no longer carries any: everywhere else asks for work by writing an outbox
+   * row, and the rule that nothing but the relay talks to BullMQ is enforced by there being
+   * nothing to talk to it with. This process is the exception because it is the one that
+   * runs the relay and the workers that drain what the relay puts there.
+   */
+  const queues = createQueues(runtime.redis, runtime.queuePrefix)
+
   const workers = [
     makeWorker<InboundJob>(
       QUEUE_NAMES.inbound,
@@ -209,7 +221,7 @@ async function main() {
   const relay = startRelay({
     db: runtime.db,
     listenClient: runtime.db.$client,
-    queues: runtime.queues,
+    queues,
     logger,
   })
 
@@ -224,7 +236,7 @@ async function main() {
    * queue directly: it describes when jobs should come into being rather than asking for
    * one, and there is nothing in the database it has to agree with.
    */
-  await runtime.queues.retention.upsertJobScheduler(
+  await queues.retention.upsertJobScheduler(
     'retention-nightly',
     { pattern: '17 3 * * *', tz: 'Asia/Bangkok' },
     { name: 'retention', data: {} },
@@ -304,6 +316,7 @@ async function main() {
     clearInterval(pruning)
     await relay.stop()
     await Promise.allSettled(workers.map((w) => w.close()))
+    await closeQueues(queues)
     await runtime.close()
     process.exit(0)
   }

@@ -71,6 +71,14 @@ AES-256-GCM and decrypted at the moment of use. API responses expose `hasKey`, n
 **Webhook handlers return fast.** Verify, persist the raw request, enqueue, return. LINE and
 Meta retry or disable endpoints that answer slowly.
 
+**Nothing calls a queue but the relay.** Work is asked for by writing a row to `outbox`, in
+the same transaction as the change that made it necessary; the worker's relay moves those
+rows to BullMQ. `Runtime` carries no queues, so this is a rule the types keep rather than one
+a comment asks for. The writer chooses the job id, which is what makes both the relay's retry
+and the consumer's retry safe. See ADR 0006. The one exception is registering the nightly job
+*scheduler* in the worker, which describes when jobs come into being rather than asking for
+one.
+
 **Effects must be idempotent.** The queue retries jobs and `applyEffects` re-runs the whole
 list when it does.
 
@@ -272,6 +280,30 @@ without spending money.
   re-derives it: vision reads those bytes and erasure deletes them. `mediaKeysOf` filters by
   the same prefix, because deletion is irreversible and a row written before the rule existed
   must not take another tenant's file with it.
+- `pg_notify` inside a transaction fires **at commit** and is dropped on rollback, which is
+  exactly what the outbox needs: the relay is woken when the row becomes visible and never
+  for one that was rolled back. It is called on the same executor as the insert for that
+  reason. Measured at 29ms against a 30-second timer, so the notification and not the sweep
+  is doing the work; the sweep exists for a dropped connection or a pooler in transaction
+  mode, which carries no notifications at all.
+- The `outbox` table is **not tenant-owned** and has no workspace foreign key. A
+  workspace-erasure job must outlive the cascade it was queued to perform, and the nightly
+  sweep belongs to no tenant.
+- **A turn answers once because of `messages.turn_key`,** which is the turn's BullMQ job id,
+  which is the customer message that prompted it. The processor reads it before calling the
+  model; the unique index behind it catches the race that read cannot. On a collision
+  `storeMessage` reports `duplicate` and the id it returns names no row — the AI turn
+  re-selects the winner rather than queueing delivery for a message that does not exist.
+- **`messages.sent_parts` is the delivery checkpoint.** Long text goes out as several sends;
+  without it a failure on part three restarted at part one and the customer read the opening
+  twice. Delivery state is monotonic: the early return covers `sent`, `delivered` **and**
+  `read`, because receipts only ever raise a status.
+- **Telling the console is not part of delivering.** The publish used to sit inside the try
+  that wraps the adapter call, so a Redis hiccup after a successful send marked the message
+  failed and threw, and the retry sent the customer the same words again.
+- Tests must **relay before looking at a queue** (`drainQueue` in the worker fixture does it
+  for you). A test that reads BullMQ directly sees an empty queue and concludes nothing was
+  asked for.
 - **A last-admin check and the change it guards share one transaction.** The `FOR UPDATE`
   lock over the admin set lives only as long as its transaction: checking in one and mutating
   after it returned let two concurrent demotions both through, which is the outcome the lock
