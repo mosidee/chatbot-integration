@@ -2,7 +2,7 @@ import { splitText } from '@ci/channels'
 import type { EffectPorts, Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
-import { loadChannel, withMediaLinks, workspaceIsWorkable } from '@ci/infra'
+import { customerLanguage, loadChannel, withMediaLinks, workspaceIsWorkable } from '@ci/infra'
 import type { NormalizedMessage } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 
@@ -96,12 +96,22 @@ export async function processOutbound(
       ttlDays: env.MEDIA_LINK_TTL_DAYS,
     })
 
+    /**
+     * The customer's language, for the one control an adapter has to label itself: the
+     * button on a file card. Looked up only when a message carries an attachment, because
+     * every other outbound word was written by an agent or the AI and is already right.
+     */
+    const language = hasAttachments(outbound)
+      ? await customerLanguage(db, job.workspaceId, conversation.customerId, 'en')
+      : undefined
+
     const parts = toSendableParts(outbound, adapter.capabilities.maxTextLength)
     let lastPlatformId: string | null = null
 
     for (const [index, part] of parts.entries()) {
       const result = await adapter.send(identity.externalId, part, config, {
         messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
+        ...(language ? { language } : {}),
         // Only the first part can use the token; the rest are pushes.
         ...(index === 0 && replyToken ? { replyToken } : {}),
       })
@@ -140,4 +150,10 @@ function toSendableParts(message: NormalizedMessage, maxLength: number): Normali
   const chunks = splitText(message.text, maxLength)
   if (chunks.length <= 1) return [message]
   return chunks.map((text) => ({ kind: 'text' as const, text }))
+}
+
+/** Whether this message carries a file, which is the only reason to look up a language. */
+function hasAttachments(message: NormalizedMessage): boolean {
+  const media = message as NormalizedMessage & { attachments?: unknown[] }
+  return Array.isArray(media.attachments) && media.attachments.length > 0
 }

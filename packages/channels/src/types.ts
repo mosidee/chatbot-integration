@@ -1,4 +1,4 @@
-import type { ChannelType, NormalizedMessage, VerifiedIdentity } from '@ci/shared'
+import type { ChannelType, Language, NormalizedMessage, VerifiedIdentity } from '@ci/shared'
 
 /**
  * The channel adapter contract.
@@ -60,6 +60,14 @@ export type SendContext = {
   replyToken?: string
   /** Null when no window applies or it has lapsed. */
   messagingWindowExpiresAt?: Date | null
+  /**
+   * The customer's language, for the few words an adapter has to supply itself.
+   *
+   * Almost everything outbound is written by an agent or the AI and is already in the right
+   * language. The exception is a control an adapter builds — the button on a file card,
+   * which LINE renders and we have to label. Loaded only when a message carries one.
+   */
+  language?: Language
 }
 
 export type ChannelProfile = {

@@ -1,4 +1,4 @@
-import type { NormalizedMessage } from '@ci/shared'
+import type { Language, NormalizedMessage } from '@ci/shared'
 import { messagingApi, type webhook } from '@line/bot-sdk'
 import { z } from 'zod'
 import { verifyLineSignature } from '../signature'
@@ -176,7 +176,10 @@ function toNormalized(event: webhook.Event): NormalizedMessage | null {
  * Exported for its tests. Sending goes through the SDK's client, so the translation is the
  * part worth asserting on and the only part with decisions in it.
  */
-export function toLineMessages(message: NormalizedMessage): messagingApi.Message[] {
+export function toLineMessages(
+  message: NormalizedMessage,
+  language: Language = 'en',
+): messagingApi.Message[] {
   switch (message.kind) {
     case 'text':
       return splitText(message.text, MAX_TEXT_LENGTH).map((text) => ({ type: 'text', text }))
@@ -223,19 +226,26 @@ export function toLineMessages(message: NormalizedMessage): messagingApi.Message
      * LINE has no document message. Its outbound types are text, sticker, image, video,
      * audio, location, imagemap, template and flex, and none of them carries a PDF.
      *
-     * So a file becomes a link, with the caption above it when there is one. That is what a
-     * person would do by hand, and it is better than the alternative of refusing to send
-     * something the agent has already told the customer is coming.
+     * So a file is offered as a card: the name, the kind, and a button that opens it. Still
+     * a link underneath, because nothing changes what LINE can carry, but it arrives looking
+     * like something we meant to send rather than a URL pasted into a chat.
+     *
+     * A client too old for Flex shows `altText` instead, which is why that carries the link.
      */
     case 'file': {
-      const urls = message.attachments.flatMap((a) =>
-        a.sourceUrl?.startsWith('http') ? [a.sourceUrl] : [],
+      const files = message.attachments.flatMap((a) =>
+        a.sourceUrl?.startsWith('http')
+          ? [{ url: a.sourceUrl, fileName: a.fileName, mime: a.mime }]
+          : [],
       )
-      if (urls.length === 0) {
+      if (files.length === 0) {
         return [{ type: 'text', text: message.text ?? '[file]' }]
       }
-      const caption = message.text ? `${message.text}\n` : ''
-      return [{ type: 'text', text: `${caption}${urls.join('\n')}`.slice(0, MAX_TEXT_LENGTH) }]
+
+      return [
+        ...(message.text ? [{ type: 'text' as const, text: message.text }] : []),
+        ...files.map((file) => fileCard(file, language)),
+      ]
     }
 
     case 'audio':
@@ -247,6 +257,65 @@ export function toLineMessages(message: NormalizedMessage): messagingApi.Message
 
     case 'event':
       return []
+  }
+}
+
+/**
+ * What the button says, in the customer's language.
+ *
+ * The one piece of outbound wording an adapter has to invent: everything else was typed by
+ * an agent or written by the AI and already reads correctly. LINE caps a button label at
+ * twenty characters.
+ */
+const OPEN_LABEL: Record<Language, string> = { th: 'เปิดไฟล์', en: 'Open file' }
+
+/** A short, human word for the file, from its type. Not a guess at the whole mime table. */
+function fileKind(mime: string, fileName: string | null): string {
+  const extension = fileName?.includes('.') ? fileName.split('.').pop() : null
+  if (extension) return extension.toUpperCase().slice(0, 8)
+  return (mime.split('/').pop() ?? 'file').toUpperCase().slice(0, 8)
+}
+
+/** A document offered as a card with a button, since LINE cannot carry the file itself. */
+function fileCard(
+  file: { url: string; fileName: string | null; mime: string },
+  language: Language,
+): messagingApi.FlexMessage {
+  const name = file.fileName ?? 'file'
+  return {
+    type: 'flex',
+    // Shown in the notification and by any client that cannot render the card. It carries
+    // the link so the message is never a dead end.
+    altText: `${name}\n${file.url}`.slice(0, 400),
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: name, weight: 'bold', size: 'sm', wrap: true, maxLines: 2 },
+          { type: 'text', text: fileKind(file.mime, file.fileName), size: 'xs', color: '#8c8c8c' },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            action: {
+              type: 'uri',
+              label: (OPEN_LABEL[language] ?? OPEN_LABEL.en).slice(0, 20),
+              uri: file.url,
+            },
+          },
+        ],
+      },
+    },
   }
 }
 
@@ -315,7 +384,7 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
     config: LineConfig,
     context: SendContext,
   ): Promise<SendResult> {
-    const messages = toLineMessages(message)
+    const messages = toLineMessages(message, context.language)
     if (messages.length === 0) return { platformMessageId: null }
 
     const client = clientFor(config)

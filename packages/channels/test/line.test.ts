@@ -270,19 +270,59 @@ describe('sending media', () => {
     expect(messages[1]).toMatchObject({ type: 'image' })
   })
 
-  test('sends a document as a link, which is the only carrier LINE has', () => {
-    const messages = toLineMessages({
-      kind: 'file',
-      text: 'your invoice',
-      attachments: [attachment('application/pdf', LINK)],
-    })
+  test('offers a document as a card with a button, since LINE cannot carry the file', () => {
+    const messages = toLineMessages(
+      {
+        kind: 'file',
+        text: 'your invoice',
+        attachments: [attachment('application/pdf', LINK)],
+      },
+      'th',
+    )
 
-    expect(messages).toHaveLength(1)
-    const text = (messages[0] as { text: string }).text
-    expect(text).toContain('your invoice')
-    expect(text).toContain(LINK)
-    // The thing it used to say instead.
-    expect(text).not.toContain('[unsupported message]')
+    // The note first, then the card: a LINE message carries no caption of its own.
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toMatchObject({ type: 'text', text: 'your invoice' })
+
+    const card = messages[1] as {
+      type: string
+      altText: string
+      contents: { footer: { contents: { action: { uri: string; label: string } }[] } }
+    }
+    expect(card.type).toBe('flex')
+    expect(card.contents.footer.contents[0]?.action.uri).toBe(LINK)
+    expect(card.contents.footer.contents[0]?.action.label).toBe('เปิดไฟล์')
+
+    /**
+     * A client too old for Flex shows only this, so it has to carry the link or the message
+     * is a dead end for exactly the people least able to work around it.
+     */
+    expect(card.altText).toContain(LINK)
+    expect(card.altText).toContain('receipt.pdf')
+    expect(card.altText.length).toBeLessThanOrEqual(400)
+  })
+
+  test('labels the button in English for an English-speaking customer', () => {
+    const messages = toLineMessages(
+      { kind: 'file', text: null, attachments: [attachment('application/pdf', LINK)] },
+      'en',
+    )
+    const card = messages[0] as {
+      contents: { footer: { contents: { action: { label: string } }[] } }
+    }
+    expect(card.contents.footer.contents[0]?.action.label).toBe('Open file')
+  })
+
+  test('names the file and its kind on the card', () => {
+    const messages = toLineMessages(
+      { kind: 'file', text: null, attachments: [attachment('application/pdf', LINK)] },
+      'th',
+    )
+    const card = messages[0] as {
+      contents: { body: { contents: { text: string }[] } }
+    }
+    expect(card.contents.body.contents[0]?.text).toBe('receipt.pdf')
+    expect(card.contents.body.contents[1]?.text).toBe('PDF')
   })
 
   test('says something useful when there is no link to send', () => {

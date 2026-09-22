@@ -287,8 +287,9 @@ without spending money.
   publicly. Adapters stay pure translators and read `sourceUrl` only. This is the one place
   the private-bucket posture of ADR 0001 is relaxed, and the link is what makes it safe.
 - **LINE has no document message.** Its outbound types are text, sticker, image, video,
-  audio, location, imagemap, template and flex. A file therefore goes as a link inside a
-  text message; Messenger carries it natively. Neither platform's image or file carries a
+  audio, location, imagemap, template and flex. A file therefore goes as a **Flex card**
+  naming it with a button that opens the link; Messenger carries it natively. The card's
+  `altText` carries the link too, because a client too old for Flex sees only that. Neither platform's image or file carries a
   caption, so an agent's note is sent as its own message first rather than dropped.
 - The conversation panel loads the **most recent** thirty messages and widens the window as
   somebody scrolls up. It used to take the first two hundred, which showed a long thread's
