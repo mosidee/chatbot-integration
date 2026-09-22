@@ -62,7 +62,7 @@ test.describe('tenant tools', () => {
   }) => {
     const name = `check_plan_${uniqueToken().replace(/[^a-z0-9]/g, '')}`
     await signIn(page)
-    await page.goto('/settings')
+    await page.goto('/settings?tab=integrations')
 
     // Define it through the UI, because the editor's two boxes — what the model fills and
     // what the system binds — are the part worth exercising in a browser.

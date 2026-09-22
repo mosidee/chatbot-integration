@@ -7,6 +7,7 @@ import type {
   ToolSummary,
 } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -51,9 +52,34 @@ const TASKS = [
   'rerank',
 ] as const
 
+/**
+ * The groups this page is divided into.
+ *
+ * It used to be seven cards in one column, ordered for whoever built it: providers and
+ * fourteen model rows first, and the things a salon owner actually came for — how the AI
+ * speaks, which channels are connected, the replies their agents reuse — below all of it.
+ *
+ * The split is by who needs it rather than by what it configures. General and Channels are
+ * an operator's; Models is whoever wired the gateway up; Integrations is a developer, and
+ * is offered to admins only because that is who the routes behind it answer.
+ */
+export const SETTINGS_TABS = ['general', 'channels', 'models', 'integrations'] as const
+export type SettingsTab = (typeof SETTINGS_TABS)[number]
+
 export function Settings() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  /**
+   * Read off the location rather than through `useSearch({ from })`.
+   *
+   * The routes in this app are declared inline, so none of them has an id for `from` to
+   * resolve, and asking for one throws on the first render. The location is the same
+   * information without the indirection.
+   */
+  const tab = useRouterState({
+    select: (state) => (state.location.search as { tab?: SettingsTab }).tab,
+  })
   const [savedNote, setSavedNote] = useState<string | null>(null)
 
   const workspace = useQuery({
@@ -63,6 +89,7 @@ export function Settings() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api.settings.providers() })
   const slots = useQuery({ queryKey: ['task-slots'], queryFn: () => api.settings.taskSlots() })
   const channels = useQuery({ queryKey: ['channels'], queryFn: () => api.settings.channels() })
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
 
   const flash = () => {
     setSavedNote(t('settings.saved'))
@@ -89,6 +116,12 @@ export function Settings() {
   const settings = workspace.data?.settings
   if (!settings) return <ErrorNote message={t('common.error')} />
 
+  // The routes behind Integrations answer admins only, and offering somebody a tab that
+  // will refuse them is its own kind of rude.
+  const isAdmin = me.data?.role === 'admin'
+  const tabs = SETTINGS_TABS.filter((key) => key !== 'integrations' || isAdmin)
+  const active = tab && tabs.includes(tab) ? tab : 'general'
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-12">
       <div className="flex items-center gap-3">
@@ -98,118 +131,154 @@ export function Settings() {
         ) : null}
       </div>
 
-      <Card className="space-y-3">
-        <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+      <div className="flex gap-1 overflow-x-auto border-b border-[var(--border)]">
+        {tabs.map((key) => (
+          <button
+            key={key}
+            type="button"
+            data-testid={`settings-tab-${key}`}
+            aria-current={active === key ? 'page' : undefined}
+            onClick={() => void navigate({ to: '/settings', search: { tab: key } })}
+            className={cn(
+              '-mb-px shrink-0 border-b-2 px-3 py-2 text-sm transition-colors',
+              active === key
+                ? 'border-[var(--color-brand-600)] font-medium text-[var(--text)]'
+                : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+            )}
+          >
+            {t(`settings.tabs.${key}`)}
+          </button>
+        ))}
+      </div>
 
-        <div>
-          <Label htmlFor="persona">{t('settings.persona')}</Label>
-          <Textarea
-            id="persona"
-            rows={5}
-            defaultValue={settings.persona}
-            onBlur={(e) => {
-              if (e.target.value !== settings.persona) {
-                saveWorkspace.mutate({ persona: e.target.value })
-              }
+      {active === 'general' ? (
+        <>
+          <Card className="space-y-3">
+            <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+
+            <div>
+              <Label htmlFor="persona">{t('settings.persona')}</Label>
+              <Textarea
+                id="persona"
+                rows={5}
+                defaultValue={settings.persona}
+                onBlur={(e) => {
+                  if (e.target.value !== settings.persona) {
+                    saveWorkspace.mutate({ persona: e.target.value })
+                  }
+                }}
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="default-mode">{t('settings.defaultMode')}</Label>
+                <select
+                  id="default-mode"
+                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+                  value={settings.defaultMode}
+                  onChange={(e) =>
+                    saveWorkspace.mutate({ defaultMode: e.target.value as ConversationMode })
+                  }
+                >
+                  {(['ai', 'ai_supervised', 'human'] as const).map((mode) => (
+                    <option key={mode} value={mode}>
+                      {t(`modes.${mode}`)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <Label htmlFor="default-language">{t('settings.defaultLanguage')}</Label>
+                <select
+                  id="default-language"
+                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+                  value={settings.defaultLanguage}
+                  onChange={(e) =>
+                    saveWorkspace.mutate({ defaultLanguage: e.target.value as Language })
+                  }
+                >
+                  <option value="th">ไทย</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+            </div>
+
+            <HoldingMessages settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
+
+            <fieldset>
+              <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
+                {t('settings.redaction')}
+              </legend>
+              <div className="flex flex-wrap gap-4">
+                {(
+                  [
+                    ['cardNumbers', t('settings.cardNumbers')],
+                    ['thaiNationalId', t('settings.thaiNationalId')],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.redaction[key]}
+                      onChange={(e) =>
+                        saveWorkspace.mutate({
+                          redaction: { ...settings.redaction, [key]: e.target.checked },
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </Card>
+
+          <CannedResponsesCard />
+        </>
+      ) : null}
+
+      {active === 'channels' ? (
+        <ChannelsCard
+          channels={channels.data?.channels ?? []}
+          onChange={() => {
+            void queryClient.invalidateQueries({ queryKey: ['channels'] })
+            flash()
+          }}
+        />
+      ) : null}
+
+      {active === 'models' ? (
+        <>
+          <ProvidersCard
+            providers={providers.data?.providers ?? []}
+            onChange={() => {
+              void queryClient.invalidateQueries({ queryKey: ['providers'] })
+              flash()
             }}
           />
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label htmlFor="default-mode">{t('settings.defaultMode')}</Label>
-            <select
-              id="default-mode"
-              className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
-              value={settings.defaultMode}
-              onChange={(e) =>
-                saveWorkspace.mutate({ defaultMode: e.target.value as ConversationMode })
-              }
-            >
-              {(['ai', 'ai_supervised', 'human'] as const).map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`modes.${mode}`)}
-                </option>
-              ))}
-            </select>
-          </div>
+          <TaskSlotsCard
+            slots={slots.data?.slots ?? []}
+            providers={providers.data?.providers ?? []}
+            onChange={() => {
+              void queryClient.invalidateQueries({ queryKey: ['task-slots'] })
+              flash()
+            }}
+          />
+        </>
+      ) : null}
 
-          <div>
-            <Label htmlFor="default-language">{t('settings.defaultLanguage')}</Label>
-            <select
-              id="default-language"
-              className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
-              value={settings.defaultLanguage}
-              onChange={(e) =>
-                saveWorkspace.mutate({ defaultLanguage: e.target.value as Language })
-              }
-            >
-              <option value="th">ไทย</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-        </div>
-
-        <HoldingMessages settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
-
-        <fieldset>
-          <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-            {t('settings.redaction')}
-          </legend>
-          <div className="flex flex-wrap gap-4">
-            {(
-              [
-                ['cardNumbers', t('settings.cardNumbers')],
-                ['thaiNationalId', t('settings.thaiNationalId')],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={settings.redaction[key]}
-                  onChange={(e) =>
-                    saveWorkspace.mutate({
-                      redaction: { ...settings.redaction, [key]: e.target.checked },
-                    })
-                  }
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      </Card>
-
-      <ProvidersCard
-        providers={providers.data?.providers ?? []}
-        onChange={() => {
-          void queryClient.invalidateQueries({ queryKey: ['providers'] })
-          flash()
-        }}
-      />
-
-      <TaskSlotsCard
-        slots={slots.data?.slots ?? []}
-        providers={providers.data?.providers ?? []}
-        onChange={() => {
-          void queryClient.invalidateQueries({ queryKey: ['task-slots'] })
-          flash()
-        }}
-      />
-
-      <IdentityCard settings={settings} onSave={(patch) => saveWorkspace.mutate(patch as never)} />
-
-      <ToolsCard />
-
-      <CannedResponsesCard />
-
-      <ChannelsCard
-        channels={channels.data?.channels ?? []}
-        onChange={() => {
-          void queryClient.invalidateQueries({ queryKey: ['channels'] })
-          flash()
-        }}
-      />
+      {active === 'integrations' && isAdmin ? (
+        <>
+          <ToolsCard />
+          <IdentityCard
+            settings={settings}
+            onSave={(patch) => saveWorkspace.mutate(patch as never)}
+          />
+        </>
+      ) : null}
     </div>
   )
 }

@@ -165,7 +165,7 @@ test('every model the provider serves is offered, and an id can still be typed',
   // Before this, the model was typed from memory. A gateway can serve dozens of ids and a
   // typo only surfaced when a customer message failed.
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=models')
 
   const modelField = page.getByTestId('slot-agent_chat-primary-model')
   await expect(modelField).toHaveValue('mock-model', { timeout: 20_000 })
@@ -220,7 +220,7 @@ test('the embedding slot can stop sending the dimensions field, and remembers it
   await resetEmbedSlot(request)
 
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=models')
 
   const sendDimensions = page.getByTestId('slot-embed-send-dimensions')
   await expect(sendDimensions).toBeChecked({ timeout: 20_000 })
@@ -251,7 +251,7 @@ test('a model can be tested from settings before a customer finds out', async ({
   // A gateway's catalogue lists what it is configured to offer, not what it will serve.
   await resetEmbedSlot(request)
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=models')
 
   const verify = page.getByTestId('slot-agent_chat-primary-model-verify')
   await expect(verify).toBeEnabled({ timeout: 20_000 })
@@ -428,7 +428,7 @@ test('the loader script is served for a host page to embed', async ({ request })
 test('the widget is set up and previewed from settings', async ({ page }) => {
   // Everything needed to put the widget on a website, where an operator configures it.
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=channels')
 
   // The web channel's own configure panel.
   const configure = page
@@ -476,7 +476,7 @@ test('setting the allowed origins keeps the rest of the channel config', async (
   })
 
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=channels')
   const configure = page
     .locator('div', { hasText: /^Web widget/ })
     .getByRole('button', { name: 'ตั้งค่า' })

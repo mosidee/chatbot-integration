@@ -229,6 +229,12 @@ const th = {
   },
   settings: {
     title: 'ตั้งค่า',
+    tabs: {
+      general: 'ทั่วไป',
+      channels: 'ช่องทาง',
+      models: 'รุ่น AI',
+      integrations: 'เชื่อมต่อระบบ',
+    },
     workspace: 'พื้นที่ทำงาน',
     providers: 'ผู้ให้บริการ AI',
     taskSlots: 'รุ่นที่ใช้ในแต่ละงาน',
@@ -670,6 +676,12 @@ const en: typeof th = {
   },
   settings: {
     title: 'Settings',
+    tabs: {
+      general: 'General',
+      channels: 'Channels',
+      models: 'AI models',
+      integrations: 'Integrations',
+    },
     workspace: 'Workspace',
     providers: 'AI providers',
     taskSlots: 'Model per task',
