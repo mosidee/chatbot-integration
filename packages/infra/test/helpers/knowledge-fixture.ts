@@ -1,6 +1,6 @@
 import { loadEnv } from '@ci/config'
 import type { SlotConfig } from '@ci/core'
-import { createDb, type Database, newId, schema } from '@ci/db'
+import { createDb, type Database, defaultWorkspaceSettings, newId, schema } from '@ci/db'
 import { eq } from 'drizzle-orm'
 
 /**
@@ -33,22 +33,12 @@ export async function createKnowledgeFixture(): Promise<KnowledgeFixture> {
   })
   await db.insert(schema.workspaces).values({
     id: workspaceId,
-    settings: {
-      defaultLanguage: 'th',
-      defaultMode: 'ai',
+    settings: defaultWorkspaceSettings({
       persona: 'test',
       businessHours: { timezone: 'Asia/Bangkok', days: {} },
-      retentionDays: 730,
-      redaction: { cardNumbers: true, thaiNationalId: true },
       waitingHumanFallbackMinutes: null,
       acknowledgementText: { th: 'รอสักครู่', en: 'One moment' },
-      modelPrices: {},
-      externalRetrieval: null,
-      identity: {
-        widgetToken: { enabled: true },
-        verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
-      },
-    },
+    }),
   })
 
   const channelId = newId()

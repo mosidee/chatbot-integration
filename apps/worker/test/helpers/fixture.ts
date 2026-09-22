@@ -1,9 +1,9 @@
 import { loadEnv } from '@ci/config'
 import type { SlotConfig } from '@ci/core'
-import { encryptJson, encryptSecret, newId, schema } from '@ci/db'
+import { defaultWorkspaceSettings, encryptJson, encryptSecret, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import { createRuntime, type Runtime } from '@ci/infra'
-import type { HttpToolConfig } from '@ci/shared'
+import type { HttpToolConfig, WorkspaceStatus } from '@ci/shared'
 import type { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
 
@@ -15,22 +15,20 @@ import { eq } from 'drizzle-orm'
  * a developer already has up.
  */
 
-export const DEFAULT_SETTINGS: WorkspaceSettings = {
-  defaultLanguage: 'th',
-  defaultMode: 'ai',
+/**
+ * The product's own defaults, with the few a test needs differently.
+ *
+ * Built from `defaultWorkspaceSettings` rather than restated, because three hand-written
+ * copies of this had drifted apart: a test could pass against business hours and a fallback
+ * timer no real workspace has ever had. Business hours are emptied so a test is not
+ * dependent on the hour it runs at, and the fallback timer is off so nothing fires mid-test.
+ */
+export const DEFAULT_SETTINGS: WorkspaceSettings = defaultWorkspaceSettings({
   persona: 'You support salon-saas, a platform salon owners use to run their business.',
   businessHours: { timezone: 'Asia/Bangkok', days: {} },
-  retentionDays: 730,
-  redaction: { cardNumbers: true, thaiNationalId: true },
   waitingHumanFallbackMinutes: null,
   acknowledgementText: { th: 'รอสักครู่นะคะ', en: 'One moment please.' },
-  modelPrices: {},
-  externalRetrieval: null,
-  identity: {
-    widgetToken: { enabled: true },
-    verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
-  },
-}
+})
 
 export type Fixture = {
   runtime: Runtime
@@ -62,6 +60,8 @@ export async function createFixture(options: {
   embedBaseUrl?: string
   /** Also create a LINE channel, for exercising the real adapter path. */
   lineChannel?: { channelSecret: string; channelAccessToken: string }
+  /** Start the workspace suspended or deleting, to prove the processors skip its work. */
+  status?: WorkspaceStatus
 }): Promise<Fixture> {
   const env = loadEnv()
   const workspaceId = newId()
@@ -85,6 +85,7 @@ export async function createFixture(options: {
   await db.insert(schema.workspaces).values({
     id: workspaceId,
     settings: { ...DEFAULT_SETTINGS, ...options.settings },
+    ...(options.status ? { status: options.status } : {}),
   })
 
   const userId = newId()

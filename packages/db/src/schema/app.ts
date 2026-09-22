@@ -115,6 +115,8 @@ export const mergeSuggestionStatusEnum = pgEnum('merge_suggestion_status', ['pen
 /** `mcp` is absent on purpose: the MCP source adds it, and adding a value is cheap. */
 export const toolKindEnum = pgEnum('tool_kind', ['http'])
 export const identityProofEnum = pgEnum('identity_proof', ['widget_token', 'verification_link'])
+export const workspaceStatusEnum = pgEnum('workspace_status', ['active', 'suspended', 'deleting'])
+export const invitationPurposeEnum = pgEnum('invitation_purpose', ['invite', 'password_reset'])
 
 // ---------------------------------------------------------------------------
 // Workspace (1:1 extension of Better Auth's organization)
@@ -182,6 +184,15 @@ export const workspaces = pgTable('workspaces', {
     .primaryKey()
     .references(() => organization.id, { onDelete: 'cascade' }),
   settings: jsonb('settings').$type<WorkspaceSettings>().notNull(),
+  /**
+   * Whether this tenant may be used at all.
+   *
+   * Read on every authenticated request, every webhook and every queued job, so that one
+   * column is the single switch: there is no second place that decides a suspended tenant
+   * is nonetheless allowed to send a message. `deleting` is set the instant an erasure is
+   * requested, which is what keeps new work from arriving while the job runs.
+   */
+  status: workspaceStatusEnum('status').default('active').notNull(),
   createdAt: ts('created_at').defaultNow().notNull(),
   updatedAt: ts('updated_at').defaultNow().notNull(),
 })
@@ -726,6 +737,48 @@ export const identityVerifications = pgTable(
     uniqueIndex('identity_verifications_code_uq').on(t.code),
     index('identity_verifications_identity_idx').on(t.channelIdentityId),
     index('identity_verifications_workspace_idx').on(t.workspaceId),
+  ],
+)
+
+/**
+ * A single-use link: an invitation to join, or a password reset for somebody locked out.
+ *
+ * One table for both because they are the same object — this address, one action, once,
+ * before this time — and two tables would grow two different expiry rules.
+ *
+ * Only the hash of the token is stored. The token itself is shown once, in the console, to
+ * the admin who will pass it on; we cannot show it again and neither can anyone who reaches
+ * this table. That is the same reasoning as every other credential here, applied to a
+ * credential that happens to live in a URL.
+ *
+ * Better Auth's own `invitation` table is left alone. It assumes a mail hook, an acceptor
+ * who is already signed in, and it stores its id in the clear as the credential.
+ */
+export const workspaceInvitations = pgTable(
+  'workspace_invitations',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    purpose: invitationPurposeEnum('purpose').notNull(),
+    /** Lower-cased at the boundary; the authority on who this link is for. */
+    email: text('email').notNull(),
+    /** The role they will hold. Null for a password reset, which changes no authority. */
+    role: text('role'),
+    /** Who the link is for, when we already know: always set for a reset. */
+    userId: text('user_id').references(() => user.id, { onDelete: 'set null' }),
+    tokenHash: text('token_hash').notNull(),
+    invitedByUserId: text('invited_by_user_id').references(() => user.id, {
+      onDelete: 'set null',
+    }),
+    expiresAt: ts('expires_at').notNull(),
+    usedAt: ts('used_at'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('workspace_invitations_token_hash_uq').on(t.tokenHash),
+    index('workspace_invitations_workspace_idx').on(t.workspaceId, t.purpose),
   ],
 )
 

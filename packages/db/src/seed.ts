@@ -2,50 +2,20 @@
  * Seed a usable workspace: organization + workspace settings, an admin user, a test
  * channel, a web channel, and optionally one provider with task slots wired to it.
  *
+ * The admin is also granted platform admin, because somebody has to be able to create the
+ * second tenant and there is no other way in: the running API cannot sign anybody up.
+ *
  * Idempotent: re-running updates rather than duplicating.
  */
-import { eq } from 'drizzle-orm'
+import { slugify } from '@ci/shared'
+import { and, eq } from 'drizzle-orm'
 import { createAuth } from './auth-config'
 import { createDb } from './client'
 import { encryptSecret } from './crypto'
 import { newId } from './id'
+import { grantPlatformAdmin } from './platform'
 import * as schema from './schema'
-import type { WorkspaceSettings } from './schema/app'
-
-const DEFAULT_SETTINGS: WorkspaceSettings = {
-  defaultLanguage: 'th',
-  defaultMode: 'ai',
-  persona: [
-    'You are a helpful customer support assistant for salon-saas, a SaaS platform that salon',
-    'owners use to run their business. You answer questions from salon owners and prospects',
-    'about pricing, onboarding, features, billing and troubleshooting.',
-    'Be concise, warm and practical. Never invent product facts: if you are unsure or the',
-    'question needs account-specific action, hand off to a human.',
-  ].join(' '),
-  businessHours: {
-    timezone: 'Asia/Bangkok',
-    days: {
-      '1': { open: '09:00', close: '18:00' },
-      '2': { open: '09:00', close: '18:00' },
-      '3': { open: '09:00', close: '18:00' },
-      '4': { open: '09:00', close: '18:00' },
-      '5': { open: '09:00', close: '18:00' },
-    },
-  },
-  retentionDays: 730,
-  redaction: { cardNumbers: true, thaiNationalId: true },
-  waitingHumanFallbackMinutes: 15,
-  acknowledgementText: {
-    th: 'สักครู่นะคะ กำลังโอนสายให้เจ้าหน้าที่ดูแลต่อค่ะ',
-    en: 'One moment please, I am passing you to a colleague.',
-  },
-  modelPrices: {},
-  externalRetrieval: null,
-  identity: {
-    widgetToken: { enabled: true },
-    verificationLink: { enabled: false, url: null, secretEncrypted: null, ttlMinutes: 15 },
-  },
-}
+import { createWorkspace, defaultWorkspaceSettings } from './workspace'
 
 async function main() {
   const connectionString = process.env.DATABASE_URL
@@ -57,41 +27,40 @@ async function main() {
 
   try {
     const workspaceName = process.env.SEED_WORKSPACE_NAME ?? 'salon-saas'
-    const slug = workspaceName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
+    const slug = slugify(workspaceName)
 
     // --- organization + workspace -------------------------------------------------
-    let [org] = await db
+    const [existingOrg] = await db
       .select()
       .from(schema.organization)
       .where(eq(schema.organization.slug, slug))
       .limit(1)
 
-    if (!org) {
-      const inserted = await db
-        .insert(schema.organization)
-        .values({ id: newId(), name: workspaceName, slug, createdAt: new Date() })
-        .returning()
-      org = inserted[0]
-      console.log(`created organization ${slug}`)
-    } else {
+    let workspaceId: string
+    if (existingOrg) {
+      workspaceId = existingOrg.id
       console.log(`organization ${slug} already exists`)
-    }
-    if (!org) throw new Error('failed to create organization')
 
-    const existingWorkspace = await db
-      .select()
-      .from(schema.workspaces)
-      .where(eq(schema.workspaces.id, org.id))
-      .limit(1)
-
-    if (existingWorkspace.length === 0) {
-      await db.insert(schema.workspaces).values({ id: org.id, settings: DEFAULT_SETTINGS })
-      console.log('created workspace settings')
+      // An organization from before the workspace row existed, or a half-finished seed.
+      const existingWorkspace = await db
+        .select({ id: schema.workspaces.id })
+        .from(schema.workspaces)
+        .where(eq(schema.workspaces.id, workspaceId))
+        .limit(1)
+      if (existingWorkspace.length === 0) {
+        await db.insert(schema.workspaces).values({
+          id: workspaceId,
+          settings: defaultWorkspaceSettings(),
+        })
+        console.log('created workspace settings')
+      }
+    } else {
+      // The same function the platform routes call, so a seeded tenant and a tenant created
+      // from the console are identical, channels included.
+      const created = await createWorkspace(db, { name: workspaceName, slug })
+      workspaceId = created.workspaceId
+      console.log(`created organization ${slug} with its channels`)
     }
-    const workspaceId = org.id
 
     // --- admin user ---------------------------------------------------------------
     const adminEmail = process.env.SEED_ADMIN_EMAIL
@@ -103,40 +72,51 @@ async function main() {
         .where(eq(schema.user.email, adminEmail))
         .limit(1)
 
+      let userId: string
       if (existing.length === 0) {
         // Go through Better Auth so the password is hashed with its own scheme.
         const auth = createAuth(db, { allowSignUp: true })
         const created = await auth.api.signUpEmail({
           body: { email: adminEmail, password: adminPassword, name: 'Admin' },
         })
-        const userId = created.user.id
-        await db.insert(schema.member).values({
-          id: newId(),
-          organizationId: workspaceId,
-          userId,
-          role: 'admin',
-          createdAt: new Date(),
-        })
+        userId = created.user.id
         console.log(`created admin user ${adminEmail}`)
       } else {
-        const userId = existing[0]?.id
-        if (userId) {
-          const membership = await db
-            .select()
-            .from(schema.member)
-            .where(eq(schema.member.userId, userId))
-            .limit(1)
-          if (membership.length === 0) {
-            await db.insert(schema.member).values({
-              id: newId(),
-              organizationId: workspaceId,
-              userId,
-              role: 'admin',
-              createdAt: new Date(),
-            })
-          }
-        }
+        userId = existing[0]?.id ?? ''
         console.log(`admin user ${adminEmail} already exists`)
+      }
+
+      if (userId) {
+        // Scoped by organization as well as user: somebody who already belongs to another
+        // workspace was previously left with no membership in this one, because the check
+        // only asked whether they belonged anywhere.
+        const membership = await db
+          .select({ id: schema.member.id })
+          .from(schema.member)
+          .where(
+            and(eq(schema.member.userId, userId), eq(schema.member.organizationId, workspaceId)),
+          )
+          .limit(1)
+        if (membership.length === 0) {
+          await db.insert(schema.member).values({
+            id: newId(),
+            organizationId: workspaceId,
+            userId,
+            role: 'admin',
+            createdAt: new Date(),
+          })
+          console.log(`added ${adminEmail} to ${slug} as admin`)
+        }
+
+        /**
+         * Somebody has to be able to create the second tenant.
+         *
+         * The running API cannot sign anybody up, so without this grant a fresh
+         * installation has no route to the platform page at all. Idempotent, and it never
+         * revokes: a re-run of the seed is not a statement about who else should have it.
+         */
+        await grantPlatformAdmin(db, { userId, grantedByUserId: null })
+        console.log(`granted platform admin to ${adminEmail}`)
       }
     } else {
       console.log('SEED_ADMIN_EMAIL/SEED_ADMIN_PASSWORD not set, skipping admin user')

@@ -53,8 +53,9 @@ export const aiTaskSchema = z.enum([
 ])
 export type AiTask = z.infer<typeof aiTaskSchema>
 
-export const userRoleSchema = z.enum(['admin', 'agent', 'viewer'])
-export type UserRole = z.infer<typeof userRoleSchema>
+// The console role lives in ./workspace with the rest of tenancy, and is re-exported from
+// the package index. It sat here unused, which is how a second spelling of the same enum
+// survives long enough to disagree with the first.
 
 export const languageSchema = z.enum(['th', 'en'])
 export type Language = z.infer<typeof languageSchema>

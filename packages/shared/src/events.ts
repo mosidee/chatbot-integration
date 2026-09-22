@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { conversationModeSchema, conversationStatusSchema } from './conversation'
+import { workspaceStatusSchema } from './workspace'
 
 /**
  * Events pushed to the agent GUI over WebSocket.
@@ -40,6 +41,17 @@ export const wsEventSchema = z.discriminatedUnion('type', [
     type: z.literal('presence'),
     userId: z.string(),
     online: z.boolean(),
+  }),
+  /**
+   * The workspace was suspended, restored or scheduled for deletion.
+   *
+   * Sent so an open console reacts at once rather than on the next reload. Somebody typing
+   * a reply into a workspace that has just been suspended should be told, not left to
+   * discover it when the send fails.
+   */
+  z.object({
+    type: z.literal('workspace.status'),
+    status: workspaceStatusSchema,
   }),
 ])
 export type WsEvent = z.infer<typeof wsEventSchema>

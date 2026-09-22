@@ -6,6 +6,7 @@
  *  - agent  : works the inbox and edits knowledge, but cannot see or change credentials
  *  - viewer : read-only, for a manager reviewing the pilot
  */
+import { USER_ROLES, type UserRoleName } from '@ci/shared'
 import { createAccessControl } from 'better-auth/plugins/access'
 
 export const statement = {
@@ -49,5 +50,10 @@ export const viewer = ac.newRole({
 })
 
 export const roles = { admin, agent, viewer }
-export const USER_ROLES = ['admin', 'agent', 'viewer'] as const
-export type UserRoleName = (typeof USER_ROLES)[number]
+
+/**
+ * The role names themselves live in `@ci/shared`, because the console renders them and
+ * cannot import this package. Re-exported here so the auth config and its callers keep
+ * their existing import.
+ */
+export { USER_ROLES, type UserRoleName }
