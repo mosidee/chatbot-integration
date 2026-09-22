@@ -13,6 +13,23 @@ const LANGUAGE_RULE = [
   'rather than switching to English because of a few borrowed words.',
 ].join(' ')
 
+/**
+ * Plain text, because every channel this product speaks renders it literally.
+ *
+ * LINE, Messenger and the widget have no markdown: `**bold**` reaches the customer as
+ * asterisks. `toPlainText` cleans up what arrives anyway, but asking costs nothing and a
+ * model that never writes the markup cannot have it mis-stripped.
+ *
+ * In the prompt builder rather than the persona on purpose. The persona is a text box a
+ * tenant edits, and a rule about how the product works should not be something they can
+ * delete by rewriting their own tone of voice.
+ */
+const FORMAT_RULE = [
+  'Reply in plain text. Do not use markdown: no **bold**, no headings, no backticks, and no',
+  'markdown links. Write short paragraphs, and where you need a list, put each item on its',
+  'own line beginning with •.',
+].join(' ')
+
 const SAFETY_RULE = [
   'Card numbers and national ID numbers are masked before you see them, shown as',
   '[card ••••1234]. Never ask a customer to send one, and never repeat a masked value',
@@ -20,7 +37,7 @@ const SAFETY_RULE = [
 ].join(' ')
 
 export function buildSystemPrompt(input: AgentTurnInput, mode: 'answer' | 'suggest'): string {
-  const parts: string[] = [input.workspace.persona.trim(), LANGUAGE_RULE, SAFETY_RULE]
+  const parts: string[] = [input.workspace.persona.trim(), LANGUAGE_RULE, FORMAT_RULE, SAFETY_RULE]
 
   parts.push(
     `The workspace default language is ${input.workspace.defaultLanguage === 'th' ? 'Thai' : 'English'}.`,

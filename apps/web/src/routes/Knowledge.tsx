@@ -5,13 +5,16 @@ import { useTranslation } from 'react-i18next'
 import {
   Button,
   Card,
+  ConfirmButton,
   cn,
   EmptyState,
   ErrorNote,
   Input,
   Label,
+  SaveStatus,
   Spinner,
   Textarea,
+  useSaveState,
 } from '../components/ui'
 import { api, type KnowledgeSource, type SearchHit, type SearchResult } from '../lib/api'
 
@@ -72,14 +75,23 @@ const STATUS_STYLES: Record<string, string> = {
 function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: () => void }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const save = useSaveState()
 
   const reindex = useMutation({
     mutationFn: () => api.knowledge.reindex(source.id),
-    onSuccess: onChange,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      onChange()
+    },
   })
   const remove = useMutation({
     mutationFn: () => api.knowledge.deleteSource(source.id),
-    onSuccess: onChange,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      onChange()
+    },
   })
 
   const entries = useQuery({
@@ -93,10 +105,13 @@ function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: ()
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
+          aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className="min-w-0 flex-1 text-left"
         >
-          <span className="truncate text-sm font-medium">{source.title}</span>
+          {/* `block`, so truncation works at all: an inline span has no width to truncate
+              against, and a long PDF name wrapped across the row instead. */}
+          <span className="block truncate text-sm font-medium">{source.title}</span>
         </button>
         <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] uppercase text-[var(--text-muted)]">
           {source.kind}
@@ -115,10 +130,15 @@ function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: ()
         <Button size="sm" variant="ghost" onClick={() => reindex.mutate()}>
           {t('knowledge.reindex')}
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => remove.mutate()}>
-          ✕
-        </Button>
+        <ConfirmButton
+          testId={`knowledge-remove-${source.id}`}
+          label={t('common.remove')}
+          armedLabel={t('common.removeConfirm')}
+          onConfirm={() => remove.mutate()}
+        />
       </div>
+
+      <SaveStatus state={save.state} className="mt-1" />
 
       {source.error ? (
         <div className="mt-2">
@@ -149,9 +169,15 @@ function EntryEditor({
   onChange: () => void
 }) {
   const { t } = useTranslation()
+  const status = useSaveState()
+
   const save = useMutation({
     mutationFn: (patch: Record<string, unknown>) => api.knowledge.updateEntry(entry.id, patch),
-    onSuccess: onChange,
+    ...status.handlers,
+    onSuccess: () => {
+      status.handlers.onSuccess()
+      onChange()
+    },
   })
 
   return (
@@ -172,14 +198,19 @@ function EntryEditor({
           if (e.target.value !== entry.body) save.mutate({ body: e.target.value })
         }}
       />
-      <label className="flex items-center gap-2 text-[13px]">
-        <input
-          type="checkbox"
-          checked={entry.enabled}
-          onChange={(e) => save.mutate({ enabled: e.target.checked })}
-        />
-        {t('knowledge.enabled')}
-      </label>
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-[13px]">
+          <input
+            type="checkbox"
+            checked={entry.enabled}
+            onChange={(e) => save.mutate({ enabled: e.target.checked })}
+          />
+          {t('knowledge.enabled')}
+        </label>
+        {/* These fields save on blur, so without this the only sign anything happened was
+            the text staying where it was typed — which it also does when the save fails. */}
+        <SaveStatus state={status.state} />
+      </div>
     </div>
   )
 }

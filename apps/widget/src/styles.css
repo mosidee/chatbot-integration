@@ -8,7 +8,28 @@
   --muted: #667085;
   --border: #e4e7ec;
   --bubble: #f2f4f7;
-  font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans Thai', sans-serif;
+  --accent-fg: #ffffff;
+  --text: #101828;
+  /*
+   * Thai first. Behind system-ui a Windows browser rendered Thai in a fallback face whose
+   * metrics do not match the Latin around it, so a mixed sentence sat on two baselines.
+   */
+  font-family: 'Noto Sans Thai', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+/*
+ * The host page decides the colour scheme, but this iframe has its own document, so a
+ * widget on a dark site was a white rectangle. Following the visitor's own preference is
+ * the closest this can get without the host telling us.
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1a1d21;
+    --muted: #98a2b3;
+    --border: #2f3439;
+    --bubble: #272b30;
+    --text: #f2f4f7;
+  }
 }
 
 * {
@@ -21,7 +42,7 @@ body,
   height: 100%;
   margin: 0;
   background: var(--surface);
-  color: #101828;
+  color: var(--text);
 }
 
 .shell {
@@ -37,17 +58,29 @@ body,
   gap: 8px;
   padding: 12px 14px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 600;
 }
 
 .header button {
+  /* 40px square: an 18px glyph was a target a thumb could not reliably hit. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: -8px -8px -8px 0;
   border: 0;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   font-size: 18px;
   cursor: pointer;
   line-height: 1;
+}
+
+.header button:hover {
+  background: rgb(0 0 0 / 12%);
 }
 
 .thread {
@@ -72,14 +105,33 @@ body,
 .bubble.you {
   align-self: flex-end;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-bottom-right-radius: 4px;
+}
+
+/* Drawn before the server confirmed it. Faded, so "sending" and "sent" are not identical. */
+.bubble.pending {
+  opacity: 0.6;
 }
 
 .bubble.support {
   align-self: flex-start;
   background: var(--bubble);
   border-bottom-left-radius: 4px;
+}
+
+/*
+ * The product speaking rather than the AI or a colleague: the sentence that says somebody
+ * is coming. Centred and quiet, so it does not read as a person's reply.
+ */
+.bubble.system {
+  align-self: center;
+  max-width: 92%;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 .hint {
@@ -96,18 +148,28 @@ body,
   border-top: 1px solid var(--border);
 }
 
-.composer input {
+.composer textarea {
   flex: 1;
   min-width: 0;
+  max-height: 120px;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   font: inherit;
+  background: var(--surface);
+  color: var(--text);
+  resize: none;
+  overflow-y: auto;
 }
 
-.composer input:focus {
+.composer textarea:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
+}
+
+.composer textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .composer button {
@@ -115,7 +177,7 @@ body,
   border-radius: 10px;
   padding: 0 16px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -132,6 +194,72 @@ body,
   padding: 0 14px 8px;
 }
 
+/* Who is answering. Sits above the box so it is read before the next message is typed. */
+.state {
+  margin: 0;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/*
+ * The AI is composing. Three dots, the way every chat draws it, and never for longer than
+ * the app allows: an indicator that pulses forever promises an answer that is not coming.
+ */
+/*
+ * `display:flex` beats the `hidden` attribute, which only sets `display:none` from the user
+ * agent sheet, so without this the dots were on screen from the moment the widget loaded.
+ */
+.typing[hidden] {
+  display: none;
+}
+
+.typing {
+  display: flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border-bottom-left-radius: 4px;
+  background: var(--bubble);
+}
+
+.typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: typing 1.2s infinite ease-in-out;
+}
+
+.typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing span {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 /* A file an agent sent. Bounded so a tall picture cannot push the composer off the page. */
 .attachment {
   display: block;
@@ -139,7 +267,8 @@ body,
   max-height: 220px;
   margin-top: 0.4rem;
   border-radius: 0.5rem;
-  object-fit: cover;
+  /* Contain, not cover: customers send screenshots of errors, and cropping loses the error. */
+  object-fit: contain;
 }
 
 .attachment-file {
@@ -147,4 +276,17 @@ body,
   margin-top: 0.4rem;
   text-decoration: underline;
   word-break: break-word;
+}
+
+/*
+ * On a phone the widget is the page.
+ *
+ * The card was a fixed 380x560 with the launcher wedged underneath, and `100vh` does not
+ * shrink when the keyboard opens, so the composer sat behind it. The loader gives the
+ * frame the whole viewport at this width; this reserves room for the home indicator.
+ */
+@media (max-width: 480px) {
+  .composer {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
 }

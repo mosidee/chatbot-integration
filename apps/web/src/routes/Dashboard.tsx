@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Card, cn, EmptyState, ErrorNote, Spinner } from '../components/ui'
@@ -56,16 +57,38 @@ function labelFor(day: string, language: string): string {
 function Volume({ data, language }: { data: DashboardData; language: string }) {
   const { t } = useTranslation()
   const peak = Math.max(1, ...data.days.map((day) => day.conversations))
+  const total = data.days.reduce((sum, day) => sum + day.conversations, 0)
+
+  /**
+   * How many day labels the axis can carry.
+   *
+   * Thirty of them at 375px is about eleven pixels each, which truncates to nothing. Every
+   * Nth instead, so the axis stays a timeline somebody can read rather than a row of
+   * smudges.
+   */
+  const step = Math.ceil(data.days.length / 7)
 
   return (
     <Card className="space-y-2">
-      <h2 className="text-sm font-semibold">{t('dashboard.volume')}</h2>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold">{t('dashboard.volume')}</h2>
+        {/* The tallest bar's value. It was only ever in a `title`, which a phone has no
+            way to show and a screen reader does not announce. */}
+        <span className="text-[11px] text-[var(--text-muted)]">
+          {t('dashboard.peak')} {peak}
+        </span>
+      </div>
       {/*
         Bars and labels are separate rows on purpose. A percentage height resolves against
         the parent's height, and a column that also held its own label had no height of its
         own, so every bar rendered at zero.
       */}
-      <div className="flex h-36 items-end gap-1" data-testid="volume-chart">
+      <div
+        className="flex h-36 items-end gap-1"
+        data-testid="volume-chart"
+        role="img"
+        aria-label={t('dashboard.volumeSummary', { total, peak, days: data.days.length })}
+      >
         {data.days.map((day) => (
           <div
             key={day.day}
@@ -80,16 +103,28 @@ function Volume({ data, language }: { data: DashboardData; language: string }) {
           />
         ))}
       </div>
-      <div className="flex gap-1">
-        {data.days.map((day) => (
+      <div className="flex gap-1" aria-hidden="true">
+        {data.days.map((day, index) => (
           <span
             key={day.day}
             className="min-w-0 flex-1 truncate text-center text-[10px] text-[var(--text-muted)]"
           >
-            {labelFor(day.day, language).split(' ')[0]}
+            {index % step === 0 ? labelFor(day.day, language).split(' ')[0] : ''}
           </span>
         ))}
       </div>
+      {/* The numbers themselves, for anybody who cannot hover a bar. */}
+      <table className="sr-only">
+        <caption>{t('dashboard.volume')}</caption>
+        <tbody>
+          {data.days.map((day) => (
+            <tr key={day.day}>
+              <th scope="row">{labelFor(day.day, language)}</th>
+              <td>{day.conversations}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Card>
   )
 }
@@ -154,34 +189,62 @@ export function Dashboard() {
           value={answeredShare === null ? '—' : `${answeredShare}%`}
           hint={`${data.totals.answered} / ${handled} ${t('dashboard.turns')}`}
         />
+        {/*
+          The wait for a person, not the wait for a reply.
+          The AI answers in seconds, so the first-reply median reads "four seconds" on a
+          week where three customers waited overnight for a colleague. That number is still
+          here, underneath, where it is true and not misleading.
+        */}
         <Figure
-          testId="figure-first-response"
-          label={t('dashboard.firstResponse')}
-          value={formatDuration(data.firstResponse.medianSeconds, t)}
-          hint={`${data.firstResponse.conversations} ${t('dashboard.conversationsShort')}`}
+          testId="figure-handoff-wait"
+          label={t('dashboard.handoffWait')}
+          value={formatDuration(data.handoffWait.medianSeconds, t)}
+          // `events` counts handoffs a person has answered, so zero of them with handoffs
+          // on the board below means nobody has picked any up — which is worth saying
+          // plainly rather than reporting as "no handoffs".
+          hint={
+            data.handoffWait.events > 0
+              ? `${data.handoffWait.events} ${t('dashboard.handoffs')} · ${t('dashboard.firstResponse')} ${formatDuration(data.firstResponse.medianSeconds, t)}`
+              : t('dashboard.noneAnswered')
+          }
         />
         <Figure
           testId="figure-cost"
           label={t('dashboard.cost')}
-          value={data.totals.cost > 0 ? `$${data.totals.cost.toFixed(2)}` : '—'}
-          hint={`${data.totals.tokensIn + data.totals.tokensOut} tokens`}
+          // A gateway that reports no price contributes zero, so a total of zero means
+          // "nothing is priced" far more often than it means "this was free".
+          value={
+            data.totals.cost > 0
+              ? new Intl.NumberFormat(i18n.language, {
+                  style: 'currency',
+                  currency: 'USD',
+                }).format(data.totals.cost)
+              : t('dashboard.notPriced')
+          }
+          hint={`${data.totals.tokensIn + data.totals.tokensOut} ${t('dashboard.tokens')}`}
         />
       </div>
 
+      {/* Both of these name something somebody should go and do, so both are the way to
+          go and do it. They used to be text you had to act on by navigating yourself. */}
       {data.waitingNow > 0 ? (
-        <Card className="border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
-          <p className="text-sm" data-testid="waiting-now">
-            {data.waitingNow} {t('dashboard.waitingNow')}
-          </p>
-        </Card>
+        <Link to="/" search={{ tab: 'waiting' }} className="block">
+          <Card className="border-amber-300 bg-amber-50 text-amber-900 hover:border-amber-400 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+            <p className="text-sm" data-testid="waiting-now">
+              {data.waitingNow} {t('dashboard.waitingNow')}
+            </p>
+          </Card>
+        </Link>
       ) : null}
 
       {data.reviewQueueNow > 0 ? (
-        <Card className="border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-100">
-          <p className="text-sm" data-testid="review-queue-now">
-            {data.reviewQueueNow} {t('dashboard.reviewQueueNow')}
-          </p>
-        </Card>
+        <Link to="/" search={{ tab: 'review' }} className="block">
+          <Card className="border-sky-300 bg-sky-50 text-sky-900 hover:border-sky-400 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-100">
+            <p className="text-sm" data-testid="review-queue-now">
+              {data.reviewQueueNow} {t('dashboard.reviewQueueNow')}
+            </p>
+          </Card>
+        </Link>
       ) : null}
 
       <Volume data={data} language={i18n.language} />
@@ -195,13 +258,19 @@ export function Dashboard() {
             <ul className="space-y-1 text-[13px]" data-testid="handoff-reasons">
               {data.handoffReasons.map((row) => (
                 <li key={row.reason} className="flex justify-between gap-2">
-                  <span className="truncate font-mono text-[12px]">{row.reason}</span>
+                  {/* The key itself in the title: this list is what somebody takes to the
+                      knowledge base, and the raw name is what the logs call it. */}
+                  <span className="min-w-0 flex-1" title={row.reason}>
+                    {t(`conversation.handoffReasons.${row.reason}`)}
+                  </span>
                   <span className="tabular-nums">{row.conversations}</span>
                 </li>
               ))}
             </ul>
           )}
-          <p className="text-[11px] text-[var(--text-muted)]">{t('dashboard.handoffHint')}</p>
+          {data.handoffReasons.length > 0 ? (
+            <p className="text-[11px] text-[var(--text-muted)]">{t('dashboard.handoffHint')}</p>
+          ) : null}
         </Card>
 
         {/* The other half of "what to fix next": where the AI answered but answered badly. */}
@@ -231,14 +300,18 @@ export function Dashboard() {
               <ul className="space-y-1 text-[13px]" data-testid="feedback-reasons">
                 {data.feedback.reasons.map((row) => (
                   <li key={row.reason} className="flex justify-between gap-2">
-                    <span className="truncate font-mono text-[12px]">{row.reason}</span>
+                    <span className="min-w-0 flex-1" title={row.reason}>
+                      {t(`feedback.reasons.${row.reason}`)}
+                    </span>
                     <span className="tabular-nums">{row.count}</span>
                   </li>
                 ))}
               </ul>
             </>
           ) : null}
-          <p className="text-[11px] text-[var(--text-muted)]">{t('dashboard.feedbackHint')}</p>
+          {data.feedback.reasons.length > 0 ? (
+            <p className="text-[11px] text-[var(--text-muted)]">{t('dashboard.feedbackHint')}</p>
+          ) : null}
         </Card>
 
         <Card className="space-y-2">

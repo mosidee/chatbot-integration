@@ -112,8 +112,14 @@ describe('handoff', () => {
     expect(patch.handoffReason).toBe('low_confidence')
     expect(patch.waitingHumanSince).toBe(AT)
     // The handoff is recorded before the note, because reporting must not depend on a note
-    // an agent could later delete.
-    expect(types(effects)).toEqual(['record_handoff', 'add_internal_note', 'notify_agents'])
+    // an agent could later delete. The customer is told before agents are, because they are
+    // the one waiting.
+    expect(types(effects)).toEqual([
+      'record_handoff',
+      'send_acknowledgement',
+      'add_internal_note',
+      'notify_agents',
+    ])
     expect(effects).toContainEqual({ type: 'record_handoff', reason: 'low_confidence', at: AT })
   })
 
@@ -160,6 +166,70 @@ describe('handoff', () => {
     expect(effects).toContainEqual({
       type: 'record_handoff',
       reason: 'unsupported_media',
+      at: AT,
+    })
+  })
+
+  /**
+   * The rule this product is built around, from the customer's side.
+   *
+   * Every path out of an AI turn ends in a message to the customer or a handoff to a
+   * person — but a handoff they are never told about is silence as far as they are
+   * concerned. They sent a question and the thread simply stopped.
+   */
+  test('tells the customer somebody is coming', () => {
+    const { effects } = transition(state({ mode: 'ai' }), {
+      type: 'ai_handoff',
+      at: AT,
+      reason: 'low_confidence',
+      note: null,
+      language: 'th',
+    })
+    expect(effects).toContainEqual({
+      type: 'send_acknowledgement',
+      kind: 'handoff',
+      language: 'th',
+      at: AT,
+    })
+  })
+
+  test('carries no language when the caller could not tell', () => {
+    const { effects } = transition(state({ mode: 'ai' }), {
+      type: 'ai_handoff',
+      at: AT,
+      reason: 'model_error',
+      note: null,
+    })
+    expect(effects).toContainEqual({
+      type: 'send_acknowledgement',
+      kind: 'handoff',
+      language: null,
+      at: AT,
+    })
+  })
+
+  test('a supervised workspace tells the customer too', () => {
+    // The draft the AI was writing is now nobody's, and the customer is owed the same
+    // courtesy as one whose conversation the AI owned outright.
+    const { effects } = transition(state({ mode: 'ai_supervised' }), {
+      type: 'ai_handoff',
+      at: AT,
+      reason: 'tool_error',
+      note: null,
+    })
+    expect(types(effects)).toContain('send_acknowledgement')
+  })
+
+  test('media the AI cannot read tells the customer as well', () => {
+    const { effects } = transition(state({ mode: 'ai' }), {
+      type: 'customer_message',
+      at: AT,
+      isMedia: true,
+    })
+    expect(effects).toContainEqual({
+      type: 'send_acknowledgement',
+      kind: 'handoff',
+      language: null,
       at: AT,
     })
   })
@@ -284,6 +354,25 @@ describe('waiting-human timeout', () => {
     expect(types(effects)).toEqual(['send_acknowledgement', 'notify_agents'])
   })
 
+  test('apologises for the wait rather than repeating the handoff', () => {
+    // The customer read "somebody is coming" minutes ago. Saying it again reads like a
+    // machine that has lost its place.
+    const { effects } = transition(state({ mode: 'waiting_human' }), {
+      type: 'waiting_human_timeout',
+      at: AT,
+    })
+    expect(effects[0]).toMatchObject({ kind: 'still_waiting' })
+  })
+
+  test('is keyed on when the wait began, so one wait apologises once', () => {
+    const began = new Date('2026-09-20T09:30:00Z')
+    const { effects } = transition(state({ mode: 'waiting_human', waitingHumanSince: began }), {
+      type: 'waiting_human_timeout',
+      at: AT,
+    })
+    expect(effects[0]).toMatchObject({ at: began })
+  })
+
   test('is ignored once somebody has taken over', () => {
     const result = transition(state({ mode: 'human' }), { type: 'waiting_human_timeout', at: AT })
     expect(result.effects).toEqual([])
@@ -297,6 +386,7 @@ describe('the central invariant: the AI never sends while a human owns the conve
     { type: 'customer_message', at: AT },
     { type: 'customer_message', at: AT, isMedia: true },
     { type: 'ai_handoff', at: AT, reason: 'low_confidence', note: null },
+    { type: 'ai_handoff', at: AT, reason: 'low_confidence', note: null, language: 'th' },
     { type: 'human_take_over', at: AT, userId: 'u' },
     { type: 'human_return_to_ai', at: AT, note: 'note' },
     { type: 'human_message', at: AT, userId: 'u' },

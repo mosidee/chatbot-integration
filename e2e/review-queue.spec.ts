@@ -53,7 +53,9 @@ test('rating a reply takes the conversation out of the review queue', async ({ p
 
   // And the reason reaches the dashboard, which is the point of collecting it.
   await page.goto('/dashboard')
-  await expect(page.getByTestId('feedback-reasons')).toContainText('missing_knowledge', {
+  // Read as a sentence rather than as an enum key. The raw name stays in the title, which
+  // is what the logs call it.
+  await expect(page.getByTestId('feedback-reasons')).toContainText('ไม่มีข้อมูลเรื่องนี้ในคลังความรู้', {
     timeout: 20_000,
   })
 })

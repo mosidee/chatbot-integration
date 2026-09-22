@@ -4,10 +4,12 @@ import {
   verifySignedPayload,
   webChannelAdapter,
 } from '@ci/channels'
+import { detectLanguage } from '@ci/core'
 import { schema } from '@ci/db'
 import { ingestInternal } from '@ci/infra'
+import type { ConversationMode, Language } from '@ci/shared'
 import { identityAttributesSchema } from '@ci/shared'
-import { and, asc, eq, gt } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, ne, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import type { ApiContext } from '../context'
@@ -29,6 +31,52 @@ import type { ApiContext } from '../context'
  */
 
 const SESSION_TTL_SECONDS = 12 * 60 * 60
+
+/**
+ * How much of the conversation a returning visitor is handed.
+ *
+ * Enough to see where they left off, not the whole history: the widget is a corner of
+ * somebody else's page, and a thread that has been running for months belongs in the
+ * console, not in a 380-pixel card.
+ */
+const RESUME_PAGE = 30
+
+/** What the visitor is told is happening, which is less than the console is told. */
+export type WidgetState = 'ai' | 'waiting' | 'human'
+
+/**
+ * Four conversation modes become three.
+ *
+ * `ai_supervised` reads as `ai` on purpose: a customer does not need to know that a
+ * colleague is approving each reply before it reaches them, and telling them would make a
+ * careful workspace look slower than a careless one.
+ */
+function widgetState(mode: ConversationMode): WidgetState {
+  if (mode === 'human') return 'human'
+  if (mode === 'waiting_human') return 'waiting'
+  return 'ai'
+}
+
+/**
+ * The one line the widget shows about who is answering.
+ *
+ * Written here rather than in the widget so it can be in the tenant's language, and so the
+ * bundle on a customer's website carries no copy that has to be translated to change.
+ */
+function stateText(state: WidgetState, language: Language): string | null {
+  if (state === 'ai') return null
+  const copy = {
+    th: {
+      waiting: 'กำลังส่งต่อให้เจ้าหน้าที่ กรุณารอสักครู่นะคะ',
+      human: 'เจ้าหน้าที่กำลังดูแลคุณอยู่',
+    },
+    en: {
+      waiting: 'Passing you to a colleague. One moment.',
+      human: 'A colleague is with you.',
+    },
+  }
+  return (copy[language] ?? copy.en)[state]
+}
 
 const sessionClaimsSchema = z.object({
   channelId: z.string().min(1),
@@ -63,13 +111,21 @@ export function widgetRoutes(ctx: ApiContext) {
   /** The widget channel, its config, and the secret its session tokens are signed with. */
   async function loadChannel(channelId: string) {
     const rows = await db
-      .select({ channel: schema.channels, status: schema.workspaces.status })
+      .select({
+        channel: schema.channels,
+        status: schema.workspaces.status,
+        settings: schema.workspaces.settings,
+      })
       .from(schema.channels)
       .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.channels.workspaceId))
       .where(and(eq(schema.channels.id, channelId), eq(schema.channels.type, 'web')))
       .limit(1)
     const channel = rows[0]?.channel
     if (!channel?.enabled) return null
+
+    // The tenant's own language, so the few sentences this route composes itself match the
+    // rest of their site rather than defaulting to ours.
+    const language: Language = rows[0]?.settings?.defaultLanguage ?? 'th'
 
     /**
      * A widget on a suspended tenant's site stops working, and says so plainly.
@@ -81,7 +137,7 @@ export function widgetRoutes(ctx: ApiContext) {
      */
     const status = rows[0]?.status
     if (status !== 'active') {
-      return { channel, config: null, suspended: status === 'suspended' } as const
+      return { channel, config: null, language, suspended: status === 'suspended' } as const
     }
 
     // The web adapter directly rather than through the registry: the registry erases its
@@ -94,7 +150,12 @@ export function widgetRoutes(ctx: ApiContext) {
         )
       : {}
 
-    return { channel, config: webChannelAdapter.parseConfig(raw), suspended: false } as const
+    return {
+      channel,
+      config: webChannelAdapter.parseConfig(raw),
+      language,
+      suspended: false,
+    } as const
   }
 
   /** The origin rule is the channel's, so a pilot can allow none and production can list them. */
@@ -122,15 +183,32 @@ export function widgetRoutes(ctx: ApiContext) {
     }
   }
 
+  /** The last thing this visitor typed, which is the evidence for what language they read. */
+  async function lastCustomerText(conversationId: string): Promise<string | null> {
+    const rows = await db
+      .select({ text: schema.messages.text })
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, conversationId),
+          eq(schema.messages.senderType, 'customer'),
+        ),
+      )
+      .orderBy(desc(schema.messages.createdAt))
+      .limit(1)
+    return rows[0]?.text ?? null
+  }
+
   /** The conversation this visitor owns, or null. Never taken from the request. */
   async function conversationFor(
     channelId: string,
     externalId: string,
-  ): Promise<{ id: string; workspaceId: string } | null> {
+  ): Promise<{ id: string; workspaceId: string; mode: ConversationMode } | null> {
     const rows = await db
       .select({
         id: schema.conversations.id,
         workspaceId: schema.conversations.workspaceId,
+        mode: schema.conversations.mode,
       })
       .from(schema.conversations)
       .innerJoin(
@@ -294,13 +372,28 @@ export function widgetRoutes(ctx: ApiContext) {
           }
 
           const conversation = await conversationFor(params.channelId, session.externalId)
-          if (!conversation) return { messages: [], conversationId: null }
+          if (!conversation) {
+            return { messages: [], conversationId: null, state: 'ai' as const, stateText: null }
+          }
 
           const since = query.since ? new Date(query.since) : null
+          const resuming = !since || Number.isNaN(since.getTime())
+
+          /**
+           * The newest page first, then forwards from a cursor.
+           *
+           * A visitor who has been chatting for months has more than the hundred rows this
+           * ever returns, and ascending order handed them the oldest hundred: the cursor
+           * then stuck at message one hundred and every later poll returned the same
+           * window, so the conversation looked dead while replies piled up behind it.
+           * Opening the widget shows the end of the conversation, which is where they
+           * left off.
+           */
           const rows = await db
             .select({
               id: schema.messages.id,
               senderType: schema.messages.senderType,
+              senderUserId: schema.messages.senderUserId,
               direction: schema.messages.direction,
               content: schema.messages.content,
               createdAt: schema.messages.createdAt,
@@ -309,42 +402,78 @@ export function widgetRoutes(ctx: ApiContext) {
             .where(
               and(
                 eq(schema.messages.conversationId, conversation.id),
-                ...(since && !Number.isNaN(since.getTime())
-                  ? [gt(schema.messages.createdAt, since)]
-                  : []),
+                // Internal events are not part of a customer's view of their own
+                // conversation. Excluded in SQL rather than afterwards, or a burst of them
+                // eats the page and the visitor is handed fewer messages than were asked for.
+                ne(sql`${schema.messages.content}->>'kind'`, 'event'),
+                ...(resuming ? [] : [gt(schema.messages.createdAt, since as Date)]),
               ),
             )
-            .orderBy(asc(schema.messages.createdAt))
-            .limit(100)
+            .orderBy(resuming ? desc(schema.messages.createdAt) : asc(schema.messages.createdAt))
+            .limit(resuming ? RESUME_PAGE : 100)
+
+          if (resuming) rows.reverse()
+
+          const state = widgetState(conversation.mode)
+
+          /**
+           * The language to say it in: the visitor's, not the tenant's.
+           *
+           * Only looked up when there is something to say, which is while somebody is being
+           * fetched. The AI answering needs no line of its own, and that is almost every
+           * poll, so the common path stays one query.
+           */
+          const language =
+            state === 'ai'
+              ? loaded.language
+              : (detectLanguage(await lastCustomerText(conversation.id)) ?? loaded.language)
 
           return {
             conversationId: conversation.id,
-            messages: rows
-              // Internal events are not part of a customer's view of their own conversation.
-              .filter((row) => (row.content as { kind?: string }).kind !== 'event')
-              .map((row) => ({
-                id: row.id,
-                // The customer does not need to know whether a person or the AI answered.
-                from: row.direction === 'inbound' ? 'you' : 'support',
-                text: (row.content as { text?: string | null }).text ?? '',
-                /**
-                 * Files an agent sent, as links the widget can render.
-                 *
-                 * Signed by the outbound job when the message went out, so they are already
-                 * fetchable without a session, which is what the visitor has. An attachment
-                 * we never resolved a link for is left out rather than shown as a dead one.
-                 */
-                attachments: (
-                  (row.content as { attachments?: WidgetAttachment[] }).attachments ?? []
-                )
-                  .filter((attachment) => Boolean(attachment.sourceUrl))
-                  .map((attachment) => ({
-                    url: attachment.sourceUrl as string,
-                    mime: attachment.mime,
-                    fileName: attachment.fileName,
-                  })),
-                at: row.createdAt.toISOString(),
-              })),
+            /**
+             * Whether anyone is answering, and what to say about it.
+             *
+             * The widget carries no copy of its own for this: the words are chosen here, so
+             * a visitor writing English is not told in Thai that a colleague is coming while
+             * the reply beside it is in English.
+             */
+            state,
+            stateText: stateText(state, language),
+            messages: rows.map((row) => ({
+              id: row.id,
+              // Kept for a loader cached on a tenant's page from before `sender` existed.
+              from: row.direction === 'inbound' ? 'you' : 'support',
+              /**
+               * Who actually wrote it.
+               *
+               * A visitor reading a thread that changes tone mid-way deserves to know
+               * why. `system` is the product speaking rather than either.
+               */
+              sender:
+                row.direction === 'inbound'
+                  ? ('you' as const)
+                  : row.senderType === 'human'
+                    ? ('agent' as const)
+                    : row.senderType === 'system'
+                      ? ('system' as const)
+                      : ('ai' as const),
+              text: (row.content as { text?: string | null }).text ?? '',
+              /**
+               * Files an agent sent, as links the widget can render.
+               *
+               * Signed by the outbound job when the message went out, so they are already
+               * fetchable without a session, which is what the visitor has. An attachment
+               * we never resolved a link for is left out rather than shown as a dead one.
+               */
+              attachments: ((row.content as { attachments?: WidgetAttachment[] }).attachments ?? [])
+                .filter((attachment) => Boolean(attachment.sourceUrl))
+                .map((attachment) => ({
+                  url: attachment.sourceUrl as string,
+                  mime: attachment.mime,
+                  fileName: attachment.fileName,
+                })),
+              at: row.createdAt.toISOString(),
+            })),
           }
         },
         {

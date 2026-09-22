@@ -50,6 +50,10 @@ export function Invite({ token }: { token: string }) {
 
   const info = invitation.data
   const isReset = info.purpose === 'password_reset'
+  /** What still has to be filled in before this can be submitted. */
+  const blocked =
+    (isReset && password.length < 8) ||
+    (!isReset && !info.existingAccount && (!name.trim() || password.length < 8))
   const signedInAs = session.data?.user.email?.toLowerCase() ?? null
   const needsSignIn = !isReset && info.existingAccount && signedInAs !== info.email
 
@@ -99,7 +103,15 @@ export function Invite({ token }: { token: string }) {
             </Button>
           </>
         ) : (
-          <>
+          // A form, so Enter submits. Without one the keyboard did nothing and the only
+          // way through was to reach for the mouse.
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!blocked) accept()
+            }}
+          >
             {/* An account that already exists needs neither: they are signed in as the
                 address on the invitation, so joining is one button. */}
             {!isReset && !info.existingAccount ? (
@@ -108,6 +120,8 @@ export function Invite({ token }: { token: string }) {
                 <Input
                   id="invite-name"
                   data-testid="invite-name"
+                  autoComplete="name"
+                  autoFocus
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                 />
@@ -121,6 +135,7 @@ export function Invite({ token }: { token: string }) {
                   id="invite-password"
                   data-testid="invite-password"
                   type="password"
+                  autoComplete="new-password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                 />
@@ -137,15 +152,11 @@ export function Invite({ token }: { token: string }) {
             ) : null}
 
             <Button
+              type="submit"
               variant="primary"
               className="w-full"
               data-testid="invite-submit"
-              disabled={
-                busy ||
-                (isReset && password.length < 8) ||
-                (!isReset && !info.existingAccount && (!name.trim() || password.length < 8))
-              }
-              onClick={accept}
+              disabled={busy || blocked}
             >
               {isReset
                 ? t('common.save')
@@ -153,7 +164,15 @@ export function Invite({ token }: { token: string }) {
                   ? t('invite.join')
                   : t('invite.accept')}
             </Button>
-          </>
+            {/* Why the button is grey, rather than leaving somebody to guess. */}
+            {blocked ? (
+              <p className="text-center text-[12px] text-[var(--text-muted)]">
+                {!isReset && !info.existingAccount && !name.trim()
+                  ? t('invite.needName')
+                  : t('invite.passwordHint')}
+              </p>
+            ) : null}
+          </form>
         )}
       </Card>
     </div>

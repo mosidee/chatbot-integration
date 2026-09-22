@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type MergeParty } from '../lib/api'
-import { Button, cn } from './ui'
+import { Button, ConfirmButton, SaveStatus, useSaveState } from './ui'
 
 /**
  * "These two might be the same person."
@@ -52,8 +51,6 @@ export function MergeSuggestions({
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [armed, setArmed] = useState<string | null>(null)
-
   const suggestions = useQuery({
     queryKey: ['merge-suggestions', customerId],
     queryFn: () => api.customers.mergeSuggestions(customerId),
@@ -64,10 +61,13 @@ export function MergeSuggestions({
     void queryClient.invalidateQueries({ queryKey: ['conversations'] })
   }
 
+  const save = useSaveState()
+
   const accept = useMutation({
     mutationFn: (suggestionId: string) => api.customers.acceptMerge(customerId, suggestionId),
+    ...save.handlers,
     onSuccess: () => {
-      setArmed(null)
+      save.handlers.onSuccess()
       invalidate()
       onMerged()
     },
@@ -75,8 +75,9 @@ export function MergeSuggestions({
 
   const reject = useMutation({
     mutationFn: (suggestionId: string) => api.customers.rejectMerge(customerId, suggestionId),
+    ...save.handlers,
     onSuccess: () => {
-      setArmed(null)
+      save.handlers.onSuccess()
       invalidate()
     },
   })
@@ -110,21 +111,16 @@ export function MergeSuggestions({
 
           {canWrite ? (
             <div className="flex flex-wrap gap-1.5">
-              <Button
-                size="sm"
-                variant={armed === suggestion.id ? 'danger' : 'primary'}
-                data-testid="merge-accept"
+              {/* Arming expires here as it does everywhere else in the console: a red
+                  "confirm" left standing for minutes is a trap for the next person to
+                  pick up the laptop. */}
+              <ConfirmButton
+                testId="merge-accept"
+                label={accept.isPending ? t('merge.merging') : t('merge.accept')}
+                armedLabel={t('merge.confirm')}
                 disabled={accept.isPending}
-                onClick={() =>
-                  armed === suggestion.id ? accept.mutate(suggestion.id) : setArmed(suggestion.id)
-                }
-              >
-                {accept.isPending
-                  ? t('merge.merging')
-                  : armed === suggestion.id
-                    ? t('merge.confirm')
-                    : t('merge.accept')}
-              </Button>
+                onConfirm={() => accept.mutate(suggestion.id)}
+              />
               <Button
                 size="sm"
                 variant="ghost"
@@ -137,16 +133,11 @@ export function MergeSuggestions({
             </div>
           ) : null}
 
-          <p
-            className={cn(
-              'text-[11px]',
-              armed === suggestion.id
-                ? 'font-medium text-red-600 dark:text-red-400'
-                : 'text-[var(--text-muted)]',
-            )}
-          >
-            {t('merge.hint')}
-          </p>
+          {/* Always stated plainly rather than only once the button is armed: somebody
+              deciding whether these are the same person should read what it costs to be
+              wrong before they reach for the control, not after. */}
+          <p className="text-[11px] text-[var(--text-muted)]">{t('merge.hint')}</p>
+          <SaveStatus state={save.state} />
         </div>
       ))}
     </section>

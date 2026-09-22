@@ -95,6 +95,9 @@ function MembersCard({
 }) {
   const { t } = useTranslation()
 
+  /** The role somebody has asked to give themselves, while they confirm it. */
+  const [demoting, setDemoting] = useState<UserRoleName | null>(null)
+
   const update = useMutation({
     mutationFn: (input: { userId: string; role: UserRoleName }) =>
       api.admin.updateMember(input.userId, { role: input.role }),
@@ -139,10 +142,25 @@ function MembersCard({
 
           <select
             data-testid={`member-role-${member.email}`}
+            disabled={demoting !== null}
             value={member.role}
-            onChange={(event) =>
-              update.mutate({ userId: member.userId, role: event.target.value as UserRoleName })
-            }
+            onChange={(event) => {
+              const role = event.target.value as UserRoleName
+              /**
+               * Lowering your own role takes effect at once and cannot be undone by you:
+               * the page that would change it back is the one you just lost access to.
+               *
+               * Asked inline rather than with a browser `confirm`, for the reasons set out
+               * on `ConfirmButton`: a native dialog blocks the page and is the one thing
+               * people dismiss by reflex.
+               */
+              if (member.isSelf && role !== 'admin') {
+                setDemoting(role)
+                event.target.value = member.role
+                return
+              }
+              update.mutate({ userId: member.userId, role })
+            }}
             className="h-8 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-[13px]"
           >
             {ROLES.map((role) => (
@@ -167,6 +185,28 @@ function MembersCard({
             testId={`member-remove-${member.email}`}
             onConfirm={() => remove.mutate(member.userId)}
           />
+
+          {demoting && member.isSelf ? (
+            <div className="w-full space-y-2 rounded-lg border border-amber-400 bg-amber-50 p-2 text-[13px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <p>{t('admin.demoteSelfConfirm')}</p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="danger"
+                  data-testid="demote-self-confirm"
+                  onClick={() => {
+                    update.mutate({ userId: member.userId, role: demoting })
+                    setDemoting(null)
+                  }}
+                >
+                  {t('common.save')}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setDemoting(null)}>
+                  {t('common.cancel')}
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ))}
     </Card>

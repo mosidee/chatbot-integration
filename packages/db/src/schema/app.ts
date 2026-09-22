@@ -136,7 +136,16 @@ export type WorkspaceSettings = {
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
   /** Minutes a conversation may sit in `waiting_human` before the AI offers a fallback reply. */
   waitingHumanFallbackMinutes: number | null
+  /** What a customer reads the moment the AI stops answering and a person is fetched. */
   acknowledgementText: Record<Language, string>
+  /**
+   * What they read if nobody has picked the conversation up by the fallback deadline.
+   *
+   * Separate from `acknowledgementText` because the two are sent minutes apart to the same
+   * person: repeating the first sentence reads like a machine that has lost its place,
+   * where an apology for the wait reads like somebody is still there.
+   */
+  stillWaitingText: Record<Language, string>
   /** Per-model price table for cost estimates, keyed `provider:model`. */
   modelPrices: Record<string, { inputPerMillion: number; outputPerMillion: number }>
   /**
@@ -232,8 +241,25 @@ export const customers = pgTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     displayName: text('display_name'),
     primaryLanguage: text('primary_language').$type<Language>(),
-    /** Business identifiers extracted from conversation: phone, orderId, accountId, ... */
+    /**
+     * Business identifiers, and only those: phone, email, order id, account id, company.
+     *
+     * The closed set `set_customer_field` accepts. This is the half of what is known about
+     * a person that identifies them — it is what merge matching reads and what an agent
+     * scans to check they have the right customer, so anything else in here is noise in
+     * front of the one thing the panel exists to answer.
+     */
     fields: jsonb('fields').$type<Record<string, string>>().default({}).notNull(),
+    /**
+     * Everything else the summariser noticed: which plan they are on, what they are
+     * weighing up, how they prefer to be contacted.
+     *
+     * Worth keeping and worth showing, but not an identifier. It used to be merged into
+     * `fields`, where a paragraph about what a customer was considering sat in the same
+     * list as their phone number, and the same idea appeared three times under three keys
+     * the model had invented that week.
+     */
+    notes: jsonb('notes').$type<Record<string, string>>().default({}).notNull(),
     /** Rolling summary maintained by the summarize job; injected into every prompt. */
     summary: text('summary'),
     summaryUpdatedAt: ts('summary_updated_at'),

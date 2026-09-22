@@ -3,6 +3,7 @@ import {
   aiMaySend,
   applyEffects,
   type ConversationTurn,
+  detectLanguage,
   type EffectPorts,
   type ImageInput,
   type Logger,
@@ -34,7 +35,7 @@ import {
   workspaceIsWorkable,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 
 /**
  * Run one AI turn and deliver the outcome.
@@ -520,10 +521,38 @@ async function handOff(
   const rows = await db
     .select()
     .from(schema.conversations)
-    .where(eq(schema.conversations.id, job.conversationId))
+    .where(
+      and(
+        eq(schema.conversations.id, job.conversationId),
+        eq(schema.conversations.workspaceId, job.workspaceId),
+      ),
+    )
     .limit(1)
   const conversation = rows[0]
   if (!conversation) return
+
+  /**
+   * The language to apologise in.
+   *
+   * Read here rather than threaded through five call sites: every one of them is a path
+   * that has already given up on answering, so one more query costs nothing that matters.
+   * The customer's last message is the best evidence available — better than the language
+   * recorded on their record, which is seeded from the workspace default and never
+   * updated — and `detectLanguage` returns null rather than guessing when the message is
+   * a photograph, an emoji or a number.
+   */
+  const lastCustomerMessage = await db
+    .select({ text: schema.messages.text })
+    .from(schema.messages)
+    .where(
+      and(
+        eq(schema.messages.workspaceId, job.workspaceId),
+        eq(schema.messages.conversationId, job.conversationId),
+        eq(schema.messages.senderType, 'customer'),
+      ),
+    )
+    .orderBy(desc(schema.messages.createdAt))
+    .limit(1)
 
   const { patch, effects } = transition(
     {
@@ -533,7 +562,13 @@ async function handOff(
       waitingHumanSince: conversation.waitingHumanSince,
       handoffReason: conversation.handoffReason,
     },
-    { type: 'ai_handoff', at: new Date(), reason, note },
+    {
+      type: 'ai_handoff',
+      at: new Date(),
+      reason,
+      note,
+      language: detectLanguage(lastCustomerMessage[0]?.text),
+    },
     { waitingHumanFallbackMinutes: settings.waitingHumanFallbackMinutes },
   )
 

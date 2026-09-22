@@ -20,7 +20,19 @@ export function Login() {
       const next = new URLSearchParams(location.search).get('next')
       location.href = next?.startsWith('/') && !next.startsWith('//') ? next : '/'
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t('auth.failed'))
+      /**
+       * A refusal and an unreachable server are different problems.
+       *
+       * Both used to read "Sign in failed", which sent people hunting for a password that
+       * was fine while the API was down.
+       */
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : caught instanceof TypeError
+            ? t('auth.unreachable')
+            : t('auth.failed'),
+      )
     } finally {
       setBusy(false)
     }
@@ -29,7 +41,10 @@ export function Login() {
   return (
     <div className="flex min-h-full items-center justify-center p-4">
       <Card className="w-full max-w-sm">
-        <h1 className="mb-4 text-lg font-semibold">{t('auth.title')}</h1>
+        <div className="mb-4">
+          <p className="text-sm text-[var(--text-muted)]">{t('app.name')}</p>
+          <h1 className="text-lg font-semibold">{t('auth.title')}</h1>
+        </div>
         <form onSubmit={submit} className="space-y-3">
           <div>
             <Label htmlFor="email">{t('auth.email')}</Label>
@@ -38,6 +53,8 @@ export function Login() {
               data-testid="login-email"
               type="email"
               autoComplete="username"
+              // The only field on the page, and somebody signing in is here to type in it.
+              autoFocus
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -65,6 +82,9 @@ export function Login() {
           >
             {t('auth.signIn')}
           </Button>
+          {/* There is no self-service reset: a link is issued by an admin. Saying so beats
+              leaving somebody looking for a "forgot password" that will never be there. */}
+          <p className="text-center text-[12px] text-[var(--text-muted)]">{t('auth.forgotHint')}</p>
         </form>
       </Card>
     </div>

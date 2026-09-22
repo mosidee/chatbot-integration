@@ -107,6 +107,7 @@ function TenantsCard({
   const [adminEmail, setAdminEmail] = useState('')
   /** Typed confirmation, per tenant, so two rows cannot arm each other. */
   const [typedSlug, setTypedSlug] = useState<Record<string, string>>({})
+  const [showDelete, setShowDelete] = useState<Record<string, boolean>>({})
 
   const create = useMutation({
     mutationFn: () =>
@@ -192,7 +193,7 @@ function TenantsCard({
             ) : null}
           </div>
 
-          {tenant.status === 'deleting' ? null : (
+          {tenant.status === 'deleting' ? null : showDelete[tenant.id] ? (
             <div className="flex flex-wrap items-center gap-2">
               <p className="min-w-0 flex-1 text-[12px] text-[var(--text-muted)]">
                 {t('platform.deleteHint')}
@@ -217,7 +218,30 @@ function TenantsCard({
               >
                 {t('platform.delete')}
               </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowDelete((current) => ({ ...current, [tenant.id]: false }))}
+              >
+                {t('common.cancel')}
+              </Button>
             </div>
+          ) : (
+            /**
+             * Behind one click.
+             *
+             * The typed-slug box and a red Delete stood open on every row all the time,
+             * which doubled each row's height and made the most destructive control on the
+             * installation part of the furniture.
+             */
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid={`tenant-delete-reveal-${tenant.slug}`}
+              onClick={() => setShowDelete((current) => ({ ...current, [tenant.id]: true }))}
+            >
+              {t('platform.delete')}…
+            </Button>
           )}
         </div>
       ))}

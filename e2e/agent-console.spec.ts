@@ -123,7 +123,11 @@ test('an agent hands the conversation back to the AI', async ({ page, request })
   await page.getByTestId('take-over').click()
   await expect(page.getByTestId('return-to-ai')).toBeVisible()
 
+  // Handing back now asks what to tell the AI, so whatever the colleague sorted out is not
+  // invisible to the next turn. The note is optional; this one leaves one.
   await page.getByTestId('return-to-ai').click()
+  await page.getByTestId('return-note').fill('Refund already issued, do not offer another.')
+  await page.getByTestId('return-to-ai-confirm').click()
   await expect(page.getByTestId('take-over')).toBeVisible()
 })
 
@@ -161,7 +165,7 @@ test('every model the provider serves is offered, and an id can still be typed',
   // Before this, the model was typed from memory. A gateway can serve dozens of ids and a
   // typo only surfaced when a customer message failed.
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=models')
 
   const modelField = page.getByTestId('slot-agent_chat-primary-model')
   await expect(modelField).toHaveValue('mock-model', { timeout: 20_000 })
@@ -216,7 +220,7 @@ test('the embedding slot can stop sending the dimensions field, and remembers it
   await resetEmbedSlot(request)
 
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=models')
 
   const sendDimensions = page.getByTestId('slot-embed-send-dimensions')
   await expect(sendDimensions).toBeChecked({ timeout: 20_000 })
@@ -247,7 +251,7 @@ test('a model can be tested from settings before a customer finds out', async ({
   // A gateway's catalogue lists what it is configured to offer, not what it will serve.
   await resetEmbedSlot(request)
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=models')
 
   const verify = page.getByTestId('slot-agent_chat-primary-model-verify')
   await expect(verify).toBeEnabled({ timeout: 20_000 })
@@ -388,6 +392,29 @@ test('a visitor chats through the embedded widget and the AI answers', async ({
   await other.close()
 })
 
+test('a visitor who is handed to a person is told so', async ({ page, request }) => {
+  /**
+   * The rule the product is built on, from the only side that cannot check anywhere else.
+   *
+   * A handoff used to notify agents and say nothing to the visitor, so the thread simply
+   * stopped. There is no inbox for them to check and no email telling them a reply came:
+   * if the widget does not say it, nobody does.
+   */
+  const channelId = await findWebChannelId(request)
+  await page.goto(`${API_URL}/widget/index.html?channel=${channelId}`)
+
+  const input = page.locator('#text')
+  await expect(input).toBeEnabled({ timeout: 20_000 })
+  await input.fill('ขอคุยกับเจ้าหน้าที่ค่ะ')
+  await page.locator('#send').click()
+
+  // The product speaking, not the AI: the sentence that says somebody is coming.
+  await expect(page.locator('.bubble.system')).toBeVisible({ timeout: 30_000 })
+  // And a standing line saying why nobody is typing.
+  await expect(page.locator('#state')).toBeVisible()
+  await expect(page.locator('#state')).not.toBeEmpty()
+})
+
 test('the loader script is served for a host page to embed', async ({ request }) => {
   const response = await request.get(`${API_URL}/widget/loader.js`)
 
@@ -401,7 +428,7 @@ test('the loader script is served for a host page to embed', async ({ request })
 test('the widget is set up and previewed from settings', async ({ page }) => {
   // Everything needed to put the widget on a website, where an operator configures it.
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=channels')
 
   // The web channel's own configure panel.
   const configure = page
@@ -449,7 +476,7 @@ test('setting the allowed origins keeps the rest of the channel config', async (
   })
 
   await signIn(page)
-  await page.goto('/settings')
+  await page.goto('/settings?tab=channels')
   const configure = page
     .locator('div', { hasText: /^Web widget/ })
     .getByRole('button', { name: 'ตั้งค่า' })
@@ -499,7 +526,9 @@ test('the dashboard reports what the pilot is doing', async ({ page, request }) 
 
   // And the figures an operator acts on are present rather than blank panels.
   await expect(page.getByTestId('figure-answered')).toBeVisible()
-  await expect(page.getByTestId('figure-first-response')).toBeVisible()
+  // The wait for a person, which is what the first-reply median could never answer: the
+  // AI replies in seconds, so that figure read "four seconds" on a week of overnight waits.
+  await expect(page.getByTestId('figure-handoff-wait')).toBeVisible()
   await expect(page.getByTestId('figure-cost')).toBeVisible()
 })
 

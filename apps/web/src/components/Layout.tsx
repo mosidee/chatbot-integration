@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type Me } from '../lib/api'
 import { setLanguage } from '../lib/i18n'
@@ -105,21 +106,102 @@ export function Layout() {
         {showLock && me.data ? <WorkspaceLocked me={me.data} /> : <Outlet />}
       </main>
 
-      <nav className="flex shrink-0 border-t border-[var(--border)] bg-[var(--surface)] sm:hidden">
-        {items.map((item) => (
+      <BottomNav items={items} isActive={isActive} />
+    </div>
+  )
+}
+
+/**
+ * Navigation on a phone.
+ *
+ * Every destination used to get an equal share of the bar. An admin who is also a platform
+ * admin has seven, which at 390px left each one about 55 pixels: the labels were clipped,
+ * and the first — the inbox, the reason anybody opens this — ran off the left edge.
+ *
+ * Four fit comfortably, so four are shown and the rest go behind "More". A workspace where
+ * somebody has fewer destinations than that never sees the extra control at all.
+ */
+const BOTTOM_NAV_SLOTS = 4
+
+function BottomNav({
+  items,
+  isActive,
+}: {
+  items: { to: string; label: string }[]
+  isActive: (to: string) => boolean
+}) {
+  const { t } = useTranslation()
+  const [showMore, setShowMore] = useState(false)
+
+  const needsMore = items.length > BOTTOM_NAV_SLOTS + 1
+  const shown = needsMore ? items.slice(0, BOTTOM_NAV_SLOTS) : items
+  const hidden = needsMore ? items.slice(BOTTOM_NAV_SLOTS) : []
+  const hiddenIsActive = hidden.some((item) => isActive(item.to))
+
+  return (
+    <>
+      {showMore ? (
+        <div className="fixed inset-0 z-40 sm:hidden">
+          {/* A real button rather than a div that listens for clicks: it is dismissible by
+              keyboard and announced as something you can press. */}
+          <button
+            type="button"
+            className="absolute inset-0 h-full w-full bg-black/40"
+            aria-label={t('common.close')}
+            onClick={() => setShowMore(false)}
+          />
+          <nav
+            className="absolute inset-x-0 bottom-0 rounded-t-xl border-t border-[var(--border)] bg-[var(--surface)] p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+            data-testid="nav-more-sheet"
+          >
+            {hidden.map((item) => (
+              <Link
+                key={item.to}
+                to={item.to}
+                onClick={() => setShowMore(false)}
+                className={cn(
+                  'block rounded-lg px-3 py-3 text-sm font-medium',
+                  isActive(item.to)
+                    ? 'bg-[var(--surface-muted)] text-[var(--color-brand-600)]'
+                    : 'text-[var(--text)]',
+                )}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+        </div>
+      ) : null}
+
+      <nav className="flex shrink-0 border-t border-[var(--border)] bg-[var(--surface)] pb-[env(safe-area-inset-bottom)] sm:hidden">
+        {shown.map((item) => (
           <Link
             key={item.to}
             to={item.to}
             className={cn(
-              'flex-1 py-3 text-center text-xs font-medium transition-colors',
+              'min-w-0 flex-1 truncate px-1 py-3 text-center text-xs font-medium transition-colors',
               isActive(item.to) ? 'text-[var(--color-brand-600)]' : 'text-[var(--text-muted)]',
             )}
           >
             {item.label}
           </Link>
         ))}
+        {needsMore ? (
+          <button
+            type="button"
+            data-testid="nav-more"
+            aria-expanded={showMore}
+            onClick={() => setShowMore((open) => !open)}
+            className={cn(
+              'min-w-0 flex-1 truncate px-1 py-3 text-center text-xs font-medium transition-colors',
+              hiddenIsActive ? 'text-[var(--color-brand-600)]' : 'text-[var(--text-muted)]',
+            )}
+          >
+            {t('nav.more')}
+          </button>
+        ) : null}
       </nav>
-    </div>
+    </>
   )
 }
 

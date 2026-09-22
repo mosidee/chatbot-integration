@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { SaveStatus, useSaveState } from './ui'
 
 /**
  * Who looks after this customer.
@@ -32,9 +33,13 @@ export function CustomerAssignee({
     staleTime: 300_000,
   })
 
+  const save = useSaveState()
+
   const assign = useMutation({
     mutationFn: (userId: string | null) => api.customers.assign(customerId, userId),
+    ...save.handlers,
     onSuccess: () => {
+      save.handlers.onSuccess()
       // The inbox is ordered by this, so the list is now wrong until it is refetched.
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
       onAssigned()
@@ -70,6 +75,9 @@ export function CustomerAssignee({
           </option>
         ))}
       </select>
+      {/* The select snaps back to the old owner when this fails, which on its own reads as
+          a control that ignored the click. */}
+      <SaveStatus state={save.state} className="mt-1" />
     </label>
   )
 }

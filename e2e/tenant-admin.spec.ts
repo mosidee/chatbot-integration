@@ -52,7 +52,7 @@ test.describe('inviting a colleague', () => {
 
       // They land in the console, signed in, with no admin page offered to them.
       await joinerPage.waitForURL('**/', { timeout: 20_000 })
-      await expect(joinerPage.getByTestId('member-row-' + email)).toHaveCount(0)
+      await expect(joinerPage.getByTestId(`member-row-${email}`)).toHaveCount(0)
     } finally {
       await joiner.close()
     }
@@ -86,6 +86,10 @@ test.describe('inviting a colleague', () => {
 
     // The seeded admin is the only admin, so demoting them is refused by the server.
     await page.getByTestId(`member-role-${ADMIN_EMAIL}`).selectOption('agent')
+
+    // Lowering your own role asks first: it takes effect at once and the page that would
+    // change it back is the one you just lost.
+    await page.getByTestId('demote-self-confirm').click()
 
     // The error is shown rather than the change being applied.
     await expect(page.getByText(/at least one admin/i)).toBeVisible({ timeout: 15_000 })

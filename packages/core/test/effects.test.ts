@@ -55,7 +55,12 @@ describe('applyEffects', () => {
       { type: 'schedule_waiting_human_timeout', minutes: 15 },
       { type: 'cancel_waiting_human_timeout' },
       { type: 'enqueue_summary' },
-      { type: 'send_acknowledgement', language: 'th' },
+      {
+        type: 'send_acknowledgement',
+        kind: 'handoff',
+        language: 'th',
+        at: new Date('2026-09-01T10:00:00Z'),
+      },
     ]
 
     await applyEffects(effects, ctx, ports)
@@ -80,7 +85,12 @@ describe('applyEffects', () => {
         { type: 'run_ai_turn', deliver: 'draft' },
         { type: 'add_internal_note', body: 'refund issued' },
         { type: 'schedule_waiting_human_timeout', minutes: 5 },
-        { type: 'send_acknowledgement', language: 'en' },
+        {
+          type: 'send_acknowledgement',
+          kind: 'still_waiting',
+          language: 'en',
+          at: new Date('2026-09-01T10:05:00Z'),
+        },
       ],
       ctx,
       ports,
@@ -89,7 +99,9 @@ describe('applyEffects', () => {
     expect(calls[0]?.args).toEqual(['draft'])
     expect(calls[1]?.args).toEqual(['refund issued'])
     expect(calls[2]?.args).toEqual([5])
-    expect(calls[3]?.args).toEqual(['en'])
+    expect(calls[3]?.args).toEqual([
+      { kind: 'still_waiting', language: 'en', at: new Date('2026-09-01T10:05:00Z') },
+    ])
   })
 
   test('runs effects in order so a note exists before agents are notified', async () => {

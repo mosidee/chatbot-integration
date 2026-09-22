@@ -276,6 +276,10 @@ export async function mergeCustomers(
       .update(schema.customers)
       .set({
         fields: { ...absorbed.fields, ...survivor.fields },
+        // A column on `customers` is not covered by the repoint list below, so a note the
+        // survivor happens not to have is dropped with the absorbed row unless it is named
+        // here. Same rule as the owner beneath: survivor wins per key, absorbed fills gaps.
+        notes: { ...absorbed.notes, ...survivor.notes },
         displayName: survivor.displayName ?? absorbed.displayName,
         primaryLanguage: survivor.primaryLanguage ?? absorbed.primaryLanguage,
         summary: survivor.summary ?? absorbed.summary,

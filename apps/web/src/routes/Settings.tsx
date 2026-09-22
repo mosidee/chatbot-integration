@@ -7,6 +7,8 @@ import type {
   ToolSummary,
 } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -20,13 +22,16 @@ import {
 import {
   Button,
   Card,
+  ConfirmButton,
   cn,
   EmptyState,
   ErrorNote,
   Input,
   Label,
+  SaveStatus,
   Spinner,
   Textarea,
+  useSaveState,
 } from '../components/ui'
 import { WidgetPanel } from '../components/WidgetPanel'
 import {
@@ -49,11 +54,34 @@ const TASKS = [
   'rerank',
 ] as const
 
+/**
+ * The groups this page is divided into.
+ *
+ * It used to be seven cards in one column, ordered for whoever built it: providers and
+ * fourteen model rows first, and the things a salon owner actually came for — how the AI
+ * speaks, which channels are connected, the replies their agents reuse — below all of it.
+ *
+ * The split is by who needs it rather than by what it configures. General and Channels are
+ * an operator's; Models is whoever wired the gateway up; Integrations is a developer, and
+ * is offered to admins only because that is who the routes behind it answer.
+ */
+export const SETTINGS_TABS = ['general', 'channels', 'models', 'integrations'] as const
+export type SettingsTab = (typeof SETTINGS_TABS)[number]
+
 export function Settings() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [savedNote, setSavedNote] = useState<string | null>(null)
-
+  const navigate = useNavigate()
+  /**
+   * Read off the location rather than through `useSearch({ from })`.
+   *
+   * The routes in this app are declared inline, so none of them has an id for `from` to
+   * resolve, and asking for one throws on the first render. The location is the same
+   * information without the indirection.
+   */
+  const tab = useRouterState({
+    select: (state) => (state.location.search as { tab?: SettingsTab }).tab,
+  })
   const workspace = useQuery({
     queryKey: ['workspace-settings'],
     queryFn: () => api.settings.workspace(),
@@ -61,18 +89,17 @@ export function Settings() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: () => api.settings.providers() })
   const slots = useQuery({ queryKey: ['task-slots'], queryFn: () => api.settings.taskSlots() })
   const channels = useQuery({ queryKey: ['channels'], queryFn: () => api.settings.channels() })
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
 
-  const flash = () => {
-    setSavedNote(t('settings.saved'))
-    setTimeout(() => setSavedNote(null), 2000)
-  }
+  const workspaceSave = useSaveState()
 
   const saveWorkspace = useMutation({
     mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) =>
       api.settings.updateWorkspace(patch),
+    ...workspaceSave.handlers,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['workspace-settings'] })
-      flash()
+      workspaceSave.handlers.onSuccess()
     },
   })
 
@@ -87,125 +114,250 @@ export function Settings() {
   const settings = workspace.data?.settings
   if (!settings) return <ErrorNote message={t('common.error')} />
 
+  // The routes behind Integrations answer admins only, and offering somebody a tab that
+  // will refuse them is its own kind of rude.
+  const isAdmin = me.data?.role === 'admin'
+  const tabs = SETTINGS_TABS.filter((key) => key !== 'integrations' || isAdmin)
+  const active = tab && tabs.includes(tab) ? tab : 'general'
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-12">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">{t('settings.title')}</h1>
-        {savedNote ? (
-          <span className="text-sm text-emerald-600 dark:text-emerald-400">{savedNote}</span>
-        ) : null}
+      <h1 className="text-lg font-semibold">{t('settings.title')}</h1>
+
+      <div className="flex gap-1 overflow-x-auto border-b border-[var(--border)]">
+        {tabs.map((key) => (
+          <button
+            key={key}
+            type="button"
+            data-testid={`settings-tab-${key}`}
+            aria-current={active === key ? 'page' : undefined}
+            onClick={() => void navigate({ to: '/settings', search: { tab: key } })}
+            className={cn(
+              '-mb-px shrink-0 border-b-2 px-3 py-2 text-sm transition-colors',
+              active === key
+                ? 'border-[var(--color-brand-600)] font-medium text-[var(--text)]'
+                : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+            )}
+          >
+            {t(`settings.tabs.${key}`)}
+          </button>
+        ))}
       </div>
 
-      <Card className="space-y-3">
-        <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+      {active === 'general' ? (
+        <>
+          <Card className="space-y-3">
+            <div className="flex items-baseline gap-3">
+              <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+              <SaveStatus state={workspaceSave.state} />
+            </div>
 
-        <div>
-          <Label htmlFor="persona">{t('settings.persona')}</Label>
-          <Textarea
-            id="persona"
-            rows={5}
-            defaultValue={settings.persona}
-            onBlur={(e) => {
-              if (e.target.value !== settings.persona) {
-                saveWorkspace.mutate({ persona: e.target.value })
-              }
-            }}
-          />
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label htmlFor="default-mode">{t('settings.defaultMode')}</Label>
-            <select
-              id="default-mode"
-              className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
-              value={settings.defaultMode}
-              onChange={(e) =>
-                saveWorkspace.mutate({ defaultMode: e.target.value as ConversationMode })
-              }
-            >
-              {(['ai', 'ai_supervised', 'human'] as const).map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`modes.${mode}`)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <Label htmlFor="default-language">{t('settings.defaultLanguage')}</Label>
-            <select
-              id="default-language"
-              className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
-              value={settings.defaultLanguage}
-              onChange={(e) =>
-                saveWorkspace.mutate({ defaultLanguage: e.target.value as Language })
-              }
-            >
-              <option value="th">ไทย</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-        </div>
-
-        <fieldset>
-          <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-            {t('settings.redaction')}
-          </legend>
-          <div className="flex flex-wrap gap-4">
-            {(
-              [
-                ['cardNumbers', t('settings.cardNumbers')],
-                ['thaiNationalId', t('settings.thaiNationalId')],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={settings.redaction[key]}
-                  onChange={(e) =>
-                    saveWorkspace.mutate({
-                      redaction: { ...settings.redaction, [key]: e.target.checked },
-                    })
+            <div>
+              <Label htmlFor="persona">{t('settings.persona')}</Label>
+              <Textarea
+                id="persona"
+                rows={5}
+                defaultValue={settings.persona}
+                onBlur={(e) => {
+                  if (e.target.value !== settings.persona) {
+                    saveWorkspace.mutate({ persona: e.target.value })
                   }
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      </Card>
+                }}
+              />
+            </div>
 
-      <ProvidersCard
-        providers={providers.data?.providers ?? []}
-        onChange={() => {
-          void queryClient.invalidateQueries({ queryKey: ['providers'] })
-          flash()
-        }}
-      />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="default-mode">{t('settings.defaultMode')}</Label>
+                <select
+                  id="default-mode"
+                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+                  value={settings.defaultMode}
+                  onChange={(e) =>
+                    saveWorkspace.mutate({ defaultMode: e.target.value as ConversationMode })
+                  }
+                >
+                  {(['ai', 'ai_supervised', 'human'] as const).map((mode) => (
+                    <option key={mode} value={mode}>
+                      {t(`modes.${mode}`)}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-      <TaskSlotsCard
-        slots={slots.data?.slots ?? []}
-        providers={providers.data?.providers ?? []}
-        onChange={() => {
-          void queryClient.invalidateQueries({ queryKey: ['task-slots'] })
-          flash()
-        }}
-      />
+              <div>
+                <Label htmlFor="default-language">{t('settings.defaultLanguage')}</Label>
+                <select
+                  id="default-language"
+                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+                  value={settings.defaultLanguage}
+                  onChange={(e) =>
+                    saveWorkspace.mutate({ defaultLanguage: e.target.value as Language })
+                  }
+                >
+                  <option value="th">ไทย</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+            </div>
 
-      <IdentityCard settings={settings} onSave={(patch) => saveWorkspace.mutate(patch as never)} />
+            <HoldingMessages settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
 
-      <ToolsCard />
+            <fieldset>
+              <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
+                {t('settings.redaction')}
+              </legend>
+              <div className="flex flex-wrap gap-4">
+                {(
+                  [
+                    ['cardNumbers', t('settings.cardNumbers')],
+                    ['thaiNationalId', t('settings.thaiNationalId')],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.redaction[key]}
+                      onChange={(e) =>
+                        saveWorkspace.mutate({
+                          redaction: { ...settings.redaction, [key]: e.target.checked },
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </Card>
 
-      <CannedResponsesCard />
+          <CannedResponsesCard />
+        </>
+      ) : null}
 
-      <ChannelsCard
-        channels={channels.data?.channels ?? []}
-        onChange={() => {
-          void queryClient.invalidateQueries({ queryKey: ['channels'] })
-          flash()
-        }}
-      />
+      {active === 'channels' ? (
+        <ChannelsCard
+          channels={channels.data?.channels ?? []}
+          onChange={() => void queryClient.invalidateQueries({ queryKey: ['channels'] })}
+        />
+      ) : null}
+
+      {active === 'models' ? (
+        <>
+          <ProvidersCard
+            providers={providers.data?.providers ?? []}
+            onChange={() => void queryClient.invalidateQueries({ queryKey: ['providers'] })}
+          />
+
+          <TaskSlotsCard
+            slots={slots.data?.slots ?? []}
+            providers={providers.data?.providers ?? []}
+            onChange={() => void queryClient.invalidateQueries({ queryKey: ['task-slots'] })}
+          />
+        </>
+      ) : null}
+
+      {active === 'integrations' && isAdmin ? (
+        <>
+          <ToolsCard />
+          <IdentityCard
+            settings={settings}
+            onSave={(patch) => saveWorkspace.mutate(patch as never)}
+          />
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * What a customer reads while they wait for a person.
+ *
+ * Two sentences the AI never writes: one sent the moment it stops answering, one sent if
+ * nobody has picked the conversation up by the deadline below them. They were settings the
+ * API accepted and no screen offered, which meant every tenant shipped with the defaults
+ * and the operator had no way to sound like themselves at the one moment the AI has
+ * admitted it cannot help.
+ */
+function HoldingMessages({
+  settings,
+  onSave,
+}: {
+  settings: WorkspaceSettings
+  onSave: (patch: Partial<WorkspaceSettings>) => void
+}) {
+  const { t } = useTranslation()
+
+  const field = (
+    key: 'acknowledgementText' | 'stillWaitingText',
+    language: 'th' | 'en',
+  ): ReactNode => {
+    const current = settings[key][language] ?? ''
+    return (
+      <div>
+        <Label htmlFor={`${key}-${language}`}>{language === 'th' ? 'ไทย' : 'English'}</Label>
+        <Textarea
+          id={`${key}-${language}`}
+          data-testid={`${key}-${language}`}
+          rows={2}
+          maxLength={1000}
+          defaultValue={current}
+          onBlur={(event) => {
+            if (event.target.value === current) return
+            onSave({ [key]: { ...settings[key], [language]: event.target.value } })
+          }}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">
+      <div>
+        <h3 className="text-[13px] font-semibold">{t('settings.holdingMessages')}</h3>
+        <p className="text-[12px] text-[var(--text-muted)]">{t('settings.holdingHint')}</p>
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs font-medium">{t('settings.acknowledgementText')}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {field('acknowledgementText', 'th')}
+          {field('acknowledgementText', 'en')}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs font-medium">{t('settings.stillWaitingText')}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {field('stillWaitingText', 'th')}
+          {field('stillWaitingText', 'en')}
+        </div>
+      </div>
+
+      <div className="max-w-xs">
+        <Label htmlFor="waiting-fallback">{t('settings.waitingHumanFallback')}</Label>
+        <Input
+          id="waiting-fallback"
+          data-testid="waiting-human-minutes"
+          type="number"
+          min={1}
+          max={1440}
+          placeholder={t('settings.waitingHumanFallbackOff')}
+          defaultValue={settings.waitingHumanFallbackMinutes ?? ''}
+          onBlur={(event) => {
+            const raw = event.target.value.trim()
+            // An empty box switches the second message off rather than meaning zero: there
+            // is no such thing as apologising for a wait that has not happened yet.
+            const next = raw === '' ? null : Number(raw)
+            if (next !== null && (!Number.isInteger(next) || next < 1 || next > 1440)) return
+            if (next === settings.waitingHumanFallbackMinutes) return
+            onSave({ waitingHumanFallbackMinutes: next })
+          }}
+        />
+        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+          {t('settings.waitingHumanFallbackHint')}
+        </p>
+      </div>
     </div>
   )
 }
@@ -216,6 +368,7 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const save = useSaveState()
 
   const create = useMutation({
     mutationFn: () => api.settings.createProvider({ name, baseUrl, apiKey: apiKey || undefined }),
@@ -231,12 +384,19 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
 
   const remove = useMutation({
     mutationFn: (id: string) => api.settings.deleteProvider(id),
-    onSuccess: onChange,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      onChange()
+    },
   })
 
   return (
     <Card className="space-y-3">
-      <h2 className="text-sm font-semibold">{t('settings.providers')}</h2>
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold">{t('settings.providers')}</h2>
+        <SaveStatus state={save.state} />
+      </div>
 
       {providers.map((provider) => (
         <div
@@ -252,29 +412,41 @@ function ProvidersCard({ providers, onChange }: { providers: Provider[]; onChang
               {t('settings.keySet')}
             </span>
           ) : null}
-          <Button size="sm" variant="ghost" onClick={() => remove.mutate(provider.id)}>
-            ✕
-          </Button>
+          <ConfirmButton
+            testId={`provider-remove-${provider.id}`}
+            label={t('common.remove')}
+            armedLabel={t('common.removeConfirm')}
+            onConfirm={() => remove.mutate(provider.id)}
+          />
         </div>
       ))}
 
+      {/* Labels, not placeholders. A placeholder disappears the moment somebody types, so
+          the field stops saying what it is exactly when the answer matters. */}
       <div className="grid gap-2 sm:grid-cols-3">
-        <Input
-          placeholder={t('settings.name')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Input
-          placeholder={t('settings.baseUrl')}
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-        />
-        <Input
-          type="password"
-          placeholder={t('settings.apiKey')}
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
+        <div>
+          <Label htmlFor="provider-name">{t('settings.name')}</Label>
+          <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="provider-url">{t('settings.baseUrl')}</Label>
+          <Input
+            id="provider-url"
+            type="url"
+            placeholder="https://api.example.com/v1"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label htmlFor="provider-key">{t('settings.apiKey')}</Label>
+          <Input
+            id="provider-key"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </div>
       </div>
       {error ? <ErrorNote message={error} /> : null}
       <Button
@@ -329,7 +501,9 @@ function SlotTargetRow({
 
   return (
     <div className="mt-1.5">
-      <div className="flex min-w-0 items-center gap-1.5">
+      {/* Stacked on a phone. Two selects and a fixed-width button in one row left each
+          select about ninety pixels, so `gemini/gemini-3.8-flash` truncated to nothing. */}
+      <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center">
         <select
           className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[13px]"
           data-testid={`${testId}-provider`}
@@ -369,10 +543,16 @@ function TaskSlotsCard({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
+  const status = useSaveState()
+
   const save = useMutation({
     mutationFn: ({ task, body }: { task: string; body: SlotBody }) =>
       api.settings.setTaskSlot(task, body),
-    onSuccess: onChange,
+    ...status.handlers,
+    onSuccess: () => {
+      status.handlers.onSuccess()
+      onChange()
+    },
   })
 
   /** A slot is stored whole, so every edit resends the fields it did not touch. */
@@ -398,7 +578,10 @@ function TaskSlotsCard({
   return (
     <Card className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">{t('settings.taskSlots')}</h2>
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-sm font-semibold">{t('settings.taskSlots')}</h2>
+          <SaveStatus state={status.state} />
+        </div>
         <Button
           size="sm"
           variant="ghost"
@@ -420,7 +603,15 @@ function TaskSlotsCard({
         const slot = slots.find((s) => s.task === task)
         return (
           <div key={task} className="rounded-lg border border-[var(--border)] p-2.5">
-            <div className="mb-1.5 font-mono text-[12px] font-medium">{task}</div>
+            {/* The identifier was all there was, so a salon owner read `agent_chat` and
+                `classify_intent_and_handoff` with no way to tell which one answers
+                customers and which one nothing reads yet. */}
+            <div className="mb-1.5">
+              <div className="text-[13px] font-medium">{t(`settings.tasks.${task}.label`)}</div>
+              <div className="text-[11px] text-[var(--text-muted)]">
+                {t(`settings.tasks.${task}.purpose`)}
+              </div>
+            </div>
             <SlotTargetRow
               testId={`slot-${task}-primary`}
               task={task}
@@ -527,14 +718,23 @@ function CannedResponsesCard() {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   })
 
+  const save = useSaveState()
+
   const remove = useMutation({
     mutationFn: (id: string) => api.settings.deleteCannedResponse(id),
-    onSuccess: refresh,
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      refresh()
+    },
   })
 
   return (
     <Card className="space-y-3">
-      <h2 className="text-sm font-semibold">{t('settings.cannedResponses')}</h2>
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold">{t('settings.cannedResponses')}</h2>
+        <SaveStatus state={save.state} />
+      </div>
       <p className="text-[13px] text-[var(--text-muted)]">{t('settings.cannedHint')}</p>
 
       {(responses.data?.responses ?? []).map((response) => (
@@ -546,9 +746,12 @@ function CannedResponsesCard() {
             /{response.shortcut}
           </code>
           <p className="min-w-0 flex-1 whitespace-pre-wrap text-[13px]">{response.body}</p>
-          <Button size="sm" variant="ghost" onClick={() => remove.mutate(response.id)}>
-            ✕
-          </Button>
+          <ConfirmButton
+            testId={`canned-remove-${response.id}`}
+            label={t('common.remove')}
+            armedLabel={t('common.removeConfirm')}
+            onConfirm={() => remove.mutate(response.id)}
+          />
         </div>
       ))}
 
@@ -629,9 +832,13 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
   const [check, setCheck] = useState<CredentialCheck | null>(null)
   const [expanded, setExpanded] = useState(false)
 
+  const status = useSaveState()
+
   const save = useMutation({
     mutationFn: () => api.settings.updateChannel(channel.id, { config: values }),
+    ...status.handlers,
     onSuccess: () => {
+      status.handlers.onSuccess()
       setValues({})
       onChange()
     },
@@ -640,6 +847,10 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
   const runCheck = useMutation({
     mutationFn: () => api.settings.checkChannel(channel.id),
     onSuccess: setCheck,
+    // A check that throws used to re-enable its button and say nothing, which reads as a
+    // channel that is fine.
+    onError: (caught) =>
+      setCheck({ ok: false, detail: caught instanceof Error ? caught.message : String(caught) }),
   })
 
   const needsCredentials = channel.requiredFields.length > 0
@@ -674,6 +885,8 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
           </Button>
         </div>
       </div>
+
+      <SaveStatus state={status.state} className="mt-1" />
 
       {check ? (
         <p
@@ -808,22 +1021,35 @@ function ToolsCard() {
     setEditing(null)
   }
 
+  const save = useSaveState()
+
   const remove = useMutation({
     mutationFn: (id: string) => api.settings.deleteTool(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['tools'] }),
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      void queryClient.invalidateQueries({ queryKey: ['tools'] })
+    },
   })
 
   const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       api.settings.updateTool(id, { enabled }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['tools'] }),
+    ...save.handlers,
+    onSuccess: () => {
+      save.handlers.onSuccess()
+      void queryClient.invalidateQueries({ queryKey: ['tools'] })
+    },
   })
 
   const list = tools.data?.tools ?? []
 
   return (
     <Card className="space-y-3" data-testid="tools-card">
-      <h2 className="text-sm font-semibold">{t('settings.tools')}</h2>
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-sm font-semibold">{t('settings.tools')}</h2>
+        <SaveStatus state={save.state} />
+      </div>
       <p className="text-[11px] text-[var(--text-muted)]">{t('settings.toolsHint')}</p>
 
       {list.length === 0 && editing === null ? (
@@ -876,9 +1102,12 @@ function ToolsCard() {
           >
             {t('common.edit')}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => remove.mutate(tool.id)}>
-            ✕
-          </Button>
+          <ConfirmButton
+            testId={`tool-remove-${tool.name}`}
+            label={t('common.remove')}
+            armedLabel={t('common.removeConfirm')}
+            onConfirm={() => remove.mutate(tool.id)}
+          />
         </div>
       ))}
 
@@ -1051,7 +1280,9 @@ function ToolEditor({
             value={config.url}
             onChange={(e) => patchConfig({ url: e.target.value })}
           />
-          <p className="text-[11px] text-[var(--text-muted)]">{t('settings.toolUrlHint')}</p>
+          <p className="text-[11px] text-[var(--text-muted)]">
+            {t('settings.toolUrlHint', { placeholder: '{{name}}' })}
+          </p>
         </div>
       </div>
 
@@ -1181,6 +1412,7 @@ function ToolEditor({
             <Button
               size="sm"
               variant="ghost"
+              aria-label={t('common.remove')}
               onClick={() => {
                 patchConfig({ args: config.args.filter((_, i) => i !== index) })
                 setArgKeys((keys) => keys.filter((_, i) => i !== index))

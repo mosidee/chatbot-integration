@@ -1016,7 +1016,13 @@ describe('customer memory', () => {
 
     expect(customers[0]?.summary).toContain('เชียงใหม่')
     expect(customers[0]?.summary).toContain('ยังไม่ได้ตัดสินใจสมัคร')
-    expect(customers[0]?.fields).toMatchObject({ city: 'Chiang Mai' })
+    /**
+     * Into `notes`, not `fields`. A city is something the model noticed, not one of the
+     * five identifiers merge matching compares, and mixing the two put a paragraph about
+     * somebody's plan in the same list as their phone number.
+     */
+    expect(customers[0]?.notes).toMatchObject({ city: 'Chiang Mai' })
+    expect(customers[0]?.fields).toEqual({})
     expect(customers[0]?.summaryUpdatedAt).not.toBeNull()
 
     // The history keeps what it said before, so a wrong summary can be traced.
@@ -1167,7 +1173,9 @@ describe('the waiting-human fallback timer', () => {
 
     const messages = await messagesOf(f, conversation.id)
     const ack = messages.find((m) => m.senderType === 'system')
-    expect(ack?.text).toBe('รอสักครู่นะคะ')
+    // The apology, not the handoff sentence: this customer has been waiting a while and
+    // being told a second time that somebody is coming reads like nobody is.
+    expect(ack?.text).toBe('ขออภัยที่ให้รอค่ะ')
   })
 })
 
@@ -1784,6 +1792,150 @@ describe('the handoff log', () => {
     const dashboard = await loadDashboard(f.runtime.db, { workspaceId: f.workspaceId, days: 7 })
     expect(dashboard.handoffReasons).toContainEqual({ reason: 'low_confidence', conversations: 1 })
     expect(dashboard.totals.handoffs).toBe(1)
+  })
+})
+
+/**
+ * What the customer hears when the AI gives up.
+ *
+ * "The AI never goes silent" was enforced from the inside — a turn always ended in a reply
+ * or a handoff — but a handoff told agents and said nothing to the person who had asked
+ * the question. From where they sat the thread simply stopped.
+ */
+describe('a handoff reaches the customer', () => {
+  const systemMessages = async (f: Fixture, conversationId: string) =>
+    (await messagesOf(f, conversationId)).filter((m) => m.senderType === 'system')
+
+  test('the customer is told a person is coming', async () => {
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          {
+            name: 'handoff_to_human',
+            arguments: { reason: 'customer_requested', note: 'Asked for a person.' },
+          },
+        ],
+      },
+      { kind: 'text', text: 'ขอโอนสายนะคะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'ขอคุยกับเจ้าหน้าที่ค่ะ')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    const said = await systemMessages(f, conversation.id)
+    expect(said).toHaveLength(1)
+    expect(said[0]?.text).toBe('รอสักครู่นะคะ')
+    // Queued for delivery, not merely written down: a message nobody was told to send is
+    // the same silence with a database row attached.
+    expect(said[0]?.status).toBe('queued')
+  })
+
+  test('a workspace with no provider at all still answers', async () => {
+    // The path that produced the silence seen in production: no usable model, so no turn,
+    // so nothing was ever composed for the customer.
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'unused' }]).url })
+    await f.runtime.db
+      .delete(schema.taskSlots)
+      .where(eq(schema.taskSlots.workspaceId, f.workspaceId))
+
+    await customerSays(f, 'ราคาเท่าไหร่คะ')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    expect(conversation.mode).toBe('waiting_human')
+    const said = await systemMessages(f, conversation.id)
+    expect(said).toHaveLength(1)
+  })
+
+  test('it is written in the language the customer wrote in', async () => {
+    const provider = mock([{ kind: 'text', text: 'unused' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    await f.runtime.db
+      .delete(schema.taskSlots)
+      .where(eq(schema.taskSlots.workspaceId, f.workspaceId))
+
+    // An English speaker on a Thai-default workspace. The customer record says Thai,
+    // because that is what it is seeded with; the message they actually sent says
+    // otherwise, and that is the better evidence.
+    await customerSays(f, 'how much does the starter plan cost')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    const said = await systemMessages(f, conversation.id)
+    expect(said[0]?.text).toBe('One moment please.')
+  })
+
+  test('a retried turn does not tell the customer twice', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'hi' }]).url })
+    await customerSays(f, 'สวัสดี')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    const ctx = { workspaceId: f.workspaceId, conversationId: conversation.id }
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+
+    // The instant is what the state machine computed, so a replay of the same effect list
+    // carries the same one. Two attempts, one message.
+    const at = new Date()
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await applyEffects(
+        [{ type: 'send_acknowledgement', kind: 'handoff', language: 'th', at }],
+        ctx,
+        ports,
+        f.runtime.logger,
+      )
+    }
+
+    expect(await systemMessages(f, conversation.id)).toHaveLength(1)
+    await relay(f)
+    const queued = await f.queues.outbound.getJobs(['waiting', 'active', 'completed', 'delayed'])
+    const forThisConversation = queued.filter(
+      (job) => job?.data?.conversationId === conversation.id,
+    )
+    // One delivery per message, however many attempts asked for it.
+    const messageIds = new Set(forThisConversation.map((job) => job?.data?.messageId))
+    expect(messageIds.size).toBe(forThisConversation.length)
+  })
+
+  test('a second, genuinely later handoff speaks again', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'hi' }]).url })
+    await customerSays(f, 'สวัสดี')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    const ctx = { workspaceId: f.workspaceId, conversationId: conversation.id }
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+
+    for (const at of [new Date('2026-09-01T10:00:00Z'), new Date('2026-09-02T10:00:00Z')]) {
+      await applyEffects(
+        [{ type: 'send_acknowledgement', kind: 'handoff', language: 'th', at }],
+        ctx,
+        ports,
+        f.runtime.logger,
+      )
+    }
+
+    expect(await systemMessages(f, conversation.id)).toHaveLength(2)
+  })
+
+  test('a workspace that has emptied both boxes says nothing rather than failing', async () => {
+    const f = await fixture({
+      providerBaseUrl: mock([{ kind: 'text', text: 'hi' }]).url,
+      settings: { acknowledgementText: { th: '', en: '' } },
+    })
+    await customerSays(f, 'สวัสดี')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    await applyEffects(
+      [{ type: 'send_acknowledgement', kind: 'handoff', language: 'th', at: new Date() }],
+      { workspaceId: f.workspaceId, conversationId: conversation.id },
+      createEffectPorts(f.runtime, f.runtime.logger),
+      f.runtime.logger,
+    )
+
+    expect(await systemMessages(f, conversation.id)).toHaveLength(0)
   })
 })
 

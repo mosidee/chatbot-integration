@@ -17,12 +17,12 @@ import { Layout } from './components/Layout'
 import { NotFound } from './components/NotFound'
 import { Admin } from './routes/Admin'
 import { Dashboard } from './routes/Dashboard'
-import { Inbox } from './routes/Inbox'
+import { INBOX_TABS, Inbox, type InboxTab } from './routes/Inbox'
 import { Invite } from './routes/Invite'
 import { Knowledge } from './routes/Knowledge'
 import { Login } from './routes/Login'
 import { Platform } from './routes/Platform'
-import { Settings } from './routes/Settings'
+import { SETTINGS_TABS, Settings, type SettingsTab } from './routes/Settings'
 import { Simulator } from './routes/Simulator'
 
 const queryClient = new QueryClient({
@@ -131,11 +131,36 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   inviteRoute,
   appRoute.addChildren([
-    createRoute({ getParentRoute: () => appRoute, path: '/', component: Inbox }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/',
+      component: Inbox,
+      // Which queue is showing, so the dashboard can link straight into one.
+      validateSearch: (search: Record<string, unknown>): { tab: InboxTab } => ({
+        tab: INBOX_TABS.includes(search.tab as InboxTab) ? (search.tab as InboxTab) : 'open',
+      }),
+    }),
     createRoute({ getParentRoute: () => appRoute, path: '/dashboard', component: Dashboard }),
     createRoute({ getParentRoute: () => appRoute, path: '/knowledge', component: Knowledge }),
     createRoute({ getParentRoute: () => appRoute, path: '/simulator', component: Simulator }),
-    createRoute({ getParentRoute: () => appRoute, path: '/settings', component: Settings }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/settings',
+      component: Settings,
+      /**
+       * Which group of settings is open, in the address bar.
+       *
+       * So a link to "the model for each task" is a link somebody can send, and a reload
+       * stays where they were rather than throwing them back to the top of a page they had
+       * scrolled halfway down. An unknown value falls back rather than erroring: this comes
+       * from a URL somebody may have typed.
+       */
+      validateSearch: (search: Record<string, unknown>): { tab: SettingsTab } => ({
+        tab: SETTINGS_TABS.includes(search.tab as SettingsTab)
+          ? (search.tab as SettingsTab)
+          : 'general',
+      }),
+    }),
     createRoute({ getParentRoute: () => appRoute, path: '/admin', component: Admin }),
     createRoute({ getParentRoute: () => appRoute, path: '/platform', component: Platform }),
     workspaceRoute,
