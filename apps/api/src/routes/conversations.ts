@@ -169,11 +169,17 @@ export function conversationRoutes(ctx: ApiContext) {
               customerId: schema.conversations.customerId,
               customerDisplayName: schema.customers.displayName,
               customerAssigneeUserId: schema.customers.assigneeUserId,
+              channelType: schema.channels.type,
+              channelName: schema.channels.name,
             })
             .from(schema.conversations)
             // Replaces a second query that fetched these by id. The ordering needs the
             // owner in SQL anyway, and a customer always exists for a conversation.
             .innerJoin(schema.customers, eq(schema.customers.id, schema.conversations.customerId))
+            // Which channel a thread is on, so the console can say so without a second
+            // request. It matters more than it used to: one person can hold a conversation
+            // on LINE and another on the widget, and the rows are otherwise identical.
+            .innerJoin(schema.channels, eq(schema.channels.id, schema.conversations.channelId))
             .where(and(...filters))
             .orderBy(
               ownership,
@@ -206,6 +212,7 @@ export function conversationRoutes(ctx: ApiContext) {
               mode: row.mode,
               status: row.status,
               channelId: row.channelId,
+              channel: { type: row.channelType, name: row.channelName },
               assigneeUserId: row.assigneeUserId,
               tags: row.tags,
               handoffReason: row.handoffReason,
@@ -292,6 +299,7 @@ export function conversationRoutes(ctx: ApiContext) {
             feedback,
             needsReview,
             allIdentities,
+            channelRows,
           ] = await Promise.all([
             // Newest first so the limit takes the right end, then reversed for display.
             // One more than asked for, which is how the caller learns there is more above.
@@ -345,6 +353,11 @@ export function conversationRoutes(ctx: ApiContext) {
                   eq(schema.channelIdentities.customerId, loaded.row.customerId),
                 ),
               ),
+            db
+              .select({ type: schema.channels.type, name: schema.channels.name })
+              .from(schema.channels)
+              .where(eq(schema.channels.id, loaded.row.channelId))
+              .limit(1),
           ])
 
           await db
@@ -373,6 +386,8 @@ export function conversationRoutes(ctx: ApiContext) {
             canSendVerificationLink:
               settingsForIdentity.identity.verificationLink.enabled &&
               settingsForIdentity.identity.verificationLink.url !== null,
+            /** Which channel this thread is on, for the badge beside the customer's name. */
+            channel: channelRows[0] ?? null,
             /**
              * Oldest first, which is how a thread reads. The extra row fetched above is
              * dropped here; its only job was to answer whether there is more.

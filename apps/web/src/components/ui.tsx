@@ -108,6 +108,42 @@ export function ModeBadge({ mode, label }: { mode: string; label: string }) {
   )
 }
 
+/**
+ * Which channel a conversation is on.
+ *
+ * Worth showing on every row since a customer reaching us on LINE and on the widget has two
+ * threads that are otherwise identical at a glance. Coloured by the platform's own colour
+ * where it has one, because that is what an agent recognises before they read the word.
+ */
+const CHANNEL_STYLES: Record<string, string> = {
+  line: 'bg-[#06C755]/15 text-[#069340] dark:text-[#4ade80]',
+  messenger: 'bg-[#0084FF]/15 text-[#0068cc] dark:text-[#60a5fa]',
+  web: 'bg-[var(--surface-muted)] text-[var(--text-muted)]',
+  test: 'bg-[var(--surface-muted)] text-[var(--text-muted)]',
+}
+
+export function ChannelBadge({
+  type,
+  label,
+  testId,
+}: {
+  type: string
+  label: string
+  testId?: string
+}) {
+  return (
+    <span
+      data-testid={testId}
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium',
+        CHANNEL_STYLES[type] ?? 'bg-[var(--surface-muted)] text-[var(--text-muted)]',
+      )}
+    >
+      {label}
+    </span>
+  )
+}
+
 export function Spinner({ label }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 text-sm text-[var(--text-muted)]">

@@ -332,3 +332,49 @@ describe('the message window', () => {
     expect(body.hasMoreMessages).toBe(false)
   })
 })
+
+describe('the channel a conversation is on', () => {
+  /**
+   * One person can hold a conversation on LINE and another on the widget, and the two rows
+   * are otherwise identical at a glance. The console gets the channel with the conversation
+   * rather than resolving it separately, because listing channels needs the agent role and
+   * a viewer reads the same inbox.
+   */
+  test('comes back with every row in the list', async () => {
+    const { conversationId } = await seed({
+      name: 'channel-badge',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+
+    const response = await fixture.as(fixture.admin, '/api/v1/conversations?limit=100')
+    const body = (await response.json()) as {
+      conversations: { id: string; channel: { type: string; name: string } }[]
+    }
+    const row = body.conversations.find((item) => item.id === conversationId)
+    expect(row?.channel.type).toBe('test')
+    expect(row?.channel.name).toBe('Simulator')
+  })
+
+  test('comes back with the conversation itself', async () => {
+    const { conversationId } = await seed({
+      name: 'channel-badge-detail',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+
+    const response = await fixture.as(fixture.admin, `/api/v1/conversations/${conversationId}`)
+    const body = (await response.json()) as { channel: { type: string; name: string } | null }
+    expect(body.channel?.type).toBe('test')
+  })
+
+  test('is readable by a viewer, who cannot list channels at all', async () => {
+    // The reason it travels with the conversation rather than being looked up.
+    expect((await fixture.as(fixture.viewer, '/api/v1/settings/channels')).status).toBe(403)
+
+    const response = await fixture.as(fixture.viewer, '/api/v1/conversations?limit=100')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { conversations: { channel: { type: string } }[] }
+    expect(body.conversations.every((row) => Boolean(row.channel?.type))).toBe(true)
+  })
+})

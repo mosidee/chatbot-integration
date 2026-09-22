@@ -15,6 +15,7 @@ import { Lightbox } from '../components/Lightbox'
 import { MergeSuggestions } from '../components/MergeSuggestions'
 import {
   Button,
+  ChannelBadge,
   cn,
   EmptyState,
   ErrorNote,
@@ -207,6 +208,11 @@ export function Inbox() {
                       <span className="truncate text-sm font-medium">
                         {conversation.customer.displayName ?? t('common.customer')}
                       </span>
+                      <ChannelBadge
+                        type={conversation.channel.type}
+                        label={t(`channels.${conversation.channel.type}`)}
+                        testId="conversation-channel"
+                      />
                       <ModeBadge mode={conversation.mode} label={t(`modes.${conversation.mode}`)} />
                       {conversation.unreadCount > 0 ? (
                         <span className="ml-auto flex size-5 items-center justify-center rounded-full bg-[var(--color-brand-600)] text-[11px] font-semibold text-white">
@@ -466,6 +472,13 @@ function ConversationPane({
               <span className="truncate text-sm font-semibold">
                 {data.customer?.displayName ?? t('common.customer')}
               </span>
+              {data.channel ? (
+                <ChannelBadge
+                  type={data.channel.type}
+                  label={t(`channels.${data.channel.type}`)}
+                  testId="conversation-channel-header"
+                />
+              ) : null}
               <ModeBadge mode={mode} label={t(`modes.${mode}`)} />
             </div>
             {data.conversation.handoffReason ? (

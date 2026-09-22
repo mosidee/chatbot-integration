@@ -393,6 +393,12 @@ const th = {
     noWorkspaceHint: 'อาจสะกดผิด หรือบัญชีของคุณไม่ได้อยู่ในพื้นที่ทำงานนี้',
     switching: 'กำลังเปลี่ยนพื้นที่ทำงาน...',
   },
+  channels: {
+    line: 'LINE',
+    messenger: 'Messenger',
+    web: 'เว็บไซต์',
+    test: 'ทดลอง',
+  },
   common: {
     loading: 'กำลังโหลด...',
     error: 'เกิดข้อผิดพลาด',
@@ -797,6 +803,12 @@ const en: typeof th = {
     noWorkspace: 'No workspace by that name',
     noWorkspaceHint: 'It may be spelled differently, or your account may not be in it.',
     switching: 'Switching workspace...',
+  },
+  channels: {
+    line: 'LINE',
+    messenger: 'Messenger',
+    web: 'Web',
+    test: 'Simulator',
   },
   common: {
     loading: 'Loading...',

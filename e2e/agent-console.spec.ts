@@ -517,3 +517,29 @@ test('a note cannot be written against a conversation id the workspace does not 
   )
   expect(response.status()).toBe(404)
 })
+
+/**
+ * Which channel a thread is on, shown on the row and in the header.
+ *
+ * One person reaching us on two channels has two conversations that are otherwise identical
+ * at a glance, which is the case this exists for.
+ */
+test('a conversation says which channel it arrived on', async ({ page, request }) => {
+  await apiSignIn(request)
+  await configureMockProvider(request)
+  const channelId = await findTestChannelId(request)
+  const customer = uniqueCustomer('channel')
+  await customerSays(request, channelId, customer, 'สวัสดีค่ะ')
+
+  await signIn(page)
+  const row = page.locator('[data-testid="conversation-row"]').filter({ hasText: customer })
+  await expect(row).toBeVisible({ timeout: 25_000 })
+
+  // The simulator channel, in whichever language the console is showing.
+  await expect(row.getByTestId('conversation-channel')).toHaveText(/Simulator|ทดลอง/)
+
+  await row.click()
+  await expect(page.getByTestId('conversation-channel-header')).toHaveText(/Simulator|ทดลอง/, {
+    timeout: 15_000,
+  })
+})

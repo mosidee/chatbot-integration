@@ -1,4 +1,5 @@
 import type {
+  ChannelType,
   ConversationMode,
   ConversationStatus,
   FeedbackRating,
@@ -91,6 +92,8 @@ export type ConversationListItem = {
   mode: ConversationMode
   status: ConversationStatus
   channelId: string
+  /** Which channel this thread is on, for the badge on the row. */
+  channel: { type: ChannelType; name: string }
   assigneeUserId: string | null
   tags: string[]
   handoffReason: HandoffReason | null
@@ -203,6 +206,7 @@ export type ConversationDetail = {
   } | null
   /** Whether the workspace has a verification link to offer, for the sidebar button. */
   canSendVerificationLink: boolean
+  channel: { type: ChannelType; name: string } | null
   messages: Message[]
   /** Whether older messages exist above the window that was returned. */
   hasMoreMessages: boolean

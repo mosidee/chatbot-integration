@@ -12,6 +12,8 @@ export const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@example.com'
 export const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'changeme12345'
 export const API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000'
 export const MOCK_URL = process.env.E2E_MOCK_URL ?? 'http://localhost:4010'
+/** The origin a browser would be on, which Better Auth checks against its trusted list. */
+export const WEB_URL = process.env.E2E_BASE_URL ?? 'http://localhost:5173'
 
 /**
  * Controls are found by test id, not by label text. The console ships in Thai and English
@@ -29,9 +31,16 @@ export async function signIn(page: Page): Promise<void> {
 /** An authenticated API context, for arranging state a test depends on but does not check. */
 export async function apiSignIn(request: APIRequestContext): Promise<void> {
   const response = await request.post(`${API_URL}/api/auth/sign-in/email`, {
+    // Better Auth refuses a sign-in with no Origin, which is what a request built by hand
+    // sends. A browser always supplies one, so this is restoring what it would have said
+    // rather than working around a check.
+    headers: { origin: WEB_URL },
     data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
   })
-  if (!response.ok()) throw new Error(`API sign-in failed: ${response.status()}`)
+  if (!response.ok()) {
+    // The body says which of the several reasons it was, and a bare status does not.
+    throw new Error(`API sign-in failed: ${response.status()} ${await response.text()}`)
+  }
 }
 
 /** Point the chat slot at the local mock so no test spends money or needs the network. */
