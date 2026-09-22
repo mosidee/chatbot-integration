@@ -182,6 +182,21 @@ const server = Bun.serve({
       return toolCallResponse(tenantTool, {})
     }
 
+    /**
+     * Asking for a person, which is what a browser test needs to reach the handoff path.
+     *
+     * Every other route to a handoff in this mock is a failure of some kind, and a test
+     * that asserts the customer was told somebody is coming should not have to break the
+     * provider to get there.
+     */
+    const canHandOff = (body.tools ?? []).some((t) => t.function?.name === 'handoff_to_human')
+    if (/talk to a human|ขอคุยกับเจ้าหน้าที่/i.test(question) && canHandOff && !alreadyCalled) {
+      return toolCallResponse('handoff_to_human', {
+        reason: 'customer_requested',
+        note: 'Asked for a person.',
+      })
+    }
+
     const canVerify = (body.tools ?? []).some(
       (t) => t.function?.name === 'request_identity_verification',
     )

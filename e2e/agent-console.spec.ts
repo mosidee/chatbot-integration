@@ -388,6 +388,29 @@ test('a visitor chats through the embedded widget and the AI answers', async ({
   await other.close()
 })
 
+test('a visitor who is handed to a person is told so', async ({ page, request }) => {
+  /**
+   * The rule the product is built on, from the only side that cannot check anywhere else.
+   *
+   * A handoff used to notify agents and say nothing to the visitor, so the thread simply
+   * stopped. There is no inbox for them to check and no email telling them a reply came:
+   * if the widget does not say it, nobody does.
+   */
+  const channelId = await findWebChannelId(request)
+  await page.goto(`${API_URL}/widget/index.html?channel=${channelId}`)
+
+  const input = page.locator('#text')
+  await expect(input).toBeEnabled({ timeout: 20_000 })
+  await input.fill('ขอคุยกับเจ้าหน้าที่ค่ะ')
+  await page.locator('#send').click()
+
+  // The product speaking, not the AI: the sentence that says somebody is coming.
+  await expect(page.locator('.bubble.system')).toBeVisible({ timeout: 30_000 })
+  // And a standing line saying why nobody is typing.
+  await expect(page.locator('#state')).toBeVisible()
+  await expect(page.locator('#state')).not.toBeEmpty()
+})
+
 test('the loader script is served for a host page to embed', async ({ request }) => {
   const response = await request.get(`${API_URL}/widget/loader.js`)
 

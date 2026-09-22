@@ -40,6 +40,11 @@ function readSettings(): Settings | null {
   }
 }
 
+const OPEN_KEY = 'chat-widget:open'
+
+/** Is this a phone? Asked live, because a tablet rotates and a desktop window resizes. */
+const phone = () => window.matchMedia('(max-width: 480px)').matches
+
 function mount(settings: Settings): void {
   const frameUrl = new URL('/widget/index.html', settings.origin)
   frameUrl.searchParams.set('channel', settings.channel)
@@ -52,50 +57,145 @@ function mount(settings: Settings): void {
   const frame = document.createElement('iframe')
   frame.title = settings.title
   frame.src = frameUrl.toString()
-  frame.style.cssText = [
-    'width:min(380px,calc(100vw - 32px))',
-    'height:min(560px,calc(100vh - 120px))',
-    'border:0',
-    'border-radius:16px',
-    'box-shadow:0 12px 40px rgba(0,0,0,.18)',
-    'background:#fff',
-    'display:none',
-  ].join(';')
+
+  /**
+   * A card on a desktop, the whole page on a phone.
+   *
+   * The card was fixed at 380x560 everywhere, which on a phone left a tall panel with the
+   * launcher wedged under it and the composer behind the on-screen keyboard: `100vh` does
+   * not shrink when the keyboard opens, but `100dvh` does.
+   */
+  const sizeFrame = () => {
+    frame.style.cssText = [
+      'border:0',
+      'display:' + (open ? 'block' : 'none'),
+      'background:#fff',
+      ...(phone()
+        ? ['position:fixed', 'inset:0', 'width:100%', 'height:100dvh', 'border-radius:0']
+        : [
+            'width:min(380px,calc(100vw - 32px))',
+            'height:min(560px,calc(100vh - 120px))',
+            'border-radius:16px',
+            'box-shadow:0 12px 40px rgba(0,0,0,.18)',
+          ]),
+    ].join(';')
+  }
 
   const launcher = document.createElement('button')
   launcher.type = 'button'
   launcher.setAttribute('aria-label', settings.title)
   launcher.textContent = '💬'
   launcher.style.cssText = [
+    /*
+     * `all:initial` first. Everything below is set explicitly, so a host page with a
+     * `button { padding: 12px 24px }` in its reset cannot reshape the launcher.
+     */
+    'all:initial',
     'margin-left:auto',
-    'display:block',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'position:relative',
     'width:56px',
     'height:56px',
     'margin-top:12px',
     'border:0',
     'border-radius:28px',
     'cursor:pointer',
+    'font-family:system-ui,sans-serif',
     'font-size:24px',
+    'line-height:1',
     'color:#fff',
     `background:${settings.colour}`,
     'box-shadow:0 6px 20px rgba(0,0,0,.2)',
   ].join(';')
 
-  let open = false
-  const toggle = () => {
-    open = !open
-    frame.style.display = open ? 'block' : 'none'
-    launcher.textContent = open ? '✕' : '💬'
-  }
-  launcher.addEventListener('click', toggle)
+  /** How many replies arrived while the chat was shut. */
+  const badge = document.createElement('span')
+  badge.style.cssText = [
+    'position:absolute',
+    'top:-2px',
+    'right:-2px',
+    'min-width:20px',
+    'height:20px',
+    'padding:0 5px',
+    'border-radius:10px',
+    'background:#e02424',
+    'color:#fff',
+    'font-family:system-ui,sans-serif',
+    'font-size:12px',
+    'font-weight:700',
+    'line-height:20px',
+    'text-align:center',
+    'display:none',
+  ].join(';')
+  launcher.append(badge)
 
-  // The chat app asks to be closed when a customer presses its own close button, so the
-  // launcher and the frame cannot disagree about whether it is open.
+  const setUnread = (count: number) => {
+    badge.textContent = count > 9 ? '9+' : String(count)
+    badge.style.display = count > 0 ? 'block' : 'none'
+  }
+
+  /**
+   * Whether the chat is open, remembered for this tab.
+   *
+   * A host application is several pages, and the loader runs again on each one. Without
+   * this, a customer who clicked through to the pricing page mid-conversation found the
+   * chat shut and had to go looking for it again.
+   */
+  let open = (() => {
+    try {
+      return sessionStorage.getItem(OPEN_KEY) === '1'
+    } catch {
+      return false
+    }
+  })()
+
+  const tellFrame = (type: string) => {
+    frame.contentWindow?.postMessage({ type }, settings.origin)
+  }
+
+  const render = () => {
+    sizeFrame()
+    launcher.textContent = open ? '✕' : '💬'
+    launcher.append(badge)
+    // Hidden behind a full-screen chat: on a phone the header's own close button is the
+    // way out, and a floating launcher on top of the composer is just in the way.
+    launcher.style.display = open && phone() ? 'none' : 'flex'
+    try {
+      sessionStorage.setItem(OPEN_KEY, open ? '1' : '0')
+    } catch {
+      // Blocked storage only costs the memory of being open, not the chat itself.
+    }
+  }
+
+  const setOpen = (next: boolean) => {
+    open = next
+    render()
+    if (open) {
+      setUnread(0)
+      tellFrame('chat-widget:open')
+    } else {
+      tellFrame('chat-widget:hidden')
+      // Where focus goes when a dialog closes: back to what opened it.
+      launcher.focus()
+    }
+  }
+
+  launcher.addEventListener('click', () => setOpen(!open))
+  window.addEventListener('resize', render)
+  frame.addEventListener('load', () => tellFrame(open ? 'chat-widget:open' : 'chat-widget:hidden'))
+
   window.addEventListener('message', (event) => {
     if (event.origin !== settings.origin) return
-    if ((event.data as { type?: string })?.type === 'chat-widget:close' && open) toggle()
+    const data = event.data as { type?: string; count?: number } | null
+    // The chat app asks to be closed when a customer presses its own close button or
+    // Escape, so the launcher and the frame cannot disagree about whether it is open.
+    if (data?.type === 'chat-widget:close' && open) setOpen(false)
+    if (data?.type === 'chat-widget:unread' && !open) setUnread(data.count ?? 0)
   })
 
+  render()
   host.append(frame, launcher)
   document.body.append(host)
 }
