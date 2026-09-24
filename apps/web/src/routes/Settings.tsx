@@ -87,14 +87,8 @@ export function Settings() {
   const workspace = useQuery({
     queryKey: ['workspace-settings'],
     queryFn: () => api.settings.workspace(),
-    /**
-     * The page's version moves with its own saves and with a conflict, and nothing else.
-     * Most fields below are uncontrolled and keep what was typed, so a background refetch
-     * would move the revision on without moving them, and the next save would overwrite a
-     * colleague's change the page never showed.
-     */
+    // Fewer half-refreshed pages: most fields below are uncontrolled and would not follow.
     refetchOnWindowFocus: false,
-    staleTime: Number.POSITIVE_INFINITY,
   })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
   // Providers, slots and channels answer admins only. They used to be asked for by every
@@ -126,14 +120,24 @@ export function Settings() {
    * colleague had got there first.
    */
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve())
+  /**
+   * The version this page's fields were filled from: set on first load, by the page's own
+   * saves and after a conflict. Never read from the query cache, which a background refetch
+   * moves on — the socket's reconnect refetches every query — while the uncontrolled fields
+   * keep what they showed, and a save would then overwrite a colleague's change unseen.
+   */
+  const baseRevision = useRef<string | null>(null)
+  if (baseRevision.current === null && workspace.data) {
+    baseRevision.current = workspace.data.revision
+  }
 
   const saveWorkspace = useMutation({
     mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) => {
       const run = saveQueue.current
         .catch(() => undefined)
         .then(async () => {
-          const current = queryClient.getQueryData<{ revision: string }>(['workspace-settings'])
-          const saved = await api.settings.updateWorkspace(patch, current?.revision)
+          const saved = await api.settings.updateWorkspace(patch, baseRevision.current ?? undefined)
+          baseRevision.current = saved.revision
           queryClient.setQueryData(['workspace-settings'], saved)
           return saved
         })
@@ -149,7 +153,10 @@ export function Settings() {
       workspaceSave.handlers.onError(error, variables, context)
       if (error instanceof ApiError && error.status === 409) {
         setConflict(true)
-        void workspace.refetch().then(() => setGeneration((value) => value + 1))
+        void workspace.refetch().then((result) => {
+          if (result.data) baseRevision.current = result.data.revision
+          setGeneration((value) => value + 1)
+        })
       }
     },
   })
