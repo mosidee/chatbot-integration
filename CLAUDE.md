@@ -587,3 +587,7 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>
   time, taking each revision from the previous response, and the settings query never
   refetches in the background: its fields are uncontrolled, so a refetch would move the
   revision on without moving what they show. Omitting `revision` still overwrites.
+- **Index swaps re-check under a lock.** `indexEntry` locks the entry and stores nothing if
+  its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
+  the source row, since two concurrent swaps could not see each other's new entry and left
+  the document indexed twice.

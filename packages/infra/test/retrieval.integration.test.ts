@@ -501,6 +501,79 @@ describe('the review, phase D', () => {
     expect(result.embeddingModel).toBe('another-embed-model')
   })
 
+  /** #20: an older index job that finishes last does not put the old answer back. */
+  test('an index of text that changed while it was embedding steps aside', async () => {
+    const fixture = await createKnowledgeFixture()
+    fixtures.push(fixture)
+    const inner = startMockOpenAI([{ kind: 'text', text: 'unused' }])
+    servers.push(inner)
+    let entryId = ''
+    let edited = false
+    // The edit lands while the first index job is waiting on its embeddings.
+    const proxy = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (!edited && url.pathname.endsWith('/embeddings')) {
+          edited = true
+          await fixture.db
+            .update(schema.knowledgeEntries)
+            .set({ body: 'The trial is thirty days.', updatedAt: new Date() })
+            .where(eq(schema.knowledgeEntries.id, entryId))
+        }
+        return fetch(`${inner.url}${url.pathname}`, {
+          method: request.method,
+          headers: request.headers,
+          body: await request.text(),
+        })
+      },
+    })
+    try {
+      entryId = await createEntry(fixture.db, {
+        workspaceId: fixture.workspaceId,
+        sourceId: fixture.sourceId,
+        language: 'en',
+        question: null,
+        body: 'The trial is fourteen days.',
+      })
+      const embedSlot = fixture.embedSlot(`http://localhost:${proxy.port}/v1`)
+
+      const stale = await indexEntry(fixture.db, entryId, embedSlot)
+      expect(stale.skipped).toBe(true)
+      const fresh = await indexEntry(fixture.db, entryId, embedSlot)
+      expect(fresh.skipped).toBe(false)
+
+      const chunks = await fixture.db
+        .select({ text: schema.knowledgeChunks.text })
+        .from(schema.knowledgeChunks)
+        .where(eq(schema.knowledgeChunks.entryId, entryId))
+      expect(chunks.map((c) => c.text).join(' ')).toContain('thirty')
+      expect(chunks.map((c) => c.text).join(' ')).not.toContain('fourteen')
+    } finally {
+      proxy.stop(true)
+    }
+  })
+
+  test('two reindexes of one file at once leave it indexed once', async () => {
+    const { fixture, embedSlot } = await setup()
+    const input = {
+      workspaceId: fixture.workspaceId,
+      sourceId: fixture.sourceId,
+      language: 'en' as const,
+      body: 'The price list, indexed twice at the same moment.',
+    }
+    await Promise.all([
+      replaceFileSource(fixture.db, input, embedSlot),
+      replaceFileSource(fixture.db, input, embedSlot),
+      replaceFileSource(fixture.db, input, embedSlot),
+    ])
+    const entries = await fixture.db
+      .select({ id: schema.knowledgeEntries.id })
+      .from(schema.knowledgeEntries)
+      .where(eq(schema.knowledgeEntries.sourceId, fixture.sourceId))
+    expect(entries).toHaveLength(1)
+  })
+
   /** #20: a reindex that cannot embed leaves the previous index answering. */
   test('a file reindex that fails keeps the old index', async () => {
     const { fixture, embedSlot } = await setup()
