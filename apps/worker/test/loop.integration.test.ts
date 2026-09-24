@@ -24,6 +24,7 @@ import {
   markSuggestionSent,
   recordVerifiedIdentity,
   relayOnce,
+  resolveIdleConversations,
   runRetention,
   sendVerificationLink,
   storeMessage,
@@ -31,12 +32,13 @@ import {
   upsertFeedback,
   waitingHumanJobId,
 } from '@ci/infra'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import {
   type MockServer,
   startMockOpenAI,
 } from '../../../packages/core/test/helpers/mock-openai-server'
 import { processAiTurn } from '../src/processors/ai-turn'
+import { processIdleResolve } from '../src/processors/idle-resolve'
 import { processInbound } from '../src/processors/inbound'
 import { processOutbound } from '../src/processors/outbound'
 import { processSuggestion } from '../src/processors/suggestion'
@@ -1176,6 +1178,264 @@ describe('the waiting-human fallback timer', () => {
     // The apology, not the handoff sentence: this customer has been waiting a while and
     // being told a second time that somebody is coming reads like nobody is.
     expect(ack?.text).toBe('ขออภัยที่ให้รอค่ะ')
+  })
+})
+
+/**
+ * Closing conversations the customer stopped replying to.
+ *
+ * The rule, in the order these tests take it: the AI is answering, our side spoke last,
+ * and the customer has been quiet for the workspace's hours. Everything else stays open,
+ * because in every other case somebody is still owed something.
+ */
+describe('closing a conversation the customer walked away from', () => {
+  const HOURS = 24
+  /** A moment comfortably past the cutoff, so nothing here has to wait a day. */
+  const later = () => new Date(Date.now() + (HOURS + 1) * 60 * 60 * 1000)
+
+  async function answeredByAi(f: Fixture) {
+    await customerSays(f, 'ราคาเท่าไหร่คะ')
+    await runQueuedWork(f)
+    return onlyConversation(f)
+  }
+
+  const statusOf = async (f: Fixture, id: string) => {
+    const rows = await f.runtime.db
+      .select({ status: schema.conversations.status })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, id))
+    return rows[0]?.status
+  }
+
+  test('an AI conversation the customer went quiet on is resolved, and remembered', async () => {
+    const f = await fixture({
+      providerBaseUrl: mock([{ kind: 'text', text: 'เริ่มต้นที่ 99 บาทค่ะ' }]).url,
+    })
+    const conversation = await answeredByAi(f)
+
+    const result = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+
+    expect(result.resolved).toBe(1)
+    expect(await statusOf(f, conversation.id)).toBe('resolved')
+
+    // Said in the thread, so nobody mistakes it for a conversation a person closed.
+    const notes = await f.runtime.db
+      .select({ body: schema.internalNotes.body })
+      .from(schema.internalNotes)
+      .where(eq(schema.internalNotes.conversationId, conversation.id))
+    expect(notes.some((note) => note.body.includes('Resolved automatically'))).toBe(true)
+
+    // The reason this exists at all: resolving is what asks for the summary.
+    await relay(f)
+    expect(await f.queues.summarize.getJob(`summary-${conversation.id}`)).toBeTruthy()
+  })
+
+  test('nothing is closed before the customer has been quiet long enough', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+
+    const result = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+    })
+    expect(result.resolved).toBe(0)
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('a customer who spoke last is the one waiting, and is left open', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    // The customer writes, and nothing has answered them yet.
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'inbound',
+      senderType: 'customer',
+      message: { kind: 'text', text: 'แล้วรายปีล่ะคะ' },
+      redaction: { cardNumbers: true, thaiNationalId: true },
+    })
+
+    await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('a conversation waiting for a person is never closed on its own', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    await humanAction(f, conversation.id, {
+      type: 'ai_handoff',
+      at: new Date(),
+      reason: 'customer_requested',
+      note: null,
+    })
+
+    await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('a conversation a colleague owns is theirs to close', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+
+    await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('one a colleague answered and handed back to the AI does qualify', async () => {
+    // The common hand-back: the colleague replies, returns it to the AI, and the AI says
+    // nothing more because nobody wrote. Their reply is the last message, and it counts.
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'outbound',
+      senderType: 'human',
+      senderUserId: f.userId,
+      message: { kind: 'text', text: 'เรียบร้อยแล้วครับ' },
+      redaction: { cardNumbers: true, thaiNationalId: true },
+    })
+    await humanAction(f, conversation.id, {
+      type: 'human_return_to_ai',
+      at: new Date(),
+      note: null,
+    })
+
+    const result = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(result.resolved).toBe(1)
+    expect(await statusOf(f, conversation.id)).toBe('resolved')
+  })
+
+  test('a customer told a person is coming is not closed because nobody came', async () => {
+    // The last thing they read is the acknowledgement. Handing back to the AI without a
+    // word leaves that promise standing, so the conversation stays open.
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'outbound',
+      senderType: 'system',
+      message: { kind: 'text', text: 'รอสักครู่นะคะ' },
+      redaction: { cardNumbers: true, thaiNationalId: true },
+    })
+
+    await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('another workspace is left alone', async () => {
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    const other = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+
+    await resolveIdleConversations(other.runtime, other.runtime.logger, {
+      workspaceId: other.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('switched off, the processor closes nothing', async () => {
+    const f = await fixture({
+      providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url,
+      settings: { autoResolveAfterHours: null },
+    })
+    const conversation = await answeredByAi(f)
+    // Backdate our reply, so the only thing standing between it and a close is the setting.
+    await f.runtime.db
+      .update(schema.messages)
+      // Shifted rather than set, so the order the messages were written in survives.
+      .set({ createdAt: sql`${schema.messages.createdAt} - interval '48 hours'` })
+      .where(eq(schema.messages.conversationId, conversation.id))
+
+    await processIdleResolve(
+      f.runtime,
+      createEffectPorts(f.runtime, f.runtime.logger),
+      f.runtime.logger,
+      {
+        workspaceId: f.workspaceId,
+      },
+    )
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+
+  test('switched on, the processor closes what qualifies', async () => {
+    const f = await fixture({
+      providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url,
+      settings: { autoResolveAfterHours: HOURS },
+    })
+    const conversation = await answeredByAi(f)
+    await f.runtime.db
+      .update(schema.messages)
+      // Shifted rather than set, so the order the messages were written in survives.
+      .set({ createdAt: sql`${schema.messages.createdAt} - interval '48 hours'` })
+      .where(eq(schema.messages.conversationId, conversation.id))
+
+    await processIdleResolve(
+      f.runtime,
+      createEffectPorts(f.runtime, f.runtime.logger),
+      f.runtime.logger,
+      {
+        workspaceId: f.workspaceId,
+      },
+    )
+    expect(await statusOf(f, conversation.id)).toBe('resolved')
+  })
+
+  test('a customer who writes again finds the conversation open again', async () => {
+    const f = await fixture({
+      providerBaseUrl: mock([
+        { kind: 'text', text: 'ok' },
+        { kind: 'text', text: 'ok' },
+      ]).url,
+    })
+    const conversation = await answeredByAi(f)
+    await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(await statusOf(f, conversation.id)).toBe('resolved')
+
+    await customerSays(f, 'กลับมาถามอีกครั้งค่ะ')
+    await runQueuedWork(f)
+    expect(await statusOf(f, conversation.id)).toBe('open')
   })
 })
 

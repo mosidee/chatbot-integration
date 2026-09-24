@@ -136,6 +136,14 @@ export type WorkspaceSettings = {
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
   /** Minutes a conversation may sit in `waiting_human` before the AI offers a fallback reply. */
   waitingHumanFallbackMinutes: number | null
+  /**
+   * Hours of silence from the customer after our side's last reply before an AI-owned
+   * conversation is resolved on its own. Null switches it off.
+   *
+   * Resolving is what folds a conversation into the customer's summary, so one the AI
+   * answered and the customer simply stopped replying to was otherwise never remembered.
+   */
+  autoResolveAfterHours: number | null
   /** What a customer reads the moment the AI stops answering and a person is fetched. */
   acknowledgementText: Record<Language, string>
   /**

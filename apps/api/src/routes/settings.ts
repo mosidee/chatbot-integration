@@ -244,6 +244,8 @@ export function settingsRoutes(ctx: ApiContext) {
             persona: z.string().max(8000).optional(),
             retentionDays: z.number().int().min(1).max(3650).optional(),
             waitingHumanFallbackMinutes: z.number().int().min(1).max(1440).nullable().optional(),
+            // Up to thirty days. Past that the conversation is not idle, it is history.
+            autoResolveAfterHours: z.number().int().min(1).max(720).nullable().optional(),
             redaction: z
               .object({ cardNumbers: z.boolean(), thaiNationalId: z.boolean() })
               .optional(),
