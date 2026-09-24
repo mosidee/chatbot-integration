@@ -652,6 +652,12 @@ function ConversationPane({
     onError: failed,
   })
 
+  const resend = useMutation({
+    mutationFn: (messageId: string) => api.conversations.resend(conversationId, messageId),
+    onSuccess: invalidate,
+    onError: failed,
+  })
+
   const markReviewed = useMutation({
     mutationFn: () => api.conversations.markReviewed(conversationId),
     onSuccess: invalidate,
@@ -943,6 +949,12 @@ function ConversationPane({
                         ? () => setPromoting(item.message)
                         : undefined
                     }
+                    onResend={
+                      canWrite && item.message.status === 'failed'
+                        ? () => resend.mutate(item.message.id)
+                        : undefined
+                    }
+                    resending={resend.isPending && resend.variables === item.message.id}
                     feedback={{
                       mine: mineFor('message', item.message.id),
                       canWrite,
@@ -1196,10 +1208,15 @@ function attachmentsOf(
 function Bubble({
   message,
   onPromote,
+  onResend,
+  resending = false,
   feedback,
 }: {
   message: Message
   onPromote?: (() => void) | undefined
+  /** Offered on a message whose delivery failed for good, to somebody who may reply. */
+  onResend?: (() => void) | undefined
+  resending?: boolean
   /**
    * Rating lives on the bubble because that is where the answer is. The conversation id
    * never comes down here: the pane binds it into these callbacks, so a bubble cannot rate
@@ -1291,7 +1308,14 @@ function Bubble({
             </button>
           ) : null}
         </div>
-        {isCustomer ? null : <DeliveryProblem status={message.status} error={message.error} />}
+        {isCustomer ? null : (
+          <DeliveryProblem
+            status={message.status}
+            error={message.error}
+            onResend={onResend}
+            resending={resending}
+          />
+        )}
         {/* Below the footer rather than in it: the reason panel needs the bubble's width. */}
         {isAi && feedback ? (
           <div className="mt-1">

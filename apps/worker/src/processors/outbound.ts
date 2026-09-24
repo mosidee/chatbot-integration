@@ -1,7 +1,7 @@
 import { splitText, UncertainDeliveryError } from '@ci/channels'
 import { aiMaySend, type EffectPorts, type Logger } from '@ci/core'
 import { schema } from '@ci/db'
-import type { OutboundJob, Runtime } from '@ci/infra'
+import type { JobMeta, OutboundJob, Runtime } from '@ci/infra'
 import { customerLanguage, loadChannel, withMediaLinks, workspaceIsWorkable } from '@ci/infra'
 import type { NormalizedMessage } from '@ci/shared'
 import { and, eq, sql } from 'drizzle-orm'
@@ -18,6 +18,7 @@ export async function processOutbound(
   _ports: EffectPorts,
   logger: Logger,
   job: OutboundJob,
+  meta?: JobMeta,
 ): Promise<void> {
   const { db, env, publisher } = runtime
 
@@ -253,9 +254,15 @@ export async function processOutbound(
     const reason = error instanceof Error ? error.message : String(error)
     // Possibly delivered: recorded for a person to judge, and deliberately not retried.
     const uncertain = error instanceof UncertainDeliveryError
+    /**
+     * `failed` means nothing will try again, which is what lets a person resend it without
+     * racing an automatic retry. Until the last attempt it stays `queued`, with the reason
+     * recorded so the console can say why it is taking a while.
+     */
+    const final = meta?.finalAttempt ?? true
     await db
       .update(schema.messages)
-      .set({ status: uncertain ? 'uncertain' : 'failed', error: reason })
+      .set({ status: uncertain ? 'uncertain' : final ? 'failed' : 'queued', error: reason })
       .where(eq(schema.messages.id, message.id))
 
     await announce()

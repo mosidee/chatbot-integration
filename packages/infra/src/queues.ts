@@ -34,6 +34,11 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
  */
 export type JobMeta = {
   jobId: string
+  /**
+   * Whether BullMQ will give up if this attempt throws. Absent where a caller runs a
+   * processor directly, which is one attempt and therefore the last.
+   */
+  finalAttempt?: boolean
 }
 
 export type InboundJob = {

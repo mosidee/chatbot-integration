@@ -555,6 +555,9 @@ export const api = {
     send: (id: string, message: NormalizedMessage, suggestionId?: string) =>
       post<{ messageId: string }>(`/v1/conversations/${id}/messages`, { message, suggestionId }),
     takeOver: (id: string) => post<{ mode: ConversationMode }>(`/v1/conversations/${id}/take-over`),
+    /** Only for a message whose delivery failed for good; anything else is a 409. */
+    resend: (id: string, messageId: string) =>
+      post<{ ok: true }>(`/v1/conversations/${id}/messages/${messageId}/resend`),
     returnToAi: (id: string, note?: string) =>
       post<{ mode: ConversationMode }>(`/v1/conversations/${id}/return-to-ai`, { note }),
     setMode: (id: string, mode: ConversationMode) =>
