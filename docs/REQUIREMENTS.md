@@ -1,6 +1,6 @@
 # chatbot-integration — Requirements and Feature List
 
-Status: draft v0.1, shaped 2026-09-20. Edit freely; this is the living source of truth for scope.
+Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass. Edit freely; this is the source of truth for scope.
 
 ## 1. Purpose
 
@@ -37,6 +37,8 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 23 | Adding a person | An admin issues a **single-use link** and passes it on themselves. Only its hash is stored, it expires, and the same mechanism issues a password reset. Accounts are created by a second auth instance the public API never mounts | There is no mail transport here, and adding one — provider, domain, deliverability, queue — before the first colleague can be invited is the wrong order. The security property is identical either way: the link is the credential, works once, and expires. Keeping sign-up disabled on the mounted instance is what keeps the product invite-only |
 | 24 | Tenant lifecycle | A workspace has a **status**: `active`, `suspended` or `deleting`. Suspended locks members out, drops queued work and acknowledges webhooks without acting; deleting is set before the erasure job runs and is not reversible. Deleting is confirmed by typing the slug | A suspension has to be reversible and cheap, and must not cost the operator their webhook registration: LINE and Meta disable an endpoint that keeps failing, so a suspended tenant answers 200 and discards. Setting the status before the erasure is what stops new rows arriving while the job collects what to delete |
 | 25 | Asking for work | Work is promised as a row in **`outbox`**, written in the transaction that made it necessary, and a relay in the worker moves it to BullMQ. Nothing else touches a queue: `Runtime` carries none | Committing rows and then enqueueing is two systems with no transaction between them, and the gap lost work in four separate places — a customer's message stored but never answered, an AI reply written twice, a tenant stuck mid-deletion. The writer choosing the job id makes relaying and consuming both safe to repeat. See ADR 0006 |
+| 26 | The customer is told | A handoff always sends the customer a **holding message**, in the language of their last message; the waiting-human timer sends a **second, different** one. Both texts are the workspace's own, editable per language | "The AI never goes silent" was enforced from the inside: a turn ended in a reply or a handoff. A handoff told agents and said nothing to the person who asked, so from their side the thread simply stopped. Repeating one sentence minutes apart reads like a machine that has lost its place |
+| 27 | Closing quiet conversations | A conversation **closes itself** after the customer has been quiet for `autoResolveAfterHours` (default 24, off when empty) — only when the AI is answering and our side spoke last. A sweep every 15 minutes, not a timer per conversation | Resolving is what folds a conversation into the customer's summary, so one the customer walked away from was never remembered. Waiting and colleague-owned conversations are owed somebody's reply and are never closed. A sweep reads the truth each time; per-conversation timers would need cancelling on every reply, and a missed cancel closes a live conversation |
 
 Pilot success metrics: share of conversations fully handled by AI with no negative rating and no repeat question within 24 h; median first-response time.
 
@@ -59,9 +61,11 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 ### 3.2 Conversation and handoff
 - [v1] Modes `ai` / `ai_supervised` / `human` / `waiting_human`, defaults per workspace and per channel
 - [v1] AI→human handoff: the `handoff_to_human` tool, with the model choosing the reason from a fixed list. Media the AI cannot read hands off without a turn. (A confidence threshold, a sentiment check and keyword/intent rules were planned and not built; the model's own judgement has covered the pilot)
-- [v1] Handoff reason posted as internal note; acknowledgement message to customer (configurable text, business hours aware)
+- [v1] Handoff reason posted as internal note
+- [UX] The customer is told on every handoff, including media the AI cannot read: `acknowledgementText`, in the language of their last message (`detectLanguage`), editable per language in Settings → General. (`businessHours` is stored and nothing reads it)
 - [v1] One-click take over; one-click return to AI with optional instruction note the AI reads
-- [v1] `waiting_human` queue; optional fallback to AI after N minutes outside business hours
+- [v1] `waiting_human` queue. After `waitingHumanFallbackMinutes` the customer gets a second, apologetic holding message (`stillWaitingText`) and agents are nudged; the conversation is not handed back to the AI
+- [UX] Conversations close on their own after `autoResolveAfterHours` (default 24, empty = off) when open, the AI is answering, our side spoke last and the customer has been quiet since; the close runs the summary like a manual resolve, leaves an internal note, and a new customer message reopens it
 - [v1] Assignment to agent; status open / resolved; tags. (`snoozed` exists in the enum and nothing sets it)
 - [next] Debounce AI turns so a burst of customer messages produces one considered reply
   rather than one per message. Needs care: a deterministic job id alone would drop a message
@@ -77,6 +81,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [later] Structured output for quick replies / buttons, translated per channel. (Was [v1]; structured output is used by the summariser only)
 - [v1] Image understanding when the assigned model supports vision
 - [v1] Language matching (Thai/English), workspace default language
+- [UX] Replies are plain text: a format rule in the prompt, and `toPlainText` converting any markdown that arrives anyway. `bun run backfill:plain-text` converts older stored replies
 - [v1] Full trace per AI turn: prompt, chunks + scores, tool calls, model, tokens, latency, cost
 - [v1] Redaction of card numbers and Thai ID numbers before storage and model calls
 - [M5] Tool **sources** behind one registry interface, so the agent loop does not know where a tool came from
@@ -101,15 +106,15 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [later] Website crawl with refresh schedule; OCR for Thai scanned PDFs; graph RAG if FAQ linking demands it
 
 ### 3.5 Customers and memory
-- [v1] `channel_identities` → `customers`; profile, avatar, custom fields (phone, order IDs, salon-saas account ID)
+- [v1] `channel_identities` → `customers`; profile, avatar, identifier fields limited to phone, email, order_id, account_id and company; what the summariser observes goes to a separate `customers.notes` (ADR 0007)
 - [v1] Extraction of phone / order ID from messages; merge suggestions; human accept/reject; merge repoints identities
-- [v1] Rolling per-customer summary and facts (background job), shown to humans and injected into prompts
+- [v1] Rolling per-customer summary (background job), with extracted facts written to `customers.notes`, shown to humans and injected into prompts
 - [v1] Embedded past conversations for semantic recall tool
 - [v1] Retention policy per workspace (default 2 years); delete-customer job erases messages, media, embeddings, summaries
 - [v1] Provider audit: which provider received which message
 
 ### 3.6 Agent GUI
-- [v1] Inbox list: filters by mode/channel/assignee/tags/status, unread counts, real-time via WebSocket over Redis pub/sub
+- [v1] Inbox list: filters by mode/channel/assignee/tags/status, open and waiting counts as badges on the Inbox from every page (`/v1/conversations/counts`), real-time via WebSocket over Redis pub/sub
 - [M6] A customer has an **account owner**, set from the conversation sidebar, which outlives every conversation they start and is inherited by the next one nobody has claimed
 - [M6] The queue is ordered by that owner first — yours, then unclaimed, then everybody else's — and by longest wait inside each group
 - [v1] Conversation view: channel-specific rendering, internal notes, canned responses with shortcuts
@@ -119,6 +124,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [v1] Knowledge management screens
 - [v1] Settings: channels, providers + task slots, mode defaults, business hours, retention, redaction, members, canned responses. (Handoff rules: no table, route or screen; see the handoff line in §3.2)
 - [v1] Minimal dashboard: volume per channel, AI vs human handled, handoff reasons, first-response time, cost/day
+- [UX] Dashboard leads with the median wait from a handoff to a colleague's first reply; reasons read as sentences; the waiting and review banners link to those inbox tabs
 - [M5] Settings: **Tools**, where an admin defines an endpoint of their own, tests it against the live rule set, and enables or disables it
 - [M5] Settings: **Proving who a customer is**, one switch per identity proof plus the verification link's URL, secret and lifetime
 - [M5] Conversation sidebar: whether this customer was proved, what the proof carried, and a button to send them a verification link
@@ -216,6 +222,8 @@ do not exist yet.
   wherever the worker runs, deletes conversations whose last message is older than the
   workspace's retention period, and the stored media with them. Age is measured from the last
   message, so a long conversation is kept until it goes quiet rather than from when it began.
+  (Caveat found later: an agent's reply does not update `last_message_at`, so the age runs
+  from the last customer or AI message.)
 - Erasure on request, which Thailand's PDPA gives a person a right to. An admin triggers it
   beside the conversation where the request arrived, and it removes every conversation,
   channel identity, summary and image belonging to that customer. The audit entry outlives
@@ -322,7 +330,7 @@ without anybody touching the database. Delivered:
   by a check that locks the whole admin set rather than the row being changed.
 - **A workspace status** — `active`, `suspended`, `deleting` — read on every authenticated
   request in the same query as the membership, and honoured by every webhook, the widget,
-  the identity link and all eight queued job types.
+  the identity link and every queued job type (nine now, with `idle_resolve`).
 - **Queued erasure** with a record written before anything is destroyed, so a retry knows
   which stored objects are left and a job with no record deletes nothing. It collects
   knowledge files as well as message attachments, which the existing media sweep never saw.
@@ -332,6 +340,32 @@ without anybody touching the database. Delivered:
 
 Not built, on purpose: billing, a self-service sign-up, email delivery of invitations, and
 restoring a deleted tenant.
+
+**The UX pass after M6 is built** (2026-09-22 to 24, deployed). A review of the console and
+the widget against the running product found one defect that reached customers and a long
+tail of interface problems. Delivered:
+
+- **The customer is told on a handoff** (decision 26), and the widget says who is answering:
+  a typing indicator while the AI works, a line when a person is on the way or with them,
+  and an honest message when the workspace is suspended or the network is down. A returning
+  visitor sees the end of their conversation rather than its first hundred messages.
+- **Plain-text replies**, with the 29 stored pilot replies converted.
+- **A console that works on a phone**: the AI panel is a sheet, the bottom bar holds five,
+  notes sit where they were written, days are separated.
+- **Destructive actions take two clicks**; every save says saved or failed in the card that
+  changed; Settings is four tabs (General, Channels, AI models, Integrations).
+- **The dashboard** leads with the wait for a person, in words rather than enum keys.
+- **Identifiers and notes are separate columns** (ADR 0007); migration 0010 moved 41
+  invented keys out of the two pilot customers' identifier lists.
+- **Inbox badges**, blue for open and red for waiting, on every page.
+- **Conversations close themselves** when the customer walks away (decision 27).
+
+Left from that plan, not built: the agent's name in the widget, a phone-width browser test
+for the widget, an explicit Save on the identity card, a remembered result for the model
+test button, a currency setting (USD is fixed), a note recorded with a suspension, refusing
+to delete a provider that task slots still use, and widget polish (greeting from the embed
+tag, drawn launcher icons, an open/close animation). Known bugs: an agent's reply does not
+update `last_message_at`, which skews inbox order; the widget's own messages are Thai only.
 
 ## 3.10 M5 design intent
 
@@ -462,4 +496,4 @@ workspace's own audit log cascades with the very deletion it would be the record
 - Who maintains knowledge day to day (assumed partner staff via GUI, admin-gated)
 - Exact 9router API behaviour (model listing, streaming) — verify at integration time
 - Whether humans should see unmasked card/ID numbers (currently: no)
-- Business hours and acknowledgement wording for the pilot
+- Business hours for the pilot (stored, and read by nothing yet). Acknowledgement wording is settled: each workspace edits its own, per language

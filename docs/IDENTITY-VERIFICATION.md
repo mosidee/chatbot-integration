@@ -6,7 +6,7 @@ strength of a name typed into a conversation. Before it can, somebody has to pro
 person is who they say.
 
 There are two ways to do that, and a workspace accepts each one separately in
-**Settings → Proving who a customer is**.
+**Settings → Integrations → Proving who a customer is**.
 
 | | Where it works | What you build |
 |---|---|---|
@@ -44,7 +44,7 @@ signed with a secret only you hold, is what makes the pair trustworthy.
 
 ## Configure it
 
-In **Settings → Proving who a customer is**:
+In **Settings → Integrations → Proving who a customer is**:
 
 - Switch on **One-time verification link**.
 - **Your verification page URL** — we append `?code=`, so query strings you add are kept.

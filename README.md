@@ -25,7 +25,7 @@ Milestones one to six are delivered, and one to four are running in a pilot on t
 | AI | Any OpenAI-compatible provider, per-task model slots with a fallback, vision, tool calling |
 | Knowledge | Hybrid retrieval over Postgres with pgvector and trigram search, Thai and English |
 | Memory | Rolling per-customer summaries, plus recall over that customer's past conversations |
-| Console | Inbox, takeover, suggested replies, knowledge management, settings, dashboard |
+| Console | Inbox with open and waiting badges, takeover, suggested replies, knowledge, tabbed settings, dashboard; usable on a phone |
 | Tools | Tenant-defined HTTP tools the AI can call, with restricted egress and proved identity |
 | Quality | Thumbs and reasons on AI replies, and a review queue of conversations nobody has read |
 | Privacy | Card and national-ID redaction before storage, retention sweeps, erasure on request |
@@ -41,6 +41,13 @@ Milestone six made the product multi-tenant in practice rather than only in the 
 admin adds colleagues themselves, with a link they pass on; a platform admin creates and
 deletes whole workspaces; and a workspace can be suspended, which locks its people out and
 quietly drops its queued work while keeping every row.
+
+A UX pass after milestone six made the product honest with the customer. A handoff now
+tells them a person is coming, in their own language, and apologises if nobody has picked up
+in time; the widget shows who is answering and says so when it cannot work. Replies are
+plain text, because every channel renders markdown as punctuation. A conversation the
+customer walked away from closes itself after a day, which is also what makes the AI
+remember it next time.
 
 Still to come: an MCP client, so a tenant can connect their own server and bring a whole
 tool set without us shipping anything. Billing, self-service sign-up and emailed invitations
@@ -92,8 +99,8 @@ stand-in that answers locally, so the whole loop can be driven without spending 
 bun run scripts/mock-provider.ts    # serves on http://localhost:4010/v1
 ```
 
-In **Settings → Providers**, add a provider with that base URL and any non-empty key, then
-point the `agent_chat` slot at the model `mock-model`. Open **Simulator**, send a message,
+In **Settings → AI models**, add a provider with that base URL and any non-empty key, then
+point the "Answering customers" (`agent_chat`) slot at the model `mock-model`. Open **Simulator**, send a message,
 and a reply should arrive within a second or two.
 
 To use a real provider instead, add its base URL and key in the same screen. Each task slot
