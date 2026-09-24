@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 /**
@@ -294,6 +295,11 @@ export function ConfirmButton({
   armedForMs?: number
 }) {
   const [armed, setArmed] = useState(false)
+  /**
+   * When it armed. A second click inside this is the other half of a double-click, not a
+   * decision, so it is ignored: a reflexive double-click used to erase a customer.
+   */
+  const armedAt = useRef(0)
 
   useEffect(() => {
     if (!armed) return
@@ -309,9 +315,11 @@ export function ConfirmButton({
       data-testid={testId}
       onClick={() => {
         if (!armed) {
+          armedAt.current = Date.now()
           setArmed(true)
           return
         }
+        if (Date.now() - armedAt.current < 400) return
         setArmed(false)
         onConfirm()
       }}
@@ -409,25 +417,121 @@ export function useSaveState(): {
   state: SaveState
   /** Hand these to `useMutation` to have it drive the line. */
   handlers: {
-    onMutate: () => void
-    onSuccess: () => void
-    onError: (error: unknown) => void
+    onMutate: () => { saveSeq: number }
+    onSuccess: (data?: unknown, variables?: unknown, context?: { saveSeq: number }) => void
+    onError: (error: unknown, variables?: unknown, context?: { saveSeq: number }) => void
   }
 } {
   const [state, setState] = useState<SaveState>({ status: 'idle' })
+  /**
+   * Which save is the latest. Two edits in quick succession are two requests, and the first
+   * finishing last used to overwrite "saved" with a stale answer — or "failed" with "saved".
+   * Only the newest request's outcome is shown.
+   */
+  const latest = useRef(0)
 
   return {
     state,
     handlers: {
-      onMutate: () => setState({ status: 'saving' }),
-      onSuccess: () => setState({ status: 'saved', at: Date.now() }),
-      onError: (error: unknown) =>
+      onMutate: () => {
+        latest.current += 1
+        setState({ status: 'saving' })
+        return { saveSeq: latest.current }
+      },
+      onSuccess: (_data, _variables, context) => {
+        if (context && context.saveSeq !== latest.current) return
+        setState({ status: 'saved', at: Date.now() })
+      },
+      onError: (error, _variables, context) => {
+        if (context && context.saveSeq !== latest.current) return
         setState({
           status: 'failed',
           message: error instanceof Error ? error.message : String(error),
-        }),
+        })
+      },
     },
   }
+}
+
+/**
+ * A modal that behaves like one.
+ *
+ * Focus moves into it, Tab stays inside it, Escape closes it, everything behind it is inert
+ * to both keyboard and screen reader, and focus goes back to whatever opened it. The
+ * lightbox had only the Escape; the trace and promote panels had none of it.
+ */
+export function Dialog({
+  label,
+  onClose,
+  children,
+  className,
+  testId,
+}: {
+  label: string
+  onClose: () => void
+  children: ReactNode
+  className?: string
+  testId?: string
+}) {
+  const panel = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    const root = document.getElementById('root')
+    if (root) root.inert = true
+
+    const focusables = () =>
+      Array.from(
+        panel.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => !element.hasAttribute('disabled'))
+    ;(focusables()[0] ?? panel.current)?.focus()
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        close.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (items.length === 0) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      if (root) root.inert = false
+      opener?.focus?.()
+    }
+  }, [])
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      data-testid={testId}
+      ref={panel}
+      tabIndex={-1}
+      className={cn('fixed inset-0 z-50 outline-none', className)}
+    >
+      {children}
+    </div>,
+    document.body,
+  )
 }
 
 export function SaveStatus({ state, className }: { state: SaveState; className?: string }) {

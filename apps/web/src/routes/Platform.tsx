@@ -2,7 +2,16 @@ import { slugify } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, ConfirmButton, CopyOnce, Input, Spinner, Textarea } from '../components/ui'
+import {
+  Button,
+  Card,
+  ConfirmButton,
+  CopyOnce,
+  ErrorNote,
+  Input,
+  Spinner,
+  Textarea,
+} from '../components/ui'
 import { ApiError, api, type PlatformAdmin, type Tenant } from '../lib/api'
 
 /**
@@ -44,10 +53,21 @@ export function Platform() {
         <p className="text-[13px] text-[var(--text-muted)]">{t('platform.hint')}</p>
       </div>
 
-      {error ? (
-        <Card className="border-red-300 text-sm text-red-800 dark:border-red-900 dark:text-red-200">
-          {error}
-        </Card>
+      {error ? <ErrorNote message={error} /> : null}
+
+      {tenants.isError || admins.isError ? (
+        <div className="space-y-2" data-testid="platform-load-failed">
+          <ErrorNote message={t('platform.loadFailed')} />
+          <Button
+            size="sm"
+            onClick={() => {
+              void tenants.refetch()
+              void admins.refetch()
+            }}
+          >
+            {t('common.retry')}
+          </Button>
+        </div>
       ) : null}
 
       {freshLink ? (

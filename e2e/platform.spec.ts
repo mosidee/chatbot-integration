@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { API_URL, apiSignIn, signIn, uniqueToken } from './helpers'
+import { API_URL, apiSignIn, confirmTwice, signIn, uniqueToken } from './helpers'
 
 /**
  * Running the platform: creating a tenant, suspending it, and deleting it for good.
@@ -37,8 +37,7 @@ test.describe('the platform page', () => {
 
     // Suspend: two clicks, because it takes a tenant offline.
     const suspend = page.getByTestId(`tenant-suspend-${slug}`)
-    await suspend.click()
-    await suspend.click()
+    await confirmTwice(suspend)
     await expect(page.getByTestId(`tenant-status-${slug}`)).toHaveText(/suspended|ระงับ/i, {
       timeout: 15_000,
     })

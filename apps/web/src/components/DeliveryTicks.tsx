@@ -13,7 +13,14 @@ import { cn } from './ui'
  * simply stays on one tick, which is honest: we know it was accepted and nothing more.
  */
 
-export type DeliveryStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed'
+export type DeliveryStatus =
+  | 'queued'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'failed'
+  | 'canceled'
+  | 'uncertain'
 
 function Tick({ className, double }: { className?: string; double?: boolean }) {
   return (
@@ -36,10 +43,27 @@ function Tick({ className, double }: { className?: string; double?: boolean }) {
 export function DeliveryTicks({ status }: { status: DeliveryStatus }) {
   const { t } = useTranslation()
 
-  if (status === 'failed') {
+  /**
+   * The states where something did not go as planned, named in words rather than a bare
+   * mark with a hover title nobody on a phone could read. The reason itself is printed on
+   * the bubble (see `DeliveryProblem`).
+   */
+  if (status === 'failed' || status === 'canceled' || status === 'uncertain') {
+    const label =
+      status === 'failed'
+        ? t('inbox.deliveryFailed')
+        : status === 'canceled'
+          ? t('inbox.deliveryCanceled')
+          : t('inbox.deliveryUncertain')
     return (
-      <span className="font-semibold text-red-200" title={t('inbox.deliveryFailed')}>
-        !
+      <span
+        role="img"
+        aria-label={label}
+        title={label}
+        data-testid={`delivery-${status}`}
+        className={cn('font-semibold', status === 'canceled' ? 'opacity-70' : 'text-red-200')}
+      >
+        {status === 'canceled' ? '⊘' : '!'}
       </span>
     )
   }
@@ -47,7 +71,13 @@ export function DeliveryTicks({ status }: { status: DeliveryStatus }) {
   // Queued means it has not left here yet. A tick would claim more than we know.
   if (status === 'queued') {
     return (
-      <span className="opacity-70" title={t('inbox.deliveryQueued')}>
+      <span
+        className="opacity-70"
+        role="img"
+        aria-label={t('inbox.deliveryQueued')}
+        title={t('inbox.deliveryQueued')}
+        data-testid="delivery-queued"
+      >
         <svg
           viewBox="0 0 12 12"
           className="h-3 w-3"
@@ -78,5 +108,35 @@ export function DeliveryTicks({ status }: { status: DeliveryStatus }) {
         className={status === 'read' ? 'text-sky-300' : undefined}
       />
     </span>
+  )
+}
+
+/**
+ * Why an outbound message did not simply arrive, printed under it.
+ *
+ * Failed: the platform refused, and the reason is its own. Withdrawn: a colleague took over
+ * before it went. Uncertain: the platform did not answer, so it may have arrived; it is not
+ * resent automatically, because a second copy is worse than a person checking.
+ */
+export function DeliveryProblem({
+  status,
+  error,
+}: {
+  status: DeliveryStatus
+  error: string | null | undefined
+}) {
+  const { t } = useTranslation()
+  if (status !== 'failed' && status !== 'canceled' && status !== 'uncertain') return null
+  const lead =
+    status === 'failed'
+      ? t('inbox.deliveryFailed')
+      : status === 'canceled'
+        ? t('inbox.deliveryCanceled')
+        : t('inbox.deliveryUncertainHint')
+  return (
+    <p className="mt-1 text-[11px] opacity-90" data-testid="delivery-problem">
+      {lead}
+      {error && status !== 'uncertain' ? `: ${error}` : ''}
+    </p>
   )
 }

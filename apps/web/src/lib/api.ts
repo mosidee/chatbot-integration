@@ -438,6 +438,8 @@ export type ConversationFilters = {
   /** Only what nobody has reviewed. A literal string: the server refuses anything else. */
   review?: 'true'
   limit?: number
+  /** Where a page starts, from the previous page's `nextOffset`. */
+  offset?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +534,7 @@ export const api = {
         if (value !== undefined && value !== '') params.set(key, String(value))
       }
       const qs = params.toString()
-      return get<{ conversations: ConversationListItem[] }>(
+      return get<{ conversations: ConversationListItem[]; nextOffset: number | null }>(
         `/v1/conversations${qs ? `?${qs}` : ''}`,
       )
     },
@@ -540,6 +542,11 @@ export const api = {
     detail: (id: string, messages?: number) =>
       get<ConversationDetail>(
         `/v1/conversations/${id}${messages === undefined ? '' : `?messages=${messages}`}`,
+      ),
+    /** The page of messages above `beforeId`, for scrolling back past the loaded window. */
+    older: (id: string, beforeId: string, count = 30) =>
+      get<ConversationDetail>(
+        `/v1/conversations/${id}?messages=${count}&before=${encodeURIComponent(beforeId)}`,
       ),
     send: (id: string, message: NormalizedMessage, suggestionId?: string) =>
       post<{ messageId: string }>(`/v1/conversations/${id}/messages`, { message, suggestionId }),

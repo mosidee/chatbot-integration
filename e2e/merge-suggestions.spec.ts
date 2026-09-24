@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import {
   apiSignIn,
   configureMockProvider,
+  confirmTwice,
   customerSays,
   findTestChannelId,
   signIn,
@@ -62,8 +63,7 @@ test('accepting joins the two, and the panel then shows both channels', async ({
   await expect(page.getByTestId('merge-suggestion')).toBeVisible({ timeout: 30_000 })
 
   // Twice on purpose: the first click arms, the second performs. It cannot be undone.
-  await page.getByTestId('merge-accept').click()
-  await page.getByTestId('merge-accept').click()
+  await confirmTwice(page.getByTestId('merge-accept'))
 
   await expect(page.getByTestId('merge-suggestion')).toHaveCount(0, { timeout: 30_000 })
   // One customer, known on two identities: the only visible proof the merge happened.

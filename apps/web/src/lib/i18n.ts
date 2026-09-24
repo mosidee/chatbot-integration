@@ -8,7 +8,12 @@ import { initReactI18next } from 'react-i18next'
  */
 
 const th = {
-  app: { name: 'ระบบแชท AI', signOut: 'ออกจากระบบ' },
+  app: {
+    name: 'ระบบแชท AI',
+    signOut: 'ออกจากระบบ',
+    reconnecting: 'กำลังเชื่อมต่อใหม่ ข้อมูลอาจไม่ล่าสุด',
+    disconnected: 'ขาดการเชื่อมต่อ',
+  },
   nav: {
     inbox: 'กล่องข้อความ',
     dashboard: 'ภาพรวม',
@@ -66,12 +71,17 @@ const th = {
     reviewQueueNow: 'บทสนทนาที่ AI ตอบเองและยังไม่มีใครตรวจ',
   },
   inbox: {
+    loadFailed: 'โหลดรายการสนทนาไม่สำเร็จ',
+    loadMore: 'โหลดเพิ่ม',
     image: 'รูปภาพ',
     deliveryQueued: 'รอส่ง',
     deliverySent: 'ส่งแล้ว',
     deliveryDelivered: 'ถึงผู้รับแล้ว',
     deliveryRead: 'อ่านแล้ว',
     deliveryFailed: 'ส่งไม่สำเร็จ',
+    deliveryCanceled: 'ไม่ได้ส่ง เพราะเจ้าหน้าที่รับเรื่องต่อแล้ว',
+    deliveryUncertain: 'ไม่แน่ใจว่าส่งถึงหรือไม่',
+    deliveryUncertainHint: 'แพลตฟอร์มไม่ตอบกลับ ข้อความอาจส่งถึงแล้ว ระบบจะไม่ส่งซ้ำเอง โปรดตรวจสอบก่อนส่งใหม่',
     openImage: 'เปิดในแท็บใหม่',
     title: 'กล่องข้อความ',
     empty: 'ยังไม่มีบทสนทนา',
@@ -87,6 +97,11 @@ const th = {
     waiting_human: 'รอเจ้าหน้าที่',
   },
   conversation: {
+    notAvailable: 'เปิดบทสนทนานี้ไม่ได้ อาจถูกลบหรือคุณไม่มีสิทธิ์',
+    loadFailed: 'โหลดบทสนทนาไม่สำเร็จ',
+    sendFailed: 'ส่งข้อความไม่สำเร็จ ข้อความยังอยู่ในช่องพิมพ์',
+    newMessages: 'มีข้อความใหม่',
+    readOnly: 'คุณดูได้อย่างเดียว การตอบลูกค้าต้องใช้สิทธิ์เจ้าหน้าที่',
     takeOver: 'รับช่วงต่อ',
     returnToAi: 'ส่งคืน AI',
     returnNote: 'ข้อความถึง AI (ไม่บังคับ)',
@@ -121,6 +136,7 @@ const th = {
     verificationLinkSent: 'ส่งลิงก์แล้ว',
     erase: 'ลบข้อมูลลูกค้ารายนี้',
     eraseConfirm: 'ยืนยันการลบถาวร',
+    eraseWho: 'ลบข้อมูลทั้งหมดของ {{name}}?',
     erasing: 'กำลังลบ...',
     eraseQueued: 'ส่งคำสั่งลบแล้ว ข้อมูลจะถูกลบทั้งหมด',
     eraseHint: 'ลบทุกบทสนทนา รูปภาพ และข้อมูลของลูกค้ารายนี้ ย้อนกลับไม่ได้',
@@ -188,6 +204,11 @@ const th = {
     },
   },
   knowledge: {
+    readOnly: 'คุณดูคลังความรู้ได้อย่างเดียว การเพิ่มหรือแก้ไขต้องใช้สิทธิ์เจ้าหน้าที่',
+    loadFailed: 'โหลดคลังความรู้ไม่สำเร็จ',
+    searchFailed: 'ค้นหาไม่สำเร็จ',
+    resultsFor: 'ผลการค้นหา "{{query}}"',
+    howItScored: 'ดูคะแนนการค้นหาแต่ละแบบ',
     title: 'คลังความรู้',
     sources: 'แหล่งความรู้',
     add: 'เพิ่มความรู้',
@@ -241,6 +262,8 @@ const th = {
     sentCount: 'ส่งแล้ว {{count}} ข้อความ',
   },
   settings: {
+    readOnly: 'การตั้งค่าเป็นของผู้ดูแลพื้นที่ทำงาน คุณดูได้อย่างเดียว',
+    loadFailed: 'โหลดการตั้งค่าไม่สำเร็จ',
     title: 'ตั้งค่า',
     tabs: {
       general: 'ทั่วไป',
@@ -389,6 +412,7 @@ const th = {
     identityLinkTtl: 'อายุลิงก์ (นาที)',
   },
   admin: {
+    loadFailed: 'โหลดรายชื่อสมาชิกไม่สำเร็จ',
     title: 'ผู้ใช้งานในพื้นที่ทำงานนี้',
     hint: 'เชิญเพื่อนร่วมงาน กำหนดสิทธิ์ และออกลิงก์ตั้งรหัสผ่านใหม่',
     members: 'สมาชิก',
@@ -412,6 +436,7 @@ const th = {
     noInvitations: 'ไม่มีคำเชิญที่รออยู่',
   },
   platform: {
+    loadFailed: 'โหลดข้อมูลพื้นที่ทำงานไม่สำเร็จ',
     title: 'พื้นที่ทำงานทั้งหมด',
     hint: 'สร้าง ระงับ หรือลบพื้นที่ทำงานของลูกค้าแต่ละราย',
     tenants: 'พื้นที่ทำงาน',
@@ -443,6 +468,7 @@ const th = {
     egressEdit: 'แก้ไข',
   },
   invite: {
+    unreachable: 'ติดต่อเซิร์ฟเวอร์ไม่ได้ ลิงก์อาจยังใช้ได้ ลองใหม่อีกครั้ง',
     joinTitle: 'เข้าร่วม',
     resetTitle: 'ตั้งรหัสผ่านใหม่',
     name: 'ชื่อของคุณ',
@@ -499,7 +525,12 @@ const th = {
 }
 
 const en: typeof th = {
-  app: { name: 'AI Chat Desk', signOut: 'Sign out' },
+  app: {
+    name: 'AI Chat Desk',
+    signOut: 'Sign out',
+    reconnecting: 'Reconnecting — this page may be behind',
+    disconnected: 'Disconnected',
+  },
   nav: {
     inbox: 'Inbox',
     dashboard: 'Overview',
@@ -557,12 +588,18 @@ const en: typeof th = {
     reviewQueueNow: 'conversations the AI handled that nobody has reviewed',
   },
   inbox: {
+    loadFailed: 'The conversations could not be loaded',
+    loadMore: 'Load more',
     image: 'Image',
     deliveryQueued: 'Waiting to send',
     deliverySent: 'Sent',
     deliveryDelivered: 'Delivered',
     deliveryRead: 'Read',
     deliveryFailed: 'Not delivered',
+    deliveryCanceled: 'Not sent: a colleague took over first',
+    deliveryUncertain: 'Delivery uncertain',
+    deliveryUncertainHint:
+      'The platform did not answer, so this may have arrived. It is not resent automatically; check before sending again',
     openImage: 'Open in new tab',
     title: 'Inbox',
     empty: 'No conversations yet',
@@ -578,6 +615,12 @@ const en: typeof th = {
     waiting_human: 'Waiting',
   },
   conversation: {
+    notAvailable:
+      'This conversation cannot be opened. It may have been deleted, or you may not have access.',
+    loadFailed: 'The conversation could not be loaded',
+    sendFailed: 'The reply was not sent; it is still in the box',
+    newMessages: 'New messages',
+    readOnly: 'You can read this conversation. Replying needs an agent role.',
     takeOver: 'Take over',
     returnToAi: 'Return to AI',
     returnNote: 'Note for the AI (optional)',
@@ -612,6 +655,7 @@ const en: typeof th = {
     verificationLinkSent: 'Link sent',
     erase: 'Delete this customer',
     eraseConfirm: 'Confirm permanent deletion',
+    eraseWho: 'Erase everything about {{name}}?',
     erasing: 'Deleting...',
     eraseQueued: 'Deletion queued. Everything of theirs will be removed.',
     eraseHint: 'Removes every conversation, image and detail for this customer. Cannot be undone.',
@@ -679,6 +723,11 @@ const en: typeof th = {
     },
   },
   knowledge: {
+    readOnly: 'You can read the knowledge base. Adding or editing needs an agent role.',
+    loadFailed: 'The knowledge base could not be loaded',
+    searchFailed: 'The search failed',
+    resultsFor: 'Results for "{{query}}"',
+    howItScored: 'How each half of the search scored',
     title: 'Knowledge',
     sources: 'Sources',
     add: 'Add knowledge',
@@ -732,6 +781,8 @@ const en: typeof th = {
     sentCount: 'Sent {{count}}',
   },
   settings: {
+    readOnly: 'Settings belong to workspace admins. You can read them here.',
+    loadFailed: 'The settings could not be loaded',
     title: 'Settings',
     tabs: {
       general: 'General',
@@ -898,6 +949,7 @@ const en: typeof th = {
     identityLinkTtl: 'Link lifetime (minutes)',
   },
   admin: {
+    loadFailed: 'The members could not be loaded',
     title: 'People in this workspace',
     hint: 'Invite colleagues, set what they may do, and issue a link to reset a password.',
     members: 'Members',
@@ -922,6 +974,7 @@ const en: typeof th = {
     noInvitations: 'No invitations waiting',
   },
   platform: {
+    loadFailed: 'The workspaces could not be loaded',
     title: 'All workspaces',
     hint: 'Create, suspend or delete a customer workspace.',
     tenants: 'Workspaces',
@@ -953,6 +1006,7 @@ const en: typeof th = {
     egressEdit: 'Edit',
   },
   invite: {
+    unreachable: 'The server did not answer. The link may still be good; try again.',
     joinTitle: 'Join',
     resetTitle: 'Set a new password',
     name: 'Your name',

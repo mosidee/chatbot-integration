@@ -5,12 +5,18 @@ import type {
   FeedbackTargetType,
   NormalizedMessage,
 } from '@ci/shared'
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CustomerAssignee } from '../components/CustomerAssignee'
-import { DeliveryTicks } from '../components/DeliveryTicks'
+import { DeliveryProblem, DeliveryTicks } from '../components/DeliveryTicks'
 import { EraseCustomer } from '../components/EraseCustomer'
 import { FeedbackControls } from '../components/FeedbackControls'
 import { Lightbox } from '../components/Lightbox'
@@ -19,6 +25,7 @@ import {
   Button,
   ChannelBadge,
   cn,
+  Dialog,
   dayLabel,
   EmptyState,
   ErrorNote,
@@ -34,12 +41,14 @@ import {
 } from '../components/ui'
 import {
   type AiTrace,
+  ApiError,
   api,
   type ConversationDetail,
   type Feedback,
   type Message,
   type UploadResult,
 } from '../lib/api'
+import { can } from '../lib/capabilities'
 import { useRealtime } from '../lib/ws'
 
 /**
@@ -86,20 +95,30 @@ export type InboxTab = (typeof INBOX_TABS)[number]
 const MESSAGE_PAGE = 30
 
 /**
- * The most the thread will ever show, matching the cap the endpoint enforces.
+ * What an agent was writing, per conversation, for as long as the page is open.
  *
- * Held here as well so the button disappears on reaching it rather than going dead: without
- * the clamp the window would keep growing past what the server honours, and pressing would
- * quietly do nothing. A conversation longer than this is a different feature, not a bigger
- * number, and one that only matters now that a thread is never closed for good.
+ * The pane is keyed by conversation, so switching threads remounted it and threw away the
+ * half-written reply and its attachment. Kept here instead, and put back when they return.
  */
-const MAX_MESSAGE_WINDOW = 500
+type Draft = { text: string; suggestionId: string | null; attachment: UploadResult | null }
+const drafts = new Map<string, Draft>()
+
+/** Close enough to the bottom to count as following the conversation. */
+const FOLLOW_THRESHOLD_PX = 120
 
 export function Inbox() {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const navigate = useNavigate()
+  /**
+   * The open conversation lives in the address, beside the tab.
+   *
+   * It was component state, so a reload, a shared link or Back lost the thread somebody was
+   * in the middle of. A conversation the person may not see is refused by the API and the
+   * pane says so; the id in the address grants nothing.
+   */
+  const selectedId =
+    useRouterState({ select: (state) => (state.location.search as { c?: string }).c }) ?? null
   /**
    * Which queue is showing, taken from the address.
    *
@@ -114,7 +133,10 @@ export function Inbox() {
   const tab: InboxTab = INBOX_TABS.includes(requested as InboxTab)
     ? (requested as InboxTab)
     : 'open'
-  const setTab = (next: InboxTab) => void navigate({ to: '/', search: { tab: next } })
+  const setTab = (next: InboxTab) =>
+    void navigate({ to: '/', search: { tab: next, ...(selectedId ? { c: selectedId } : {}) } })
+  const setSelectedId = (id: string | null) =>
+    void navigate({ to: '/', search: { tab, ...(id ? { c: id } : {}) } })
 
   // Waiting is open conversations only. Resolving does not change the mode, so without
   // this a conversation closed while it waited sat in the Waiting tab for good.
@@ -142,14 +164,23 @@ export function Inbox() {
     return members.data?.members.find((member) => member.userId === userId)?.name ?? null
   }
 
-  const conversations = useQuery({
+  /**
+   * The queue, a page at a time.
+   *
+   * It used to be the first fifty and nothing else: a busy day's fifty-first conversation
+   * was counted in the badge and could not be opened from anywhere.
+   */
+  const conversations = useInfiniteQuery({
     queryKey: ['conversations', statusFilter, modeFilter, reviewFilter],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       api.conversations.list({
         status: statusFilter,
         mode: modeFilter,
         ...(reviewFilter ? { review: 'true' as const } : {}),
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset ?? undefined,
     refetchInterval: 30_000,
   })
 
@@ -184,7 +215,15 @@ export function Inbox() {
    * then by how long each has been waiting, and only the database knows the first of those
    * — re-sorting a page of fifty here would quietly contradict it.
    */
-  const rows = conversations.data?.conversations ?? []
+  // Deduplicated by id: a conversation that moved up while the next page loaded would
+  // otherwise appear twice.
+  const rows = [
+    ...new Map(
+      (conversations.data?.pages ?? [])
+        .flatMap((page) => page.conversations)
+        .map((row) => [row.id, row] as const),
+    ).values(),
+  ]
 
   return (
     <div className="flex h-full">
@@ -210,6 +249,7 @@ export function Inbox() {
                 key={item.key}
                 type="button"
                 data-testid={`inbox-tab-${item.key}`}
+                aria-pressed={active}
                 onClick={() => setTab(item.key)}
                 className={cn(
                   'flex flex-1 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors',
@@ -236,6 +276,15 @@ export function Inbox() {
           {conversations.isLoading ? (
             <div className="p-4">
               <Spinner label={t('common.loading')} />
+            </div>
+          ) : conversations.isError && rows.length === 0 ? (
+            // A failed load is not an empty queue: saying "no conversations" when the
+            // request failed is how a waiting customer goes unseen.
+            <div className="space-y-2 p-4" data-testid="inbox-load-failed">
+              <ErrorNote message={t('inbox.loadFailed')} />
+              <Button size="sm" onClick={() => void conversations.refetch()}>
+                {t('common.retry')}
+              </Button>
             </div>
           ) : rows.length === 0 ? (
             <EmptyState title={t('inbox.empty')} />
@@ -294,6 +343,20 @@ export function Inbox() {
                   </button>
                 </li>
               ))}
+              {conversations.hasNextPage ? (
+                <li className="p-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="w-full"
+                    data-testid="load-more-conversations"
+                    disabled={conversations.isFetchingNextPage}
+                    onClick={() => void conversations.fetchNextPage()}
+                  >
+                    {conversations.isFetchingNextPage ? t('common.loading') : t('inbox.loadMore')}
+                  </Button>
+                </li>
+              ) : null}
             </ul>
           )}
         </div>
@@ -328,7 +391,8 @@ function ConversationPane({
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
-  const [draft, setDraft] = useState('')
+  const saved = drafts.get(conversationId)
+  const [draft, setDraftState] = useState(saved?.text ?? '')
   /**
    * The draft in the composer came from this suggestion, if it came from one.
    *
@@ -336,7 +400,9 @@ function ConversationPane({
    * suggestion it was. That pairing is the only honest measure of how good the drafts are:
    * it says whether the agent trusted one or rewrote it, without asking them.
    */
-  const [insertedSuggestionId, setInsertedSuggestionId] = useState<string | null>(null)
+  const [insertedSuggestionId, setInsertedSuggestionId] = useState<string | null>(
+    saved?.suggestionId ?? null,
+  )
   const [showSidebar, setShowSidebar] = useState(false)
   const [returning, setReturning] = useState(false)
   const [returnNote, setReturnNote] = useState('')
@@ -345,42 +411,65 @@ function ConversationPane({
   const threadRef = useRef<HTMLDivElement>(null)
 
   /**
-   * How much of the thread to ask for. Raised as somebody scrolls up.
+   * The thread is the newest page, kept live, plus older pages fetched by cursor as
+   * somebody scrolls up.
    *
-   * A window rather than the whole conversation: a customer coming back reopens their
-   * conversation now, so a thread can run for months, and the panel needs the last page of
-   * it rather than the first. Asking for a bigger window keeps the newest message at the
-   * end, so a reply arriving while somebody reads history cannot leave a hole in the middle.
+   * It used to widen one window and refetch the lot, capped at five hundred messages: the
+   * opening of a long conversation could not be reached at all. Older pages are fetched once
+   * each, by the id of the oldest message loaded, and never refetched.
    */
-  const [messageWindow, setMessageWindow] = useState(MESSAGE_PAGE)
+  const [older, setOlder] = useState<{ messages: Message[]; notes: ConversationDetail['notes'] }>({
+    messages: [],
+    notes: [],
+  })
+  const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null)
   /**
-   * Set while a larger window is in flight, so scrolling does not ask again on every pixel.
-   *
+   * Set while an older page is in flight, so scrolling does not ask again on every pixel.
    * Its own state rather than the query's `isFetching`, which is also true for the ordinary
-   * background refetch that happens whenever a message arrives: the button would flicker
-   * disabled under somebody trying to press it.
+   * background refetch whenever a message arrives.
    */
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [olderError, setOlderError] = useState<string | null>(null)
   const restoreScrollRef = useRef<number | null>(null)
 
-  // A different conversation starts at the bottom of its own thread.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: resetting is the point
-  useEffect(() => {
-    setMessageWindow(MESSAGE_PAGE)
-    setLoadingOlder(false)
-  }, [conversationId])
-
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
-  // Viewers see every opinion and hold none. The routes enforce this; here it is courtesy.
-  const canWrite = me.data?.role === 'admin' || me.data?.role === 'agent'
+  // Replying, taking over, rating: an agent's. The routes enforce it; this is so a viewer
+  // is not invited to press what will refuse them.
+  const canWrite = can(me.data, 'reply')
 
   const detail = useQuery({
-    queryKey: ['conversation', conversationId, messageWindow],
-    queryFn: () => api.conversations.detail(conversationId, messageWindow),
-    // Without this the thread empties while a larger window is fetched, which reads as the
-    // conversation vanishing under the person reading it.
+    queryKey: ['conversation', conversationId],
+    queryFn: () => api.conversations.detail(conversationId, MESSAGE_PAGE),
     placeholderData: keepPreviousData,
   })
+
+  /** What an agent says or picks is kept for when they come back to this conversation. */
+  const remember = (next: Partial<Draft>) => {
+    const current = drafts.get(conversationId) ?? { text: '', suggestionId: null, attachment: null }
+    const merged = { ...current, ...next }
+    if (!merged.text && !merged.attachment) drafts.delete(conversationId)
+    else drafts.set(conversationId, merged)
+  }
+  const setDraft = (next: string | ((current: string) => string)) =>
+    setDraftState((current) => {
+      const value = typeof next === 'function' ? next(current) : next
+      remember({ text: value })
+      return value
+    })
+
+  /** Somebody who is not already at the bottom is reading history; do not move them. */
+  const atBottom = useRef(true)
+  const [newBelow, setNewBelow] = useState(false)
+  const followNext = useRef(false)
+  const reducedMotion =
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const scrollToBottom = (instant = false) => {
+    bottomRef.current?.scrollIntoView({ behavior: instant || reducedMotion ? 'auto' : 'smooth' })
+    setNewBelow(false)
+  }
+  /** Where the thread was last scrolled to, so only a scroll upwards loads older pages. */
+  const lastScrollTop = useRef(0)
+  const opened = useRef(false)
 
   const canned = useQuery({
     queryKey: ['canned-responses'],
@@ -402,9 +491,22 @@ function ConversationPane({
    * somebody back to the bottom the moment they scrolled up to read.
    */
   const newestMessageId = detail.data?.messages.at(-1)?.id ?? null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the newest message only
   useEffect(() => {
     if (!newestMessageId) return
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Following only while they are at the bottom, or right after they sent something.
+    // Reading history while a reply arrives used to yank them back down mid-sentence.
+    if (!opened.current) {
+      // Opening a conversation lands at its end at once. Scrolling there smoothly from the
+      // top passed every older-page trigger on the way down and loaded the whole history.
+      opened.current = true
+      scrollToBottom(true)
+    } else if (atBottom.current || followNext.current) {
+      followNext.current = false
+      scrollToBottom()
+    } else {
+      setNewBelow(true)
+    }
   }, [newestMessageId])
 
   /**
@@ -413,24 +515,38 @@ function ConversationPane({
    * Prepending content moves everything down by however tall it is, so without this the
    * thread jumps and the message they were reading is somewhere off screen.
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the wider window lands
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when an older page lands
   useEffect(() => {
-    setLoadingOlder(false)
     const thread = threadRef.current
     const previousHeight = restoreScrollRef.current
     if (!thread || previousHeight === null) return
     restoreScrollRef.current = null
     thread.scrollTop = thread.scrollHeight - previousHeight
-  }, [detail.data?.messages.length])
+  }, [older.messages.length])
 
-  const canLoadOlder = Boolean(detail.data?.hasMoreMessages) && messageWindow < MAX_MESSAGE_WINDOW
+  const canLoadOlder = olderHasMore === null ? Boolean(detail.data?.hasMoreMessages) : olderHasMore
 
-  const loadOlder = () => {
+  const loadOlder = async () => {
     if (!canLoadOlder || loadingOlder) return
+    const oldestId = older.messages[0]?.id ?? detail.data?.messages[0]?.id
+    if (!oldestId) return
     const thread = threadRef.current
     if (thread) restoreScrollRef.current = thread.scrollHeight
     setLoadingOlder(true)
-    setMessageWindow((current) => Math.min(current + MESSAGE_PAGE, MAX_MESSAGE_WINDOW))
+    setOlderError(null)
+    try {
+      const page = await api.conversations.older(conversationId, oldestId, MESSAGE_PAGE)
+      setOlder((current) => ({
+        messages: [...page.messages, ...current.messages],
+        notes: [...page.notes, ...current.notes],
+      }))
+      setOlderHasMore(page.hasMoreMessages)
+    } catch (error) {
+      restoreScrollRef.current = null
+      setOlderError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoadingOlder(false)
+    }
   }
 
   const invalidate = () => {
@@ -447,7 +563,11 @@ function ConversationPane({
    * Uploaded as soon as it is chosen rather than on send, so the agent finds out it is too
    * large or the wrong kind while they are still writing, not after they press the button.
    */
-  const [attachment, setAttachment] = useState<UploadResult | null>(null)
+  const [attachment, setAttachmentState] = useState<UploadResult | null>(saved?.attachment ?? null)
+  const setAttachment = (next: UploadResult | null) => {
+    remember({ attachment: next })
+    setAttachmentState(next)
+  }
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -467,16 +587,48 @@ function ConversationPane({
       setAttachmentError(caught instanceof Error ? caught.message : String(caught)),
   })
 
+  /**
+   * What failed, said beside the thing that failed. Every one of these used to fail in
+   * silence: the button went back to normal and nothing had happened.
+   */
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const describe = (error: unknown) => (error instanceof Error ? error.message : String(error))
+  const failed = (error: unknown) => setActionError(describe(error))
+
   const send = useMutation({
-    mutationFn: ({ text, suggestionId }: { text: string; suggestionId?: string }) =>
-      api.conversations.send(conversationId, messageToSend(text, attachment), suggestionId),
-    onSuccess: () => {
-      setDraft('')
+    mutationFn: ({
+      text,
+      suggestionId,
+      withAttachment,
+    }: {
+      text: string
+      suggestionId?: string
+      withAttachment: UploadResult | null
+    }) => api.conversations.send(conversationId, messageToSend(text, withAttachment), suggestionId),
+    onMutate: () => setSendError(null),
+    onSuccess: (_result, sent) => {
+      /**
+       * Clear only what was sent. The composer stays editable while a reply is in flight,
+       * and clearing unconditionally threw away whatever was typed after pressing Send.
+       */
+      setDraft((current) => (current.trim() === sent.text ? '' : current))
       setInsertedSuggestionId(null)
-      clearAttachment()
+      if (sent.withAttachment && attachment?.storageKey === sent.withAttachment.storageKey) {
+        clearAttachment()
+      }
+      followNext.current = true
       invalidate()
     },
+    onError: (error) => setSendError(describe(error)),
   })
+
+  /** Button, Enter and "insert and send" all come through here, so all three are guarded. */
+  const submit = (text: string, suggestionId?: string) => {
+    if (send.isPending || upload.isPending) return
+    if (!text && !attachment) return
+    send.mutate({ text, withAttachment: attachment, ...(suggestionId ? { suggestionId } : {}) })
+  }
 
   /** Something to send: either of a note and a file is enough on its own. */
   const canSend = Boolean(draft.trim() || attachment)
@@ -490,33 +642,47 @@ function ConversationPane({
       note?: string | null
     }) => api.conversations.giveFeedback(conversationId, input),
     onSuccess: invalidate,
+    onError: failed,
   })
 
   const unrate = useMutation({
     mutationFn: (feedbackId: string) =>
       api.conversations.removeFeedback(conversationId, feedbackId),
     onSuccess: invalidate,
+    onError: failed,
   })
 
   const markReviewed = useMutation({
     mutationFn: () => api.conversations.markReviewed(conversationId),
     onSuccess: invalidate,
+    onError: failed,
   })
 
   const takeOver = useMutation({
     mutationFn: () => api.conversations.takeOver(conversationId),
+    onMutate: () => setActionError(null),
     onSuccess: invalidate,
+    onError: failed,
   })
 
   const returnToAi = useMutation({
     mutationFn: (note: string) => api.conversations.returnToAi(conversationId, note || undefined),
-    onSuccess: invalidate,
+    onMutate: () => setActionError(null),
+    // The note is kept until the hand-back succeeds; a failure used to lose it.
+    onSuccess: () => {
+      setReturnNote('')
+      setReturning(false)
+      invalidate()
+    },
+    onError: failed,
   })
 
   const setStatus = useMutation({
     mutationFn: (status: 'open' | 'resolved') =>
       api.conversations.setStatus(conversationId, status),
+    onMutate: () => setActionError(null),
     onSuccess: invalidate,
+    onError: failed,
   })
 
   /** This person's own opinion of one thing, out of everybody's. */
@@ -539,11 +705,43 @@ function ConversationPane({
   }
 
   const data = detail.data
-  if (!data) return <EmptyState title={t('common.error')} />
+  if (!data) {
+    // Not found, not allowed, or the request failed: said as such, with a way to try again.
+    return (
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-2 p-6"
+        data-testid="conversation-load-failed"
+      >
+        <ErrorNote
+          message={
+            detail.error instanceof ApiError &&
+            (detail.error.status === 404 || detail.error.status === 403)
+              ? t('conversation.notAvailable')
+              : t('conversation.loadFailed')
+          }
+        />
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => void detail.refetch()}>
+            {t('common.retry')}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onBack}>
+            {t('conversation.backToList')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   const mode = data.conversation.mode
   const isHumanOwned = mode === 'human'
-  const threadItems = buildThread(data)
+  const liveIds = new Set(data.messages.map((message) => message.id))
+  const threadItems = buildThread({
+    messages: [...older.messages.filter((message) => !liveIds.has(message.id)), ...data.messages],
+    notes: [
+      ...new Map([...older.notes, ...data.notes].map((note) => [note.id, note] as const)).values(),
+    ],
+    hasMoreMessages: canLoadOlder,
+  })
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -581,7 +779,7 @@ function ConversationPane({
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
-            {isHumanOwned ? (
+            {!canWrite ? null : isHumanOwned ? (
               <Button
                 size="sm"
                 data-testid="return-to-ai"
@@ -594,22 +792,27 @@ function ConversationPane({
                 size="sm"
                 data-testid="take-over"
                 variant="primary"
+                disabled={takeOver.isPending}
                 onClick={() => takeOver.mutate()}
               >
                 {t('conversation.takeOver')}
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                setStatus.mutate(data.conversation.status === 'resolved' ? 'open' : 'resolved')
-              }
-            >
-              {data.conversation.status === 'resolved'
-                ? t('conversation.reopen')
-                : t('conversation.resolve')}
-            </Button>
+            {canWrite ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="toggle-status"
+                disabled={setStatus.isPending}
+                onClick={() =>
+                  setStatus.mutate(data.conversation.status === 'resolved' ? 'open' : 'resolved')
+                }
+              >
+                {data.conversation.status === 'resolved'
+                  ? t('conversation.reopen')
+                  : t('conversation.resolve')}
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="ghost"
@@ -623,6 +826,15 @@ function ConversationPane({
             </Button>
           </div>
         </header>
+
+        {actionError ? (
+          <div
+            className="shrink-0 border-b border-[var(--border)] px-3 py-2"
+            data-testid="conversation-action-error"
+          >
+            <ErrorNote message={actionError} />
+          </div>
+        ) : null}
 
         {returning ? (
           /**
@@ -647,11 +859,7 @@ function ConversationPane({
                 variant="primary"
                 data-testid="return-to-ai-confirm"
                 disabled={returnToAi.isPending}
-                onClick={() => {
-                  returnToAi.mutate(returnNote.trim())
-                  setReturnNote('')
-                  setReturning(false)
-                }}
+                onClick={() => returnToAi.mutate(returnNote.trim())}
               >
                 {t('conversation.returnToAi')}
               </Button>
@@ -667,11 +875,33 @@ function ConversationPane({
           className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3"
           data-testid="message-thread"
           onScroll={(event) => {
+            const thread = event.currentTarget
+            atBottom.current =
+              thread.scrollHeight - thread.scrollTop - thread.clientHeight < FOLLOW_THRESHOLD_PX
+            if (atBottom.current) setNewBelow(false)
+            const goingUp = thread.scrollTop < lastScrollTop.current
+            lastScrollTop.current = thread.scrollTop
             // Near the top rather than exactly at it: a thread that only loads at zero never
-            // loads at all on a trackpad that stops a pixel short.
-            if (event.currentTarget.scrollTop < 80) loadOlder()
+            // loads at all on a trackpad that stops a pixel short. Only on the way up, which
+            // is somebody reaching for history rather than the thread settling.
+            if (goingUp && thread.scrollTop < 80 && !olderError) void loadOlder()
           }}
         >
+          {olderError ? (
+            <div className="flex flex-col items-center gap-1 py-1">
+              <ErrorNote message={olderError} />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setOlderError(null)
+                  void loadOlder()
+                }}
+              >
+                {t('common.retry')}
+              </Button>
+            </div>
+          ) : null}
           {canLoadOlder ? (
             <div className="flex justify-center py-1">
               <Button
@@ -679,7 +909,7 @@ function ConversationPane({
                 variant="ghost"
                 data-testid="load-older-messages"
                 disabled={loadingOlder}
-                onClick={loadOlder}
+                onClick={() => void loadOlder()}
               >
                 {loadingOlder ? t('common.loading') : t('conversation.loadOlder')}
               </Button>
@@ -709,7 +939,7 @@ function ConversationPane({
                   <Bubble
                     message={item.message}
                     onPromote={
-                      item.message.direction === 'outbound' && item.message.text
+                      canWrite && item.message.direction === 'outbound' && item.message.text
                         ? () => setPromoting(item.message)
                         : undefined
                     }
@@ -737,9 +967,32 @@ function ConversationPane({
           <div ref={bottomRef} />
         </div>
 
+        {newBelow ? (
+          <div className="pointer-events-none relative">
+            <Button
+              size="sm"
+              variant="primary"
+              data-testid="new-messages"
+              className="pointer-events-auto absolute bottom-2 left-1/2 -translate-x-1/2 shadow"
+              onClick={() => scrollToBottom()}
+            >
+              {t('conversation.newMessages')}
+            </Button>
+          </div>
+        ) : null}
+
+        {!canWrite ? (
+          <p
+            className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] p-3 text-center text-[12px] text-[var(--text-muted)]"
+            data-testid="read-only-note"
+          >
+            {t('conversation.readOnly')}
+          </p>
+        ) : null}
         <footer
           className={cn(
             'shrink-0 border-t border-[var(--border)] bg-[var(--surface)] p-2',
+            canWrite ? '' : 'hidden',
             // The panel covers the thread below `lg`, and a Send button floating over
             // somebody's customer record is worse than no Send button at all.
             showSidebar ? 'hidden lg:block' : '',
@@ -771,6 +1024,11 @@ function ConversationPane({
               >
                 ✕
               </Button>
+            </div>
+          ) : null}
+          {sendError ? (
+            <div className="mb-2" data-testid="send-error">
+              <ErrorNote message={`${t('conversation.sendFailed')}: ${sendError}`} />
             </div>
           ) : null}
           {attachmentError ? (
@@ -805,6 +1063,7 @@ function ConversationPane({
             <Textarea
               rows={2}
               data-testid="composer"
+              aria-label={t('conversation.placeholder')}
               value={draft}
               placeholder={t('conversation.placeholder')}
               onChange={(e) => {
@@ -815,18 +1074,21 @@ function ConversationPane({
               }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' || e.shiftKey) return
+                // Enter that confirms a Thai or Japanese input method's candidate is not a
+                // send. It arrives as a keydown with `isComposing` set.
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return
                 e.preventDefault()
                 // Enter used to send whatever was typed even while a file was still
                 // uploading, so the note went and the attachment did not.
-                if (!canSend || send.isPending || upload.isPending) return
-                send.mutate({ text: draft.trim(), ...fromSuggestion() })
+                if (!canSend) return
+                submit(draft.trim(), fromSuggestion().suggestionId)
               }}
             />
             <Button
               variant="primary"
               data-testid="send"
               disabled={!canSend || send.isPending || upload.isPending}
-              onClick={() => send.mutate({ text: draft.trim(), ...fromSuggestion() })}
+              onClick={() => submit(draft.trim(), fromSuggestion().suggestionId)}
             >
               {t('conversation.send')}
             </Button>
@@ -849,10 +1111,14 @@ function ConversationPane({
         onInsert={(text, suggestionId) => {
           setDraft(text)
           setInsertedSuggestionId(suggestionId)
+          remember({ suggestionId })
         }}
-        onInsertAndSend={(text, suggestionId) => send.mutate({ text, suggestionId })}
+        onInsertAndSend={(text, suggestionId) => submit(text, suggestionId)}
         onDiscard={(suggestionId) => {
-          void api.conversations.discardSuggestion(conversationId, suggestionId).then(invalidate)
+          void api.conversations
+            .discardSuggestion(conversationId, suggestionId)
+            .then(invalidate)
+            .catch(failed)
         }}
         onRate={(suggestionId, rating, reason, note) =>
           rate.mutate({ targetType: 'suggestion', targetId: suggestionId, rating, reason, note })
@@ -879,7 +1145,11 @@ type ThreadItem =
   | { kind: 'message'; key: string; at: string; message: Message }
   | { kind: 'note'; key: string; at: string; note: ConversationDetail['notes'][number] }
 
-function buildThread(data: ConversationDetail): ThreadItem[] {
+function buildThread(data: {
+  messages: Message[]
+  notes: ConversationDetail['notes']
+  hasMoreMessages: boolean
+}): ThreadItem[] {
   const messages: ThreadItem[] = data.messages.map((message) => ({
     kind: 'message',
     key: `m-${message.id}`,
@@ -1021,6 +1291,7 @@ function Bubble({
             </button>
           ) : null}
         </div>
+        {isCustomer ? null : <DeliveryProblem status={message.status} error={message.error} />}
         {/* Below the footer rather than in it: the reason panel needs the bubble's width. */}
         {isAi && feedback ? (
           <div className="mt-1">
@@ -1262,7 +1533,11 @@ function AiSidebar({
         {detail.customer?.summary ? (
           <p className="mt-2 text-[13px] text-[var(--text-muted)]">{detail.customer.summary}</p>
         ) : null}
-        <EraseCustomer conversationId={detail.conversation.id} onErased={onErased} />
+        <EraseCustomer
+          conversationId={detail.conversation.id}
+          customerName={detail.customer?.displayName ?? t('common.customer')}
+          onErased={onErased}
+        />
       </section>
 
       {detail.customer ? (
@@ -1340,7 +1615,12 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
   }[]
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+    <Dialog
+      label={t('trace.title')}
+      onClose={onClose}
+      testId="trace-dialog"
+      className="flex items-end justify-center bg-black/40 p-4 sm:items-center"
+    >
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)]">
         <header className="flex items-center gap-2 border-b border-[var(--border)] p-3">
           <h2 className="text-sm font-semibold">{t('trace.title')}</h2>
@@ -1437,7 +1717,7 @@ function TraceDetail({ trace, onClose }: { trace: AiTrace; onClose: () => void }
           </TraceSection>
         </div>
       </div>
-    </div>
+    </Dialog>
   )
 }
 
@@ -1480,7 +1760,12 @@ function PromoteToKnowledge({ message, onClose }: { message: Message; onClose: (
   })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+    <Dialog
+      label={t('knowledge.saveAsKnowledge')}
+      onClose={onClose}
+      testId="promote-dialog"
+      className="flex items-end justify-center bg-black/40 p-4 sm:items-center"
+    >
       <div className="w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
         <h2 className="mb-1 text-sm font-semibold">{t('knowledge.saveAsKnowledge')}</h2>
         <p className="mb-3 text-[13px] text-[var(--text-muted)]">{t('knowledge.promoteHint')}</p>
@@ -1519,7 +1804,7 @@ function PromoteToKnowledge({ message, onClose }: { message: Message; onClose: (
           </div>
         </div>
       </div>
-    </div>
+    </Dialog>
   )
 }
 

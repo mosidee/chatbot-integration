@@ -2,7 +2,7 @@ import type { UserRoleName } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, ConfirmButton, CopyOnce, Input, Spinner } from '../components/ui'
+import { Button, Card, ConfirmButton, CopyOnce, ErrorNote, Input, Spinner } from '../components/ui'
 import { ApiError, api, type Member, type PendingInvitation } from '../lib/api'
 
 /**
@@ -41,10 +41,16 @@ export function Admin() {
         <p className="text-[13px] text-[var(--text-muted)]">{t('admin.hint')}</p>
       </div>
 
-      {error ? (
-        <Card className="border-red-300 text-sm text-red-800 dark:border-red-900 dark:text-red-200">
-          {error}
-        </Card>
+      {error ? <ErrorNote message={error} /> : null}
+
+      {/* An empty member list on a failed load reads as a workspace with nobody in it. */}
+      {people.isError ? (
+        <div className="space-y-2" data-testid="members-load-failed">
+          <ErrorNote message={t('admin.loadFailed')} />
+          <Button size="sm" onClick={() => void people.refetch()}>
+            {t('common.retry')}
+          </Button>
+        </div>
       ) : null}
 
       {freshLink ? (

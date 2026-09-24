@@ -61,10 +61,13 @@ test.describe('a long conversation', () => {
     expect(scrollTop).toBeGreaterThan(0)
     await expect(anchor).toBeVisible()
 
-    for (let press = 0; press < 8; press += 1) {
+    for (let press = 0; press < 12; press += 1) {
+      if ((await thread.getByText('ข้อความที่ 0', { exact: true }).count()) > 0) break
       const button = page.getByTestId('load-older-messages')
       if ((await button.count()) === 0) break
-      await button.click()
+      // Scrolling near the top also loads a page, so the button can go between counting it
+      // and pressing it; a missed press is simply the next round's.
+      await button.click({ timeout: 2000 }).catch(() => {})
       await page.waitForTimeout(400)
     }
 
