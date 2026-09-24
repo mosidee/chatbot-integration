@@ -1,4 +1,5 @@
 export * from './blob'
+export * from './blob-deletions'
 export * from './blob-fs'
 export * from './dashboard'
 export * from './effect-ports'

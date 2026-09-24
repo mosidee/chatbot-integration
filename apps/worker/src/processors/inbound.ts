@@ -122,6 +122,12 @@ export async function processInbound(
         messagingWindowHours: adapter.capabilities.messagingWindowHours,
       })
 
+      // Tie the raw event to the person, so erasing them takes it too.
+      await db
+        .update(schema.inboundEvents)
+        .set({ channelIdentityId: resolved.channelIdentityId })
+        .where(eq(schema.inboundEvents.id, eventRow.id))
+
       // A new identity has no name yet. Messenger's webhook carries only a page-scoped id,
       // so without this every conversation shows an opaque number in the inbox.
       if (resolved.isNew) {

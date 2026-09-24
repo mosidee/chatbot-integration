@@ -402,7 +402,14 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
       }
     }
 
-    await client.pushMessage({ to: externalId, messages })
+    try {
+      // The retry key makes a resend after a lost response safe: LINE delivers a key once.
+      await client.pushMessage({ to: externalId, messages }, context.retryKey)
+    } catch (error) {
+      // 409: this key was already accepted, i.e. an earlier attempt did deliver it.
+      if (context.retryKey && statusOf(error) === 409) return { platformMessageId: null }
+      throw error
+    }
     return { platformMessageId: null }
   },
 
@@ -460,4 +467,12 @@ function replyTokenOf(event: webhook.Event): string | null {
 function isReplyTokenError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /reply token|400/i.test(message)
+}
+
+/** The HTTP status on an error from the LINE SDK, when it carries one. */
+function statusOf(error: unknown): number | null {
+  const status =
+    (error as { status?: unknown; statusCode?: unknown } | null)?.status ??
+    (error as { statusCode?: unknown } | null)?.statusCode
+  return typeof status === 'number' ? status : null
 }

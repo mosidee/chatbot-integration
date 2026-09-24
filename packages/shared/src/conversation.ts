@@ -25,7 +25,15 @@ export type MessageDirection = z.infer<typeof messageDirectionSchema>
 export const senderTypeSchema = z.enum(['customer', 'ai', 'human', 'system'])
 export type SenderType = z.infer<typeof senderTypeSchema>
 
-export const messageStatusSchema = z.enum(['queued', 'sent', 'delivered', 'read', 'failed'])
+export const messageStatusSchema = z.enum([
+  'queued',
+  'sent',
+  'delivered',
+  'read',
+  'failed',
+  'canceled',
+  'uncertain',
+])
 export type MessageStatus = z.infer<typeof messageStatusSchema>
 
 /** Why the AI stopped answering. Shown to agents as an internal note and in the queue. */

@@ -4,6 +4,7 @@ import {
   createExternalRetriever,
   createPostgresRetriever,
   createSource,
+  deleteSource,
   loadAiConfig,
   loadWorkspaceSettings,
   resolveExternalRetrieval,
@@ -169,14 +170,8 @@ export function knowledgeRoutes(ctx: ApiContext) {
       .delete(
         '/sources/:id',
         async ({ workspaceId, params }) => {
-          await db
-            .delete(schema.knowledgeSources)
-            .where(
-              and(
-                eq(schema.knowledgeSources.id, params.id),
-                eq(schema.knowledgeSources.workspaceId, workspaceId),
-              ),
-            )
+          // The uploaded file goes too; see `deleteSource`.
+          await deleteSource(db, workspaceId, params.id, runtime.blob)
           return { ok: true }
         },
         { auth: 'agent', params: z.object({ id: z.string() }) },

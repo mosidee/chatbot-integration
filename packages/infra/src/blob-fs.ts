@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { BlobStore } from '@ci/core'
 
@@ -47,7 +47,22 @@ export function createFilesystemBlobStore(root: string, publicUrl: string): Blob
     },
 
     async remove(key: string) {
-      await rm(pathFor(key), { force: true })
+      const file = pathFor(key)
+      await rm(file, { force: true })
+      // The media type lives beside the object and goes with it.
+      await rm(`${file}.mime`, { force: true })
+    },
+
+    async list(prefix: string) {
+      const dir = pathFor(prefix.replace(/\/$/, ''))
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+      const found: { key: string; modifiedAt: Date }[] = []
+      for (const entry of entries) {
+        if (!entry.isFile() || entry.name.endsWith('.mime')) continue
+        const info = await stat(join(dir, entry.name))
+        found.push({ key: `${prefix}${entry.name}`, modifiedAt: info.mtime })
+      }
+      return found
     },
 
     urlFor(key: string) {

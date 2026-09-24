@@ -3108,7 +3108,7 @@ describe('work that is done twice', () => {
     })
 
     const after = (await messagesOf(f, conversation.id)).find((m) => m.id === reply.id)
-    expect(after?.status).toBe('failed')
+    expect(after?.status).toBe('canceled')
     expect(after?.error).toContain('took over')
   })
 
