@@ -75,6 +75,18 @@ S3_PUBLIC_URL=/api/v1/uploads
 
 The bucket needs no public access: media leaves through the API's signed links.
 
+LINE photos can be fetched through a Cloudflare Worker, which matters wherever the server's
+route to LINE's Tokyo servers is poor (ADR 0009). Deploy `workers/line-media` with
+`bunx wrangler deploy`, set its `PROXY_SECRET` with `bunx wrangler secret put PROXY_SECRET`,
+and give the server the same secret:
+
+```
+LINE_MEDIA_PROXY_URL=https://chatbot-line-media.<your-subdomain>.workers.dev
+LINE_MEDIA_PROXY_SECRET=<the same random secret, 32 characters or more>
+```
+
+Without them LINE media is fetched directly.
+
 Any other S3-compatible store works the same way. The bundled MinIO was removed on
 2026-09-24 after MinIO stopped publishing its images (ADR 0008).
 

@@ -599,3 +599,10 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>
   its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
   the source row, since two concurrent swaps could not see each other's new entry and left
   the document indexed twice.
+- **LINE media goes through a Cloudflare Worker** (`workers/line-media`, ADR 0009) when
+  `LINE_MEDIA_PROXY_URL`/`_SECRET` are set: the VPS's route to LINE's Tokyo content server
+  runs at ~14 KB/s (65 s for one photo; 1.2 s through the Worker). The Worker only builds
+  LINE's content URL from a numeric id and holds no R2 binding; the app falls back to the
+  direct fetch. **Do not put a total deadline on LINE downloads** — the endpoint is slow, not
+  stalled, and a 15-second limit failed every photo over ~200 KB. The Worker lives outside
+  the Bun workspaces and is deployed with `bunx wrangler deploy` from its own folder.
