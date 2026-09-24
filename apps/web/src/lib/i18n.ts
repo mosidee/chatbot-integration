@@ -216,6 +216,7 @@ const th = {
   knowledge: {
     readOnly: 'คุณดูคลังความรู้ได้อย่างเดียว การเพิ่มหรือแก้ไขต้องใช้สิทธิ์เจ้าหน้าที่',
     loadFailed: 'โหลดคลังความรู้ไม่สำเร็จ',
+    entryConflict: 'มีคนอื่นแก้ไขรายการนี้หลังจากที่คุณเปิด ช่องนี้แสดงฉบับล่าสุดแล้ว กรุณาแก้ไขอีกครั้ง',
     searchFailed: 'ค้นหาไม่สำเร็จ',
     resultsFor: 'ผลการค้นหา "{{query}}"',
     howItScored: 'ดูคะแนนการค้นหาแต่ละแบบ',
@@ -288,6 +289,7 @@ const th = {
   settings: {
     readOnly: 'การตั้งค่าเป็นของผู้ดูแลพื้นที่ทำงาน คุณดูได้อย่างเดียว',
     loadFailed: 'โหลดการตั้งค่าไม่สำเร็จ',
+    conflict: 'มีคนอื่นแก้ไขการตั้งค่านี้หลังจากที่คุณเปิดหน้า หน้านี้แสดงฉบับล่าสุดแล้ว กรุณาแก้ไขอีกครั้ง',
     title: 'ตั้งค่า',
     tabs: {
       general: 'ทั่วไป',
@@ -760,6 +762,8 @@ const en: typeof th = {
   knowledge: {
     readOnly: 'You can read the knowledge base. Adding or editing needs an agent role.',
     loadFailed: 'The knowledge base could not be loaded',
+    entryConflict:
+      'Somebody else changed this entry after you opened it. It now shows their version; make your change again.',
     searchFailed: 'The search failed',
     resultsFor: 'Results for "{{query}}"',
     howItScored: 'How each half of the search scored',
@@ -832,6 +836,8 @@ const en: typeof th = {
   settings: {
     readOnly: 'Settings belong to workspace admins. You can read them here.',
     loadFailed: 'The settings could not be loaded',
+    conflict:
+      'Somebody else changed these settings after you opened the page. It now shows their version; make your change again.',
     title: 'Settings',
     tabs: {
       general: 'General',

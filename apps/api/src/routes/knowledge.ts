@@ -197,7 +197,7 @@ export function knowledgeRoutes(ctx: ApiContext) {
 
       .patch(
         '/entries/:id',
-        async ({ workspaceId, params, body }) => {
+        async ({ workspaceId, params, body, status }) => {
           const patch: Partial<typeof schema.knowledgeEntries.$inferInsert> = {
             updatedAt: new Date(),
           }
@@ -208,27 +208,61 @@ export function knowledgeRoutes(ctx: ApiContext) {
           if (body.enabled !== undefined) patch.enabled = body.enabled
           if (body.language !== undefined) patch.language = body.language
 
-          const updated = await db
-            .update(schema.knowledgeEntries)
-            .set(patch)
-            .where(
-              and(
-                eq(schema.knowledgeEntries.id, params.id),
-                eq(schema.knowledgeEntries.workspaceId, workspaceId),
-              ),
-            )
-            .returning({ sourceId: schema.knowledgeEntries.sourceId })
+          /**
+           * Refused when the entry changed since the caller's editor loaded it, so two people
+           * editing one answer cannot silently discard each other's text. `updatedAt` is the
+           * revision, compared at millisecond precision under a row lock.
+           */
+          const outcome = await db.transaction(async (tx) => {
+            const [current] = await tx
+              .select({ updatedAt: schema.knowledgeEntries.updatedAt })
+              .from(schema.knowledgeEntries)
+              .where(
+                and(
+                  eq(schema.knowledgeEntries.id, params.id),
+                  eq(schema.knowledgeEntries.workspaceId, workspaceId),
+                ),
+              )
+              .for('update')
+            if (!current) return { kind: 'missing' as const }
+            if (
+              body.revision !== undefined &&
+              Date.parse(body.revision) !== current.updatedAt.getTime()
+            ) {
+              return { kind: 'conflict' as const }
+            }
+            const [updated] = await tx
+              .update(schema.knowledgeEntries)
+              .set(patch)
+              .where(
+                and(
+                  eq(schema.knowledgeEntries.id, params.id),
+                  eq(schema.knowledgeEntries.workspaceId, workspaceId),
+                ),
+              )
+              .returning({ sourceId: schema.knowledgeEntries.sourceId })
+            return { kind: 'saved' as const, sourceId: updated?.sourceId ?? null }
+          })
+
+          if (outcome.kind === 'missing') return status(404, { error: 'Entry not found' })
+          if (outcome.kind === 'conflict') {
+            return status(409, {
+              error: 'This entry was changed by somebody else since it was opened.',
+              code: 'entry_conflict',
+            })
+          }
 
           // Re-index immediately: a stale chunk is an answer the AI would still give.
-          const sourceId = updated[0]?.sourceId
-          if (sourceId) await enqueueIngest(workspaceId, sourceId)
+          if (outcome.sourceId) await enqueueIngest(workspaceId, outcome.sourceId)
 
-          return { ok: true }
+          return { ok: true, revision: patch.updatedAt?.toISOString() ?? null }
         },
         {
           auth: 'agent',
           params: z.object({ id: z.string() }),
           body: z.object({
+            /** The entry's `updatedAt` when the editor loaded it; a mismatch is a 409. */
+            revision: z.string().datetime().optional(),
             question: z.string().max(500).nullable().optional(),
             body: z.string().min(1).max(100_000).optional(),
             tags: z.array(z.string().max(40)).max(10).optional(),

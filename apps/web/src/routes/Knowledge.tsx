@@ -16,7 +16,7 @@ import {
   Textarea,
   useSaveState,
 } from '../components/ui'
-import { api, type KnowledgeSource, type SearchHit, type SearchResult } from '../lib/api'
+import { ApiError, api, type KnowledgeSource, type SearchHit, type SearchResult } from '../lib/api'
 import { useCan } from '../lib/capabilities'
 
 /**
@@ -223,7 +223,7 @@ function EntryEditor({
   entry,
   onChange,
 }: {
-  entry: { id: string; question: string | null; body: string; enabled: boolean }
+  entry: { id: string; question: string | null; body: string; enabled: boolean; updatedAt: string }
   onChange: () => void
 }) {
   const { t } = useTranslation()
@@ -236,17 +236,48 @@ function EntryEditor({
   const [question, setQuestion] = useState(entry.question ?? '')
   const [body, setBody] = useState(entry.body)
   const [editing, setEditing] = useState<'question' | 'body' | null>(null)
+  /**
+   * The version the fields were filled from, sent with every save so that one made over a
+   * colleague's newer text is refused rather than silently replacing it. Not moved on while
+   * a field is being edited: that field still holds what was typed over the older version.
+   */
+  const known = useRef(entry.updatedAt)
+  const [conflict, setConflict] = useState(false)
   useEffect(() => {
     if (editing !== 'question') setQuestion(entry.question ?? '')
     if (editing !== 'body') setBody(entry.body)
-  }, [entry.question, entry.body, editing])
+    if (editing === null) known.current = entry.updatedAt
+  }, [entry.question, entry.body, entry.updatedAt, editing])
 
+  /** One save at a time, each carrying the revision the previous one returned. */
+  const queue = useRef<Promise<unknown>>(Promise.resolve())
   const save = useMutation({
-    mutationFn: (patch: Record<string, unknown>) => api.knowledge.updateEntry(entry.id, patch),
+    mutationFn: (patch: Record<string, unknown>) => {
+      const run = queue.current
+        .catch(() => undefined)
+        .then(async () => {
+          const saved = await api.knowledge.updateEntry(entry.id, {
+            ...patch,
+            revision: known.current,
+          })
+          if (saved.revision) known.current = saved.revision
+          return saved
+        })
+      queue.current = run
+      return run
+    },
     ...status.handlers,
     onSuccess: (data, variables, context) => {
+      setConflict(false)
       status.handlers.onSuccess(data, variables, context)
       onChange()
+    },
+    onError: (error, variables, context) => {
+      status.handlers.onError(error, variables, context)
+      if (error instanceof ApiError && error.status === 409) {
+        setConflict(true)
+        onChange()
+      }
     },
   })
 
@@ -289,6 +320,11 @@ function EntryEditor({
             the text staying where it was typed — which it also does when the save fails. */}
         <SaveStatus state={status.state} />
       </div>
+      {conflict ? (
+        <div data-testid="entry-conflict">
+          <ErrorNote message={t('knowledge.entryConflict')} />
+        </div>
+      ) : null}
     </div>
   )
 }
