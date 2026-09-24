@@ -74,6 +74,11 @@ export type BlobStore = {
   remove(key: string): Promise<void>
   /** A URL an agent's browser can open. Not given to model providers; see ADR 0001. */
   urlFor(key: string): string
+  /**
+   * The objects directly under a prefix (not in its sub-folders), for finding uploads that
+   * were never attached. Optional: a store without it simply skips that sweep.
+   */
+  list?(prefix: string): Promise<{ key: string; modifiedAt: Date }[]>
 }
 
 /** Realtime fan-out, backed by Redis pub/sub so any replica count works. */

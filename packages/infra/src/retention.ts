@@ -1,6 +1,7 @@
 import type { BlobStore, Logger } from '@ci/core'
-import { type Database, newId, schema } from '@ci/db'
+import { type Database, type Executor, newId, schema } from '@ci/db'
 import { and, eq, inArray, lt } from 'drizzle-orm'
+import { drainBlobDeletions, queueBlobDeletions } from './blob-deletions'
 import { isWorkspaceKey } from './media-serving'
 
 /**
@@ -37,7 +38,7 @@ export type PurgeResult = {
  * the next person deleting a customer's data, which is not a place for a clever query.
  */
 async function mediaKeysOf(
-  db: Database,
+  db: Executor,
   workspaceId: string,
   conversationIds: string[],
 ): Promise<string[]> {
@@ -106,24 +107,34 @@ export async function purgeConversations(
 ): Promise<PurgeResult> {
   if (input.conversationIds.length === 0) return { conversations: 0, media: 0, mediaFailed: 0 }
 
-  const keys = await mediaKeysOf(db, input.workspaceId, input.conversationIds)
-
   const deleted: { id: string }[] = []
+  const keys: string[] = []
   for (let index = 0; index < input.conversationIds.length; index += CHUNK) {
     const batch = input.conversationIds.slice(index, index + CHUNK)
-    const removed = await db
-      .delete(schema.conversations)
-      .where(
-        and(
-          eq(schema.conversations.workspaceId, input.workspaceId),
-          inArray(schema.conversations.id, batch),
-        ),
-      )
-      .returning({ id: schema.conversations.id })
-    deleted.push(...removed)
+    // The keys are queued in the transaction that deletes the rows naming them, so a
+    // removal that fails afterwards is still on record. See blob-deletions.ts.
+    await db.transaction(async (tx) => {
+      const batchKeys = await mediaKeysOf(tx, input.workspaceId, batch)
+      await queueBlobDeletions(tx, input.workspaceId, batchKeys, 'retention')
+      const removed = await tx
+        .delete(schema.conversations)
+        .where(
+          and(
+            eq(schema.conversations.workspaceId, input.workspaceId),
+            inArray(schema.conversations.id, batch),
+          ),
+        )
+        .returning({ id: schema.conversations.id })
+      deleted.push(...removed)
+      keys.push(...batchKeys)
+    })
   }
 
-  const media = await removeMedia(blob, keys, input.logger)
+  const media = await drainBlobDeletions(db, blob, {
+    workspaceId: input.workspaceId,
+    keys,
+    ...(input.logger ? { logger: input.logger } : {}),
+  })
   return { conversations: deleted.length, media: media.removed, mediaFailed: media.failed }
 }
 
@@ -148,6 +159,16 @@ export async function runRetention(
       and(
         eq(schema.conversations.workspaceId, input.workspaceId),
         lt(schema.conversations.lastMessageAt, cutoff),
+      ),
+    )
+
+  // Raw events are emptied once processed; the rows themselves go with the same age rule.
+  await db
+    .delete(schema.inboundEvents)
+    .where(
+      and(
+        eq(schema.inboundEvents.workspaceId, input.workspaceId),
+        lt(schema.inboundEvents.receivedAt, cutoff),
       ),
     )
 
@@ -190,23 +211,32 @@ export async function eraseCustomer(
       ),
     )
 
-  const keys = await mediaKeysOf(
-    db,
-    input.workspaceId,
-    conversations.map((row) => row.id),
-  )
-
-  const deleted = await db
-    .delete(schema.customers)
-    .where(
-      and(
-        eq(schema.customers.workspaceId, input.workspaceId),
-        eq(schema.customers.id, input.customerId),
-      ),
+  const { keys, deleted } = await db.transaction(async (tx) => {
+    const keys = await mediaKeysOf(
+      tx,
+      input.workspaceId,
+      conversations.map((row) => row.id),
     )
-    .returning({ id: schema.customers.id })
+    // Queued with the delete, so a removal that fails is retried rather than forgotten.
+    await queueBlobDeletions(tx, input.workspaceId, keys, 'customer_erasure')
+    // Their raw inbound events go with their channel identities, by cascade.
+    const deleted = await tx
+      .delete(schema.customers)
+      .where(
+        and(
+          eq(schema.customers.workspaceId, input.workspaceId),
+          eq(schema.customers.id, input.customerId),
+        ),
+      )
+      .returning({ id: schema.customers.id })
+    return { keys, deleted }
+  })
 
-  const media = await removeMedia(blob, keys, input.logger)
+  const media = await drainBlobDeletions(db, blob, {
+    workspaceId: input.workspaceId,
+    keys,
+    ...(input.logger ? { logger: input.logger } : {}),
+  })
 
   await db.insert(schema.auditLog).values({
     id: newId(),
@@ -319,9 +349,16 @@ export async function eraseWorkspace(
         .from(schema.knowledgeSources)
         .where(eq(schema.knowledgeSources.workspaceId, input.workspaceId))
 
+      // Removals still queued from earlier deletions; the cascade would forget them.
+      const queued = await db
+        .select({ storageKey: schema.blobDeletions.storageKey })
+        .from(schema.blobDeletions)
+        .where(eq(schema.blobDeletions.workspaceId, input.workspaceId))
+
       mediaKeys = [
         ...new Set([
           ...fromMessages,
+          ...queued.map((row) => row.storageKey),
           // Keyed `<workspaceId>/knowledge/<id>-<name>` by the upload route, so the same
           // prefix rule applies to them as to message attachments.
           ...sources.flatMap((row) =>

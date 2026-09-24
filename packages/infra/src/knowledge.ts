@@ -1,7 +1,8 @@
-import { chunkQa, chunkText, embedTexts, type SlotConfig } from '@ci/core'
+import { type BlobStore, chunkQa, chunkText, embedTexts, type SlotConfig } from '@ci/core'
 import { type Database, EMBEDDING_DIMENSIONS, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
+import { drainBlobDeletions, queueBlobDeletions } from './blob-deletions'
 
 /**
  * Turning knowledge into something retrievable.
@@ -179,19 +180,36 @@ export async function createSource(
   return id
 }
 
+/**
+ * Delete a source, and the file it was uploaded as.
+ *
+ * The row and the file used to part ways here: the row went and the document stayed in
+ * storage for ever. The file's removal is queued with the delete and attempted at once;
+ * a failure is retried by the nightly drain.
+ */
 export async function deleteSource(
   db: Database,
   workspaceId: string,
   sourceId: string,
+  blob?: BlobStore,
 ): Promise<void> {
-  await db
-    .delete(schema.knowledgeSources)
-    .where(
-      and(
-        eq(schema.knowledgeSources.id, sourceId),
-        eq(schema.knowledgeSources.workspaceId, workspaceId),
-      ),
-    )
+  const storageKey = await db.transaction(async (tx) => {
+    const removed = await tx
+      .delete(schema.knowledgeSources)
+      .where(
+        and(
+          eq(schema.knowledgeSources.id, sourceId),
+          eq(schema.knowledgeSources.workspaceId, workspaceId),
+        ),
+      )
+      .returning({ storageKey: schema.knowledgeSources.storageKey })
+    const key = removed[0]?.storageKey ?? null
+    if (key) await queueBlobDeletions(tx, workspaceId, [key], 'knowledge_source')
+    return key
+  })
+  if (storageKey && blob) {
+    await drainBlobDeletions(db, blob, { workspaceId, keys: [storageKey] })
+  }
 }
 
 /**

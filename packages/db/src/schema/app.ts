@@ -65,6 +65,10 @@ export const messageStatusEnum = pgEnum('message_status', [
   'delivered',
   'read',
   'failed',
+  /** Withdrawn before it went out: an AI reply a colleague overtook. Never sent, never failed. */
+  'canceled',
+  /** The platform may or may not have it; see `UncertainDeliveryError`. Not retried blindly. */
+  'uncertain',
 ])
 export const handoffReasonEnum = pgEnum('handoff_reason', [
   'ai_requested',
@@ -467,6 +471,11 @@ export const messages = pgTable(
      * from: `created_at` is when we decided to say something, not when it was said.
      */
     sentAt: ts('sent_at'),
+    /**
+     * Every platform id this message was delivered as. One message can be several sends
+     * (text, then each file), and keeping only the last lost the receipts for the rest.
+     */
+    platformMessageIds: jsonb('platform_message_ids').$type<string[]>().default([]).notNull(),
     createdAt: ts('created_at').defaultNow().notNull(),
   },
   (t) => [
@@ -524,6 +533,14 @@ export const inboundEvents = pgTable(
       .notNull()
       .references(() => channels.id, { onDelete: 'cascade' }),
     platformEventId: text('platform_event_id').notNull(),
+    /**
+     * Whose event this was, once the worker knows. Erasing a customer removes their channel
+     * identities, and with this their raw events go too: the one copy of what they typed
+     * that was stored before redaction.
+     */
+    channelIdentityId: text('channel_identity_id').references(() => channelIdentities.id, {
+      onDelete: 'cascade',
+    }),
     payload: jsonb('payload').$type<unknown>().notNull(),
     receivedAt: ts('received_at').defaultNow().notNull(),
     processedAt: ts('processed_at'),
@@ -881,6 +898,34 @@ export const workspaceInvitations = pgTable(
   (t) => [
     uniqueIndex('workspace_invitations_token_hash_uq').on(t.tokenHash),
     index('workspace_invitations_workspace_idx').on(t.workspaceId, t.purpose),
+  ],
+)
+
+/**
+ * Stored files whose rows are gone and whose objects are still to be removed.
+ *
+ * Written in the same transaction as the delete that orphaned them, so a failed removal is
+ * remembered: retention and erasure used to collect the keys, delete the rows, then try the
+ * objects, and a failure lost the only record of what was left. A row leaves this table
+ * when its object is confirmed gone. A workspace erasure takes the remainder with it.
+ */
+export const blobDeletions = pgTable(
+  'blob_deletions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    storageKey: text('storage_key').notNull(),
+    /** What orphaned it: `retention`, `customer_erasure`, `knowledge_source`, `abandoned_upload`. */
+    reason: text('reason').notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    lastError: text('last_error'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('blob_deletions_key_uq').on(t.storageKey),
+    index('blob_deletions_workspace_idx').on(t.workspaceId),
   ],
 )
 

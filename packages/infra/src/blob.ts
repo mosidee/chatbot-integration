@@ -1,6 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -64,6 +65,28 @@ export function createBlobStore(config: BlobConfig): BlobStore & { client: S3Cli
     async remove(key: string) {
       // S3 answers 204 whether or not the key existed, which is the behaviour wanted here.
       await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
+    },
+
+    async list(prefix: string) {
+      const found: { key: string; modifiedAt: Date }[] = []
+      let token: string | undefined
+      do {
+        const page = await client.send(
+          new ListObjectsV2Command({
+            Bucket: config.bucket,
+            Prefix: prefix,
+            // Only this level: sub-folders come back as prefixes, not objects.
+            Delimiter: '/',
+            ...(token ? { ContinuationToken: token } : {}),
+          }),
+        )
+        for (const object of page.Contents ?? []) {
+          if (object.Key)
+            found.push({ key: object.Key, modifiedAt: object.LastModified ?? new Date() })
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined
+      } while (token)
+      return found
     },
 
     urlFor(key: string) {

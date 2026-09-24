@@ -1,4 +1,4 @@
-import { splitText } from '@ci/channels'
+import { splitText, UncertainDeliveryError } from '@ci/channels'
 import { aiMaySend, type EffectPorts, type Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
@@ -47,6 +47,8 @@ export async function processOutbound(
   if (message.status === 'sent' || message.status === 'delivered' || message.status === 'read') {
     return
   }
+  // Withdrawn, or possibly delivered already: neither is this job's to send again.
+  if (message.status === 'canceled' || message.status === 'uncertain') return
 
   /**
    * An AI reply a human has since overtaken is not delivered.
@@ -76,7 +78,7 @@ export async function processOutbound(
       })
       await db
         .update(schema.messages)
-        .set({ status: 'failed', error: 'A human took over before delivery' })
+        .set({ status: 'canceled', error: 'A colleague took over before this was delivered' })
         .where(eq(schema.messages.id, message.id))
       await publisher
         .publish(job.workspaceId, {
@@ -193,21 +195,48 @@ export async function processOutbound(
      * retry at the first: the customer read the opening of the message twice. Each part is
      * checkpointed as the platform takes it.
      */
+    /**
+     * Two kinds of checkpoint share `sent_parts`. Text split into several parts counts
+     * parts. A single non-text message counts the adapter's own units — Messenger sends a
+     * caption and then each file as separate requests — so a failure on the second file
+     * does not send the first again.
+     */
+    const unitsWithinOnePart = parts.length === 1 && outbound.kind !== 'text'
+    const recordUnit = async (platformId: string | null, sentParts: number) => {
+      lastPlatformId = platformId ?? lastPlatformId
+      await db
+        .update(schema.messages)
+        .set({
+          sentParts,
+          platformMessageId: lastPlatformId,
+          ...(platformId
+            ? {
+                platformMessageIds: sql`${schema.messages.platformMessageIds} || ${JSON.stringify([platformId])}::jsonb`,
+              }
+            : {}),
+        })
+        .where(eq(schema.messages.id, message.id))
+    }
+
     for (const [index, part] of parts.entries()) {
-      if (index < message.sentParts) continue
+      if (!unitsWithinOnePart && index < message.sentParts) continue
 
       const result = await adapter.send(identity.externalId, part, config, {
         messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
         ...(language ? { language } : {}),
         // Only the first part can use the token; the rest are pushes.
         ...(index === 0 && claimedToken ? { replyToken: claimedToken } : {}),
+        // The same key on every retry of this part, so LINE delivers it once.
+        retryKey: retryKeyFor(message.id, index),
+        ...(unitsWithinOnePart
+          ? {
+              startAt: message.sentParts,
+              onUnitSent: (unit, platformId) => recordUnit(platformId, unit + 1),
+            }
+          : {}),
       })
-      lastPlatformId = result.platformMessageId
-
-      await db
-        .update(schema.messages)
-        .set({ sentParts: index + 1, platformMessageId: lastPlatformId })
-        .where(eq(schema.messages.id, message.id))
+      if (!unitsWithinOnePart) await recordUnit(result.platformMessageId, index + 1)
+      else lastPlatformId = result.platformMessageId ?? lastPlatformId
     }
 
     await db
@@ -222,12 +251,15 @@ export async function processOutbound(
       .where(eq(schema.messages.id, message.id))
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
+    // Possibly delivered: recorded for a person to judge, and deliberately not retried.
+    const uncertain = error instanceof UncertainDeliveryError
     await db
       .update(schema.messages)
-      .set({ status: 'failed', error: reason })
+      .set({ status: uncertain ? 'uncertain' : 'failed', error: reason })
       .where(eq(schema.messages.id, message.id))
 
     await announce()
+    if (uncertain) return
     throw error
   }
 
@@ -253,4 +285,14 @@ function toSendableParts(message: NormalizedMessage, maxLength: number): Normali
 function hasAttachments(message: NormalizedMessage): boolean {
   const media = message as NormalizedMessage & { attachments?: unknown[] }
   return Array.isArray(media.attachments) && media.attachments.length > 0
+}
+
+/**
+ * A UUID naming one part of one message, the same on every retry.
+ *
+ * LINE wants a UUID for `X-Line-Retry-Key`. The message id is one already; the part index
+ * replaces its last four hex digits, so each part of a split message has its own key.
+ */
+function retryKeyFor(messageId: string, part: number): string {
+  return `${messageId.slice(0, -4)}${part.toString(16).padStart(4, '0')}`
 }

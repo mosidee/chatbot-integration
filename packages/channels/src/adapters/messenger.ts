@@ -10,6 +10,7 @@ import type {
   SendResult,
   WebhookRequest,
 } from '../types'
+import { UncertainDeliveryError } from '../types'
 
 /**
  * Facebook Messenger, through the Graph API.
@@ -350,19 +351,33 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
 
     let lastMessageId: string | null = null
 
-    for (const payload of payloads) {
-      const response = await fetch(graphUrl(config, `${config.pageId}/messages`), {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${config.pageAccessToken}`,
-        },
-        body: JSON.stringify({
-          recipient: { id: externalId },
-          messaging_type: 'RESPONSE',
-          message: payload,
-        }),
-      })
+    for (const [index, payload] of payloads.entries()) {
+      // Taken on an earlier attempt: sending it again would show the customer a duplicate.
+      if (index < (context.startAt ?? 0)) continue
+
+      let response: Response
+      try {
+        response = await fetch(graphUrl(config, `${config.pageId}/messages`), {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${config.pageAccessToken}`,
+          },
+          body: JSON.stringify({
+            recipient: { id: externalId },
+            messaging_type: 'RESPONSE',
+            message: payload,
+          }),
+        })
+      } catch (error) {
+        // No answer at all: Meta may have delivered it. Graph has no idempotency key, so
+        // this is for a person to judge rather than for a retry to repeat.
+        throw new UncertainDeliveryError(
+          `Messenger did not answer, so it is unknown whether this was delivered: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '')
@@ -371,6 +386,7 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
 
       const body = (await response.json()) as { message_id?: string }
       lastMessageId = body.message_id ?? lastMessageId
+      await context.onUnitSent?.(index, body.message_id ?? null)
     }
 
     return { platformMessageId: lastMessageId }

@@ -2,8 +2,10 @@ import type { EffectPorts, Logger } from '@ci/core'
 import { schema } from '@ci/db'
 import {
   type CustomerErasureJob,
+  drainBlobDeletions,
   eraseCustomer,
   eraseWorkspace,
+  queueAbandonedUploads,
   type RetentionJob,
   type Runtime,
   runRetention,
@@ -58,6 +60,22 @@ export async function processRetention(
     logger,
   })
 
+  /**
+   * Files whose removal failed earlier are retried here, and uploads an agent picked and
+   * never sent are queued once they are a day old. Both are best effort: an unreachable
+   * store leaves them queued for tomorrow rather than failing the whole sweep.
+   */
+  const abandoned = await queueAbandonedUploads(db, blob, { workspaceId: job.workspaceId }).catch(
+    (error: unknown) => {
+      logger.warn('could not look for abandoned uploads', {
+        workspaceId: job.workspaceId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return 0
+    },
+  )
+  const drained = await drainBlobDeletions(db, blob, { workspaceId: job.workspaceId, logger })
+
   // Logged even when nothing matched: "retention ran and found nothing" is the evidence
   // that the schedule is alive, which is the question asked during an audit.
   logger.info('retention applied', {
@@ -67,6 +85,9 @@ export async function processRetention(
     conversations: result.conversations,
     media: result.media,
     mediaFailed: result.mediaFailed,
+    abandonedUploads: abandoned,
+    queuedRemoved: drained.removed,
+    queuedStillFailing: drained.failed,
   })
 }
 

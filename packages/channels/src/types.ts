@@ -70,6 +70,19 @@ export type SendResult = {
   platformMessageId: string | null
 }
 
+/**
+ * The platform may or may not have taken the message: the connection died after the request
+ * left. Retrying could deliver it twice, so the outbound job records it as uncertain for a
+ * person to judge instead of resending blindly. Only thrown where the platform offers no way
+ * to make a resend safe; LINE's retry key does, so LINE never throws it.
+ */
+export class UncertainDeliveryError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UncertainDeliveryError'
+  }
+}
+
 export type SendContext = {
   /** Present when replying to a very recent inbound message. */
   replyToken?: string
@@ -83,6 +96,18 @@ export type SendContext = {
    * which LINE renders and we have to label. Loaded only when a message carries one.
    */
   language?: Language
+  /**
+   * Units of this message the platform already took on an earlier attempt. An adapter that
+   * sends one message as several requests (Messenger: text, then each file) skips these.
+   */
+  startAt?: number
+  /** Called as each unit is accepted, so the caller can checkpoint before the next one. */
+  onUnitSent?: (index: number, platformMessageId: string | null) => Promise<void>
+  /**
+   * Stable across retries of the same delivery. LINE takes it as `X-Line-Retry-Key` and
+   * refuses to deliver the same key twice, which makes its resend safe.
+   */
+  retryKey?: string
 }
 
 export type ChannelProfile = {
