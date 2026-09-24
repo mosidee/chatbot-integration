@@ -56,7 +56,32 @@ export async function indexEntry(
   const { embeddings, model, space } = await embedPieces(embedSlot, pieces, dimensions)
 
   // Replace atomically, so retrieval never sees an entry mid-rewrite.
-  await db.transaction(async (tx) => {
+  const stored = await db.transaction(async (tx) => {
+    /**
+     * Is the entry still what was embedded? Two edits a second apart are two index jobs,
+     * and the older one, slower to embed, used to commit last and put the old answer back
+     * in retrieval over the new one. The newer edit queued a job of its own, so an index of
+     * text that has since changed steps aside. The lock orders this against that job's swap.
+     */
+    const [current] = await tx
+      .select({
+        question: schema.knowledgeEntries.question,
+        body: schema.knowledgeEntries.body,
+        language: schema.knowledgeEntries.language,
+        enabled: schema.knowledgeEntries.enabled,
+      })
+      .from(schema.knowledgeEntries)
+      .where(eq(schema.knowledgeEntries.id, entryId))
+      .for('update')
+    if (
+      !current?.enabled ||
+      current.question !== entry.question ||
+      current.body !== entry.body ||
+      current.language !== entry.language
+    ) {
+      return false
+    }
+
     await tx.delete(schema.knowledgeChunks).where(eq(schema.knowledgeChunks.entryId, entryId))
     await tx.insert(schema.knowledgeChunks).values(
       pieces.map((text, index) => ({
@@ -72,8 +97,10 @@ export async function indexEntry(
         embeddingSpace: space,
       })),
     )
+    return true
   })
 
+  if (!stored) return { chunks: 0, model: null, skipped: true }
   return { chunks: pieces.length, model, skipped: false }
 }
 
@@ -111,6 +138,22 @@ export async function replaceFileSource(
   const { embeddings, model, space } = await embedPieces(embedSlot, pieces, dimensions)
 
   await db.transaction(async (tx) => {
+    /**
+     * One swap at a time per source. Two reindexes of the same file — a double click, a
+     * retry overlapping the original — each deleted the entries they could see and inserted
+     * their own, and neither could see the other's uncommitted row: the document ended up
+     * indexed twice. Locked, the second waits and its delete then sees the first one's entry.
+     */
+    await tx
+      .select({ id: schema.knowledgeSources.id })
+      .from(schema.knowledgeSources)
+      .where(
+        and(
+          eq(schema.knowledgeSources.id, input.sourceId),
+          eq(schema.knowledgeSources.workspaceId, input.workspaceId),
+        ),
+      )
+      .for('update')
     await tx
       .delete(schema.knowledgeEntries)
       .where(
