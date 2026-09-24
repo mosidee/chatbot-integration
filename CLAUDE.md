@@ -581,3 +581,9 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>
   writes fired, since then its reply is the customer's only account of them. A newer message
   with no turn owed (it arrived while a colleague held the conversation) never silences the
   older turn. `outbox_job_id_idx` (migration 0015) keeps the lookup cheap.
+- **Settings and knowledge entries carry a revision** (`revision` from `GET /settings/
+  workspace`, an entry's `updatedAt`). A save sends the one it started from and a mismatch
+  is a 409, so nobody overwrites a value they never saw. The console sends saves one at a
+  time, taking each revision from the previous response, and the settings query never
+  refetches in the background: its fields are uncontrolled, so a refetch would move the
+  revision on without moving what they show. Omitting `revision` still overwrites.

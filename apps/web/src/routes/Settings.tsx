@@ -9,7 +9,7 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ModelField,
@@ -35,6 +35,7 @@ import {
 } from '../components/ui'
 import { WidgetPanel } from '../components/WidgetPanel'
 import {
+  ApiError,
   api,
   type Channel,
   type CredentialCheck,
@@ -85,6 +86,14 @@ export function Settings() {
   const workspace = useQuery({
     queryKey: ['workspace-settings'],
     queryFn: () => api.settings.workspace(),
+    /**
+     * The page's version moves with its own saves and with a conflict, and nothing else.
+     * Most fields below are uncontrolled and keep what was typed, so a background refetch
+     * would move the revision on without moving them, and the next save would overwrite a
+     * colleague's change the page never showed.
+     */
+    refetchOnWindowFocus: false,
+    staleTime: Number.POSITIVE_INFINITY,
   })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
   // Providers, slots and channels answer admins only. They used to be asked for by every
@@ -107,14 +116,40 @@ export function Settings() {
   })
 
   const workspaceSave = useSaveState()
+  /** Bumped after a conflict, to rebuild every field from the version just fetched. */
+  const [generation, setGeneration] = useState(0)
+  const [conflict, setConflict] = useState(false)
+  /**
+   * Saves go one at a time. Each carries the revision the one before it returned; two in
+   * flight at once would both carry the same one, and the second would be refused as if a
+   * colleague had got there first.
+   */
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve())
 
   const saveWorkspace = useMutation({
-    mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) =>
-      api.settings.updateWorkspace(patch),
+    mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) => {
+      const run = saveQueue.current
+        .catch(() => undefined)
+        .then(async () => {
+          const current = queryClient.getQueryData<{ revision: string }>(['workspace-settings'])
+          const saved = await api.settings.updateWorkspace(patch, current?.revision)
+          queryClient.setQueryData(['workspace-settings'], saved)
+          return saved
+        })
+      saveQueue.current = run
+      return run
+    },
     ...workspaceSave.handlers,
     onSuccess: (data, variables, context) => {
-      void queryClient.invalidateQueries({ queryKey: ['workspace-settings'] })
+      setConflict(false)
       workspaceSave.handlers.onSuccess(data, variables, context)
+    },
+    onError: (error, variables, context) => {
+      workspaceSave.handlers.onError(error, variables, context)
+      if (error instanceof ApiError && error.status === 409) {
+        setConflict(true)
+        void workspace.refetch().then(() => setGeneration((value) => value + 1))
+      }
     },
   })
 
@@ -174,131 +209,142 @@ export function Settings() {
         </p>
       ) : null}
 
-      {active === 'general' ? (
-        <fieldset disabled={!isAdmin} className="contents">
-          <Card className="space-y-3">
-            <div className="flex items-baseline gap-3">
-              <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
-              <SaveStatus state={workspaceSave.state} />
-            </div>
+      {conflict ? (
+        <div data-testid="settings-conflict">
+          <ErrorNote message={t('settings.conflict')} />
+        </div>
+      ) : null}
 
-            <div>
-              <Label htmlFor="persona">{t('settings.persona')}</Label>
-              <Textarea
-                id="persona"
-                rows={5}
-                defaultValue={settings.persona}
-                onBlur={(e) => {
-                  if (e.target.value !== settings.persona) {
-                    saveWorkspace.mutate({ persona: e.target.value })
-                  }
-                }}
+      <div key={generation} className="contents">
+        {active === 'general' ? (
+          <fieldset disabled={!isAdmin} className="contents">
+            <Card className="space-y-3">
+              <div className="flex items-baseline gap-3">
+                <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
+                <SaveStatus state={workspaceSave.state} />
+              </div>
+
+              <div>
+                <Label htmlFor="persona">{t('settings.persona')}</Label>
+                <Textarea
+                  id="persona"
+                  rows={5}
+                  defaultValue={settings.persona}
+                  onBlur={(e) => {
+                    if (e.target.value !== settings.persona) {
+                      saveWorkspace.mutate({ persona: e.target.value })
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="default-mode">{t('settings.defaultMode')}</Label>
+                  <select
+                    id="default-mode"
+                    className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+                    value={settings.defaultMode}
+                    onChange={(e) =>
+                      saveWorkspace.mutate({ defaultMode: e.target.value as ConversationMode })
+                    }
+                  >
+                    {(['ai', 'ai_supervised', 'human'] as const).map((mode) => (
+                      <option key={mode} value={mode}>
+                        {t(`modes.${mode}`)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <Label htmlFor="default-language">{t('settings.defaultLanguage')}</Label>
+                  <select
+                    id="default-language"
+                    className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
+                    value={settings.defaultLanguage}
+                    onChange={(e) =>
+                      saveWorkspace.mutate({ defaultLanguage: e.target.value as Language })
+                    }
+                  >
+                    <option value="th">ไทย</option>
+                    <option value="en">English</option>
+                  </select>
+                </div>
+              </div>
+
+              <HoldingMessages
+                settings={settings}
+                onSave={(patch) => saveWorkspace.mutate(patch)}
               />
-            </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="default-mode">{t('settings.defaultMode')}</Label>
-                <select
-                  id="default-mode"
-                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
-                  value={settings.defaultMode}
-                  onChange={(e) =>
-                    saveWorkspace.mutate({ defaultMode: e.target.value as ConversationMode })
-                  }
-                >
-                  {(['ai', 'ai_supervised', 'human'] as const).map((mode) => (
-                    <option key={mode} value={mode}>
-                      {t(`modes.${mode}`)}
-                    </option>
+              <AutoResolve settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
+
+              <fieldset>
+                <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
+                  {t('settings.redaction')}
+                </legend>
+                <div className="flex flex-wrap gap-4">
+                  {(
+                    [
+                      ['cardNumbers', t('settings.cardNumbers')],
+                      ['thaiNationalId', t('settings.thaiNationalId')],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={settings.redaction[key]}
+                        onChange={(e) =>
+                          saveWorkspace.mutate({
+                            redaction: { ...settings.redaction, [key]: e.target.checked },
+                          })
+                        }
+                      />
+                      {label}
+                    </label>
                   ))}
-                </select>
-              </div>
+                </div>
+              </fieldset>
+            </Card>
+          </fieldset>
+        ) : null}
 
-              <div>
-                <Label htmlFor="default-language">{t('settings.defaultLanguage')}</Label>
-                <select
-                  id="default-language"
-                  className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
-                  value={settings.defaultLanguage}
-                  onChange={(e) =>
-                    saveWorkspace.mutate({ defaultLanguage: e.target.value as Language })
-                  }
-                >
-                  <option value="th">ไทย</option>
-                  <option value="en">English</option>
-                </select>
-              </div>
-            </div>
+        {/* Saved replies are an agent's own tool, so outside the admins-only fieldset. */}
+        {active === 'general' && me.data?.role !== 'viewer' ? <CannedResponsesCard /> : null}
 
-            <HoldingMessages settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
-
-            <AutoResolve settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
-
-            <fieldset>
-              <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                {t('settings.redaction')}
-              </legend>
-              <div className="flex flex-wrap gap-4">
-                {(
-                  [
-                    ['cardNumbers', t('settings.cardNumbers')],
-                    ['thaiNationalId', t('settings.thaiNationalId')],
-                  ] as const
-                ).map(([key, label]) => (
-                  <label key={key} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={settings.redaction[key]}
-                      onChange={(e) =>
-                        saveWorkspace.mutate({
-                          redaction: { ...settings.redaction, [key]: e.target.checked },
-                        })
-                      }
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          </Card>
-        </fieldset>
-      ) : null}
-
-      {/* Saved replies are an agent's own tool, so outside the admins-only fieldset. */}
-      {active === 'general' && me.data?.role !== 'viewer' ? <CannedResponsesCard /> : null}
-
-      {active === 'channels' ? (
-        <ChannelsCard
-          channels={channels.data?.channels ?? []}
-          onChange={() => void queryClient.invalidateQueries({ queryKey: ['channels'] })}
-        />
-      ) : null}
-
-      {active === 'models' ? (
-        <>
-          <ProvidersCard
-            providers={providers.data?.providers ?? []}
-            onChange={() => void queryClient.invalidateQueries({ queryKey: ['providers'] })}
+        {active === 'channels' ? (
+          <ChannelsCard
+            channels={channels.data?.channels ?? []}
+            onChange={() => void queryClient.invalidateQueries({ queryKey: ['channels'] })}
           />
+        ) : null}
 
-          <TaskSlotsCard
-            slots={slots.data?.slots ?? []}
-            providers={providers.data?.providers ?? []}
-            onChange={() => void queryClient.invalidateQueries({ queryKey: ['task-slots'] })}
-          />
-        </>
-      ) : null}
+        {active === 'models' ? (
+          <>
+            <ProvidersCard
+              providers={providers.data?.providers ?? []}
+              onChange={() => void queryClient.invalidateQueries({ queryKey: ['providers'] })}
+            />
 
-      {active === 'integrations' && isAdmin ? (
-        <>
-          <ToolsCard />
-          <IdentityCard
-            settings={settings}
-            onSave={(patch) => saveWorkspace.mutate(patch as never)}
-          />
-        </>
-      ) : null}
+            <TaskSlotsCard
+              slots={slots.data?.slots ?? []}
+              providers={providers.data?.providers ?? []}
+              onChange={() => void queryClient.invalidateQueries({ queryKey: ['task-slots'] })}
+            />
+          </>
+        ) : null}
+
+        {active === 'integrations' && isAdmin ? (
+          <>
+            <ToolsCard />
+            <IdentityCard
+              settings={settings}
+              onSave={(patch) => saveWorkspace.mutate(patch as never)}
+            />
+          </>
+        ) : null}
+      </div>
     </div>
   )
 }

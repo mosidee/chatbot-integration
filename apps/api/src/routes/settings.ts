@@ -113,7 +113,10 @@ export function settingsRoutes(ctx: ApiContext) {
           const workspace = rows[0]
           if (!workspace) return status(404, { error: 'Workspace not found' })
 
-          return { settings: publicSettings(workspace.settings) }
+          return {
+            settings: publicSettings(workspace.settings),
+            revision: workspace.updatedAt.toISOString(),
+          }
         },
         { auth: 'viewer' },
       )
@@ -191,8 +194,22 @@ export function settingsRoutes(ctx: ApiContext) {
             const {
               externalRetrieval: incomingExternal,
               identity: incomingIdentity,
+              revision,
               ...plainBody
             } = body
+
+            /**
+             * The version the caller's page showed. The lock stops two saves losing each
+             * other's fields, but not somebody overwriting a value they never saw: an admin
+             * with the page open since morning would otherwise put back the persona a
+             * colleague rewrote at noon. Optional, so a script that means to overwrite can.
+             */
+            if (revision !== undefined && Date.parse(revision) !== workspace.updatedAt.getTime()) {
+              return status(409, {
+                error: 'These settings were changed by somebody else since the page was loaded.',
+                code: 'settings_conflict',
+              })
+            }
             const current = withSettingsDefaults(workspace.settings)
             const merged: typeof workspace.settings = { ...current, ...plainBody }
 
@@ -238,17 +255,20 @@ export function settingsRoutes(ctx: ApiContext) {
                   }
                 : null
             }
+            const updatedAt = new Date()
             await tx
               .update(schema.workspaces)
-              .set({ settings: merged, updatedAt: new Date() })
+              .set({ settings: merged, updatedAt })
               .where(eq(schema.workspaces.id, workspaceId))
             // Through the same projection the GET uses. Returning `merged` directly handed
             // the stored ciphertext of both credentials straight back to the browser.
-            return { settings: publicSettings(merged) }
+            return { settings: publicSettings(merged), revision: updatedAt.toISOString() }
           }),
         {
           auth: 'admin',
           body: z.object({
+            /** The `revision` the caller last read; a mismatch is refused with 409. */
+            revision: z.string().datetime().optional(),
             defaultLanguage: languageSchema.optional(),
             defaultMode: conversationModeSchema.optional(),
             persona: z.string().max(8000).optional(),

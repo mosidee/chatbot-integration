@@ -479,6 +479,8 @@ export type KnowledgeEntry = {
   tags: string[]
   channelTypes: string[]
   enabled: boolean
+  /** The entry's revision: sent back with an edit, which is refused if it has moved on. */
+  updatedAt: string
 }
 
 export type SearchHit = {
@@ -653,7 +655,7 @@ export const api = {
     entries: (sourceId: string) =>
       get<{ entries: KnowledgeEntry[] }>(`/v1/knowledge/sources/${sourceId}/entries`),
     updateEntry: (id: string, body: Record<string, unknown>) =>
-      patch<{ ok: true }>(`/v1/knowledge/entries/${id}`, body),
+      patch<{ ok: true; revision: string | null }>(`/v1/knowledge/entries/${id}`, body),
     reindex: (sourceId: string) => post<{ ok: true }>(`/v1/knowledge/sources/${sourceId}/reindex`),
     deleteSource: (sourceId: string) => del<{ ok: true }>(`/v1/knowledge/sources/${sourceId}`),
     search: (body: { query: string; language?: Language | null; limit?: number }) =>
@@ -668,10 +670,15 @@ export const api = {
   },
 
   settings: {
-    workspace: () => get<{ settings: WorkspaceSettings }>('/v1/settings/workspace'),
+    /** `revision` is sent back with a save; a save from an older one is refused (409). */
+    workspace: () =>
+      get<{ settings: WorkspaceSettings; revision: string }>('/v1/settings/workspace'),
     me: () => get<Me>('/v1/settings/me'),
-    updateWorkspace: (patchBody: Partial<WorkspaceSettings>) =>
-      patch<{ settings: WorkspaceSettings }>('/v1/settings/workspace', patchBody),
+    updateWorkspace: (patchBody: Partial<WorkspaceSettings>, revision?: string) =>
+      patch<{ settings: WorkspaceSettings; revision: string }>('/v1/settings/workspace', {
+        ...patchBody,
+        ...(revision ? { revision } : {}),
+      }),
     providers: () => get<{ providers: Provider[] }>('/v1/settings/providers'),
     createProvider: (body: {
       name: string
