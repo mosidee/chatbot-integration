@@ -18,6 +18,8 @@ const th = {
     admin: 'ผู้ใช้งาน',
     platform: 'ผู้ดูแลระบบ',
     more: 'เพิ่มเติม',
+    openCount: 'บทสนทนาที่เปิดอยู่ {{count}} รายการ',
+    waitingCount: 'รอเจ้าหน้าที่ {{count}} รายการ',
   },
   auth: {
     title: 'เข้าสู่ระบบ',
@@ -495,6 +497,8 @@ const en: typeof th = {
     admin: 'People',
     platform: 'Platform',
     more: 'More',
+    openCount: '{{count}} open conversations',
+    waitingCount: '{{count}} waiting for a person',
   },
   auth: {
     title: 'Sign in',

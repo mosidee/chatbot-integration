@@ -272,6 +272,36 @@ export function conversationRoutes(ctx: ApiContext) {
       )
 
       /**
+       * The badges on the Inbox in the navigation: how many conversations are open, and how
+       * many of those are waiting for a person.
+       *
+       * Their own counts rather than the length of the list, because the badges are shown on
+       * every page — an agent on Settings or the dashboard is exactly who needs to know a
+       * customer is sitting there — and the list is only loaded on the inbox itself, a page
+       * of fifty at a time.
+       *
+       * One query for both, so the two numbers are taken at the same instant and cannot
+       * disagree. "Waiting" is open and waiting for a person, the same as the inbox's Waiting
+       * tab. Not the mode alone: resolving leaves the mode where it was, so a conversation
+       * somebody closed while it waited would count as waiting forever, and the red number
+       * ended up larger than the blue one it is meant to be part of.
+       */
+      .get(
+        '/counts',
+        async ({ workspaceId }) => {
+          const rows = await db
+            .select({
+              open: sql<number>`count(*) filter (where ${schema.conversations.status} = 'open')::int`,
+              waiting: sql<number>`count(*) filter (where ${schema.conversations.status} = 'open' and ${schema.conversations.mode} = 'waiting_human')::int`,
+            })
+            .from(schema.conversations)
+            .where(eq(schema.conversations.workspaceId, workspaceId))
+          return { open: rows[0]?.open ?? 0, waiting: rows[0]?.waiting ?? 0 }
+        },
+        { auth: 'viewer' },
+      )
+
+      /**
        * One conversation, with the most recent slice of its messages.
        *
        * A window rather than the whole thread. It used to take the first two hundred

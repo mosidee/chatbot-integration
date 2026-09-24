@@ -517,3 +517,129 @@ describe('sending a file to a customer', () => {
     expect(stored?.attachments?.[0]?.storageKey).toBe(storageKey)
   })
 })
+
+/**
+ * The badges on the Inbox in the navigation.
+ *
+ * Shown on every page, so they cannot be derived from the list the inbox loads; and they
+ * must be this workspace's counts and nobody else's.
+ */
+describe('the inbox badges', () => {
+  const counts = async (actor = fixture.admin): Promise<{ open: number; waiting: number }> => {
+    const response = await fixture.as(actor, '/api/v1/conversations/counts')
+    expect(response.status).toBe(200)
+    return (await response.json()) as { open: number; waiting: number }
+  }
+
+  test('open counts open conversations and nothing else', async () => {
+    const before = await counts()
+
+    const { conversationId } = await seed({
+      name: 'badge',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+    expect((await counts()).open).toBe(before.open + 1)
+    // Open with the AI answering: nobody is being waited for.
+    expect((await counts()).waiting).toBe(before.waiting)
+
+    // Resolving takes it off: there is nothing left in the Open tab.
+    await ctx.db
+      .update(schema.conversations)
+      .set({ status: 'resolved' })
+      .where(eq(schema.conversations.id, conversationId))
+    expect((await counts()).open).toBe(before.open)
+  })
+
+  test('waiting counts conversations handed to a person, and drops when one is taken', async () => {
+    const before = await counts()
+
+    const { conversationId } = await seed({
+      name: 'waiting badge',
+      owner: null,
+      customerSpokeAt: minutesAgo(2),
+      mode: 'waiting_human',
+      waitingSince: minutesAgo(2),
+    })
+    const during = await counts()
+    expect(during.waiting).toBe(before.waiting + 1)
+    // A waiting conversation is still an open one, so both badges move.
+    expect(during.open).toBe(before.open + 1)
+
+    // A colleague takes it over: still open, no longer waiting.
+    await ctx.db
+      .update(schema.conversations)
+      .set({ mode: 'human', waitingHumanSince: null })
+      .where(eq(schema.conversations.id, conversationId))
+    const after = await counts()
+    expect(after.waiting).toBe(before.waiting)
+    expect(after.open).toBe(before.open + 1)
+  })
+
+  test('a conversation resolved while it waited is no longer waiting', async () => {
+    // Resolving leaves the mode as it was. Counting the mode alone kept these on the red
+    // badge forever, until it read higher than the blue one it is meant to be part of.
+    const before = await counts()
+    const { conversationId } = await seed({
+      name: 'resolved while waiting',
+      owner: null,
+      customerSpokeAt: minutesAgo(3),
+      mode: 'waiting_human',
+      waitingSince: minutesAgo(3),
+    })
+    await ctx.db
+      .update(schema.conversations)
+      .set({ status: 'resolved' })
+      .where(eq(schema.conversations.id, conversationId))
+
+    const after = await counts()
+    expect(after.waiting).toBe(before.waiting)
+    expect(after.waiting).toBeLessThanOrEqual(after.open)
+  })
+
+  test('a viewer sees them too', async () => {
+    // Reading the inbox is a viewer's whole job, so the badges that point at it are theirs.
+    const response = await fixture.as(fixture.viewer, '/api/v1/conversations/counts')
+    expect(response.status).toBe(200)
+  })
+
+  test("another workspace's conversations never reach them", async () => {
+    const before = await counts()
+
+    const other = await createApiFixture(ctx, app)
+    const otherChannel = (
+      await ctx.db
+        .select({ id: schema.channels.id })
+        .from(schema.channels)
+        .where(eq(schema.channels.workspaceId, other.workspaceId))
+    )[0]?.id as string
+    const customerId = newId()
+    await ctx.db.insert(schema.customers).values({
+      id: customerId,
+      workspaceId: other.workspaceId,
+      displayName: 'elsewhere',
+      fields: {},
+    })
+    const identityId = newId()
+    await ctx.db.insert(schema.channelIdentities).values({
+      id: identityId,
+      workspaceId: other.workspaceId,
+      channelId: otherChannel,
+      externalId: `elsewhere-${Math.random().toString(36).slice(2, 12)}`,
+      customerId,
+      profile: {},
+    })
+    await ctx.db.insert(schema.conversations).values({
+      id: newId(),
+      workspaceId: other.workspaceId,
+      channelId: otherChannel,
+      customerId,
+      channelIdentityId: identityId,
+      mode: 'waiting_human',
+      status: 'open',
+    })
+
+    expect(await counts()).toEqual(before)
+    await other.cleanup()
+  })
+})

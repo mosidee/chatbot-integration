@@ -24,8 +24,39 @@ export function Layout() {
 
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 60_000 })
 
-  const items = [
-    { to: '/', label: t('nav.inbox') },
+  /**
+   * The badges on the Inbox: how many conversations are open, and how many are waiting for
+   * a person.
+   *
+   * Shown on every page, because the agent who most needs to know a customer is sitting in
+   * the inbox is the one looking at Settings or the dashboard. Polled here; the inbox also
+   * refreshes them the moment its own socket hears about a change.
+   */
+  const counts = useQuery({
+    queryKey: ['inbox-counts'],
+    queryFn: () => api.conversations.counts(),
+    refetchInterval: 20_000,
+  })
+
+  const items: NavItem[] = [
+    {
+      to: '/',
+      label: t('nav.inbox'),
+      badges: [
+        {
+          count: counts.data?.open ?? 0,
+          tone: 'open',
+          label: t('nav.openCount', { count: counts.data?.open ?? 0 }),
+          testId: 'nav-inbox-badge',
+        },
+        {
+          count: counts.data?.waiting ?? 0,
+          tone: 'waiting',
+          label: t('nav.waitingCount', { count: counts.data?.waiting ?? 0 }),
+          testId: 'nav-inbox-waiting-badge',
+        },
+      ],
+    },
     { to: '/dashboard', label: t('nav.dashboard') },
     { to: '/knowledge', label: t('nav.knowledge') },
     { to: '/simulator', label: t('nav.simulator') },
@@ -57,13 +88,14 @@ export function Layout() {
               key={item.to}
               to={item.to}
               className={cn(
-                'rounded-lg px-3 py-1.5 text-sm transition-colors',
+                'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
                 isActive(item.to)
                   ? 'bg-[var(--surface-muted)] font-medium text-[var(--text)]'
                   : 'text-[var(--text-muted)] hover:text-[var(--text)]',
               )}
             >
               {item.label}
+              <NavBadges badges={item.badges} />
             </Link>
           ))}
         </nav>
@@ -112,6 +144,54 @@ export function Layout() {
 }
 
 /**
+ * A count beside a navigation item.
+ *
+ * Blue for open, red for waiting on a person. The colours carry the difference in urgency:
+ * an open conversation the AI is answering needs nobody, a waiting one needs somebody now,
+ * and two numbers in the same colour would make an agent read both to find out which.
+ */
+type NavBadgeSpec = {
+  count: number
+  tone: 'open' | 'waiting'
+  /** What a screen reader hears, since a bare digit after "Inbox" says nothing. */
+  label: string
+  testId: string
+}
+
+/** A destination in the navigation, with counts of what is waiting there. */
+type NavItem = { to: string; label: string; badges?: NavBadgeSpec[] }
+
+const BADGE_TONES: Record<NavBadgeSpec['tone'], string> = {
+  open: 'bg-[var(--color-brand-600)]',
+  waiting: 'bg-red-600',
+}
+
+/** Nothing at all for a count of zero, so a badge means something when it appears. */
+function NavBadges({ badges }: { badges: NavBadgeSpec[] | undefined }) {
+  const shown = (badges ?? []).filter((badge) => badge.count > 0)
+  if (shown.length === 0) return null
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1">
+      {shown.map((badge) => (
+        <span key={badge.testId} className="inline-flex">
+          <span
+            data-testid={badge.testId}
+            aria-hidden="true"
+            className={cn(
+              'inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-semibold leading-none text-white tabular-nums',
+              BADGE_TONES[badge.tone],
+            )}
+          >
+            {badge.count > 99 ? '99+' : badge.count}
+          </span>
+          <span className="sr-only">{badge.label}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/**
  * Navigation on a phone.
  *
  * Every destination used to get an equal share of the bar. An admin who is also a platform
@@ -123,13 +203,7 @@ export function Layout() {
  */
 const BOTTOM_NAV_SLOTS = 4
 
-function BottomNav({
-  items,
-  isActive,
-}: {
-  items: { to: string; label: string }[]
-  isActive: (to: string) => boolean
-}) {
+function BottomNav({ items, isActive }: { items: NavItem[]; isActive: (to: string) => boolean }) {
   const { t } = useTranslation()
   const [showMore, setShowMore] = useState(false)
 
@@ -179,11 +253,14 @@ function BottomNav({
             key={item.to}
             to={item.to}
             className={cn(
-              'min-w-0 flex-1 truncate px-1 py-3 text-center text-xs font-medium transition-colors',
+              'flex min-w-0 flex-1 items-center justify-center gap-1 px-1 py-3 text-xs font-medium transition-colors',
               isActive(item.to) ? 'text-[var(--color-brand-600)]' : 'text-[var(--text-muted)]',
             )}
           >
-            {item.label}
+            {/* The label truncates and the badge does not: a clipped count is worse than a
+                clipped word, because the word is already known and the count is the news. */}
+            <span className="min-w-0 truncate">{item.label}</span>
+            <NavBadges badges={item.badges} />
           </Link>
         ))}
         {needsMore ? (

@@ -557,6 +557,7 @@ export const api = {
     discardSuggestion: (id: string, suggestionId: string) =>
       post<{ ok: true }>(`/v1/conversations/${id}/suggestions/${suggestionId}/discard`),
     reviewCount: () => get<{ count: number }>('/v1/conversations/review-count'),
+    counts: () => get<{ open: number; waiting: number }>('/v1/conversations/counts'),
     markReviewed: (id: string) => post<{ reviewedAt: string }>(`/v1/conversations/${id}/review`),
     sendVerificationLink: (id: string) =>
       post<{ ok: true; messageId: string }>(`/v1/conversations/${id}/verification-link`),

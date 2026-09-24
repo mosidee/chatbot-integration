@@ -111,7 +111,10 @@ export function Inbox() {
   })
   const setTab = (next: InboxTab) => void navigate({ to: '/', search: { tab: next } })
 
-  const statusFilter = tab === 'open' || tab === 'resolved' ? tab : undefined
+  // Waiting is open conversations only. Resolving does not change the mode, so without
+  // this a conversation closed while it waited sat in the Waiting tab for good.
+  const statusFilter =
+    tab === 'open' || tab === 'resolved' ? tab : tab === 'waiting' ? 'open' : undefined
   const modeFilter: ConversationMode | undefined = tab === 'waiting' ? 'waiting_human' : undefined
   // Review cuts across status: a resolved conversation still needs reading.
   const reviewFilter = tab === 'review'
@@ -160,6 +163,8 @@ export function Inbox() {
     if ('conversationId' in event) {
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       void queryClient.invalidateQueries({ queryKey: ['review-count'] })
+      // The navigation badges, so a new or handed-off conversation shows there at once.
+      void queryClient.invalidateQueries({ queryKey: ['inbox-counts'] })
       if (event.conversationId === selectedId) {
         void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
       }
@@ -427,6 +432,8 @@ function ConversationPane({
     void queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
     void queryClient.invalidateQueries({ queryKey: ['conversations'] })
     void queryClient.invalidateQueries({ queryKey: ['review-count'] })
+    // Resolving, reopening, taking over and handing back all move the Inbox badges.
+    void queryClient.invalidateQueries({ queryKey: ['inbox-counts'] })
   }
 
   /**
