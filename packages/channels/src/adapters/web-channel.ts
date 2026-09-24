@@ -78,7 +78,8 @@ export const webChannelAdapter: ChannelAdapter<WebChannelConfig> = {
     const parsed = inboundSchema.parse(JSON.parse(request.rawBody))
     return [
       {
-        platformEventId: parsed.eventId ?? crypto.randomUUID(),
+        // Never random: a retry re-parses the same body and must name the same event.
+        platformEventId: parsed.eventId ?? `body-${stableHash(request.rawBody)}`,
         externalId: parsed.visitorId,
         message: parsed.message,
         timestamp: new Date(),
@@ -136,4 +137,14 @@ export async function resolveWebVisitor(
     displayName: null,
     attributes: {},
   }
+}
+
+/** FNV-1a over the body: a stable name for an event that arrived without one. */
+function stableHash(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16)
 }

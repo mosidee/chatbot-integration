@@ -322,6 +322,68 @@ describe('runAgentTurn', () => {
     expect(result.trace.providerName).toBe('backup')
   })
 
+  /**
+   * Recommendation #10. A primary that recorded intents and then failed must not hand them
+   * to a fallback that never asked for them.
+   */
+  test('a failed primary attempt leaves nothing behind for the fallback', async () => {
+    const primary = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          { name: 'set_customer_field', arguments: { key: 'order_id', value: 'SO-1' } },
+          { name: 'tag_conversation', arguments: { tags: ['from-primary'] } },
+          { name: 'handoff_to_human', arguments: { reason: 'customer_requested', note: 'x' } },
+        ],
+      },
+      { kind: 'error', status: 503, message: 'fell over after the tools' },
+    ])
+    const fallback = mock([{ kind: 'text', text: 'answered cleanly' }])
+
+    const result = await runAgentTurn({
+      input: input(),
+      chatSlot: slot(primary.url, {
+        fallback: { provider: provider(fallback.url, { id: 'p2', name: 'backup' }), model: 'm' },
+      }),
+      visionSlot: null,
+      bound: bound(),
+      turnKey: 'turn-isolation',
+      prices: {},
+      mode: 'answer',
+      maxRetries: 0,
+    })
+
+    expect(result.text).toBe('answered cleanly')
+    expect(result.handoff).toBeNull()
+    expect(result.customerFieldUpdates).toEqual({})
+    expect(result.tagsToAdd).toEqual([])
+  })
+
+  /** Recommendation #11. A provider that never answers ends in a handoff, not a hang. */
+  test('a provider that never answers is abandoned at its deadline', async () => {
+    const silent = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })
+    try {
+      const started = Date.now()
+      const result = await runAgentTurn({
+        input: input(),
+        chatSlot: {
+          ...slot(`http://localhost:${silent.port}/v1`),
+          params: { timeoutMs: 300 },
+        },
+        visionSlot: null,
+        bound: bound(),
+        turnKey: 'turn-deadline',
+        prices: {},
+        mode: 'answer',
+        maxRetries: 0,
+      })
+      expect(Date.now() - started).toBeLessThan(5000)
+      expect(result.handoff?.reason).toBe('model_error')
+    } finally {
+      silent.stop(true)
+    }
+  })
+
   test('hands off rather than going silent when every provider fails', async () => {
     const down = mock([{ kind: 'error', status: 500, message: 'boom' }])
 

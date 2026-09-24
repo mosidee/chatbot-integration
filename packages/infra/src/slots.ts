@@ -42,6 +42,7 @@ export async function loadAiConfig(
       supportsTools: row.supportsTools,
       supportsVision: row.supportsVision,
       fetch,
+      revision: row.updatedAt.getTime().toString(),
     })
   }
 

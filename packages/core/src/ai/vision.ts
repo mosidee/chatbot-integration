@@ -1,4 +1,5 @@
 import { generateText } from 'ai'
+import { attemptSignal, DEFAULT_ATTEMPT_MS } from './deadline'
 import { stripReasoning } from './reasoning'
 import { runWithFallback } from './registry'
 import type { ImageInput, SlotConfig } from './types'
@@ -35,7 +36,7 @@ export type VisionResult = {
 export async function describeImages(
   slot: SlotConfig,
   images: ImageInput[],
-  options: { maxRetries?: number } = {},
+  options: { maxRetries?: number; signal?: AbortSignal } = {},
 ): Promise<VisionResult | null> {
   if (images.length === 0) return null
   if (!slot.primary && !slot.fallback) return null
@@ -48,6 +49,10 @@ export async function describeImages(
       temperature: slot.params.temperature ?? 0.2,
       maxOutputTokens: slot.params.maxOutputTokens ?? 500,
       maxRetries: options.maxRetries ?? slot.params.maxRetries ?? 1,
+      abortSignal: attemptSignal(
+        (slot.params.timeoutMs as number | undefined) ?? DEFAULT_ATTEMPT_MS.vision,
+        options.signal,
+      ),
       messages: [
         {
           role: 'user',

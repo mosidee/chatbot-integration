@@ -56,6 +56,9 @@ import { and, desc, eq } from 'drizzle-orm'
  * answered: it resumes at delivery rather than paying for a second answer and sending the
  * customer two.
  */
+/** Long enough for a primary and a fallback attempt, short enough that somebody is told. */
+const TURN_DEADLINE_MS = 150_000
+
 export async function processAiTurn(
   runtime: Runtime,
   ports: EffectPorts,
@@ -237,6 +240,9 @@ export async function processAiTurn(
   }
 
   const result = await runAgentTurn({
+    // The whole turn's budget, fallback included. A provider that accepts the request and
+    // never answers now ends in a handoff instead of holding a worker slot indefinitely.
+    signal: AbortSignal.timeout(TURN_DEADLINE_MS),
     input,
     chatSlot,
     visionSlot,
@@ -262,6 +268,21 @@ export async function processAiTurn(
   })
 
   const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)
+
+  /**
+   * The second check: before anything this turn learned is written to the customer.
+   *
+   * A colleague who took over while the model was thinking now owns the conversation, and
+   * fields and tags the AI inferred on its way to an answer nobody will send are its
+   * guesses, not theirs. The turn becomes a suggestion for them instead.
+   */
+  if (!(await stillAiOwned())) {
+    logger.info('a human took over during the turn; nothing it learned was written', {
+      conversationId: job.conversationId,
+    })
+    await suggestInstead(runtime, job)
+    return
+  }
 
   const changedFields = await mergeCustomerFields(
     db,
@@ -404,7 +425,29 @@ export async function processAiTurn(
    * answer everybody else believes was given. `turnKey` goes on the row here; the unique
    * index behind it is what stops two attempts of the same job both answering.
    */
-  await db.transaction(async (tx) => {
+  const committed = await db.transaction(async (tx) => {
+    /**
+     * The last check, and the only one that cannot race.
+     *
+     * Every earlier check is its own read, and a takeover could land between it and this
+     * commit. Locking the conversation row here makes the two serialise: a takeover that
+     * already committed is seen, and one that has not waits until this reply is stored and
+     * queued — where the outbound job's own check then withholds it.
+     */
+    if (job.deliver === 'send') {
+      const [locked] = await tx
+        .select({ mode: schema.conversations.mode })
+        .from(schema.conversations)
+        .where(
+          and(
+            eq(schema.conversations.id, job.conversationId),
+            eq(schema.conversations.workspaceId, job.workspaceId),
+          ),
+        )
+        .for('update')
+      if (!locked || !aiMaySend(locked.mode)) return false
+    }
+
     const message = await storeMessage(tx, {
       workspaceId: job.workspaceId,
       conversationId: job.conversationId,
@@ -453,7 +496,16 @@ export async function processAiTurn(
       },
       jobId: `outbound-${messageId}`,
     })
+    return true
   })
+
+  if (!committed) {
+    logger.info('a human took over as the reply was being stored; it was not sent', {
+      conversationId: job.conversationId,
+    })
+    await suggestInstead(runtime, job)
+    return
+  }
 
   // Queued after the reply so the customer is told why before being handed a login
   // prompt. Both are separate jobs on the outbound queue, which runs ten at a time, so
@@ -516,6 +568,31 @@ async function suggestInstead(runtime: Runtime, job: AiTurnJob): Promise<void> {
     },
     ...(job.triggerMessageId ? { jobId: `suggestion-${job.triggerMessageId}` } : {}),
   })
+}
+
+/**
+ * The turn failed for good: every retry threw before it could reply or hand off itself.
+ *
+ * Anything outside the model call — loading context, decrypting a provider key, a database
+ * error — used to exhaust the job's attempts with a log line, and the customer waited for
+ * an answer nobody knew was owed. This is the last path out of a turn, so it hands off like
+ * the others. `handOff` is safe to repeat: the state machine ignores a second handoff.
+ */
+export async function handOffAfterFailure(
+  runtime: Runtime,
+  ports: EffectPorts,
+  logger: Logger,
+  job: AiTurnJob,
+  error: Error,
+): Promise<void> {
+  await handOff(
+    runtime,
+    ports,
+    logger,
+    job,
+    'model_error',
+    `The AI turn failed after every retry, so this needs a person: ${error.message}`,
+  )
 }
 
 async function handOff(
