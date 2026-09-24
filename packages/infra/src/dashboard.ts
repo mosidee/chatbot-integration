@@ -57,21 +57,44 @@ export type DashboardSummary = {
   feedback: { up: number; down: number; reasons: { reason: string; count: number }[] }
   /** Conversations the AI handled that nobody has looked at yet. Not bounded by the window. */
   reviewQueueNow: number
+  /** The timezone the days were counted in, so the console can say so. */
+  timezone: string
 }
 
-function startOfWindow(days: number, now: Date): Date {
-  const since = new Date(now)
-  since.setUTCHours(0, 0, 0, 0)
-  since.setUTCDate(since.getUTCDate() - (days - 1))
-  return since
+/** A timezone Postgres and Intl both accept, or UTC. */
+function safeTimezone(timezone: string | undefined): string {
+  if (!timezone) return 'UTC'
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: timezone })
+    return /^[A-Za-z0-9_+\-/]+$/.test(timezone) ? timezone : 'UTC'
+  } catch {
+    return 'UTC'
+  }
 }
 
 export async function loadDashboard(
   db: Database,
-  input: { workspaceId: string; days: number; now?: Date },
+  input: {
+    workspaceId: string
+    days: number
+    now?: Date
+    /**
+     * The workspace's own timezone (`businessHours.timezone`). Days are its days: a
+     * Bangkok salon's Monday starts at midnight in Bangkok, which is 17:00 on Sunday in
+     * UTC, and bucketing by UTC put its busiest evening on the wrong day.
+     */
+    timezone?: string
+  },
 ): Promise<DashboardSummary> {
   const now = input.now ?? new Date()
-  const since = startOfWindow(input.days, now)
+  const tz = safeTimezone(input.timezone)
+  const [windowStart] = [
+    ...(await db.execute<{ since: string }>(sql`
+      SELECT ((date_trunc('day', ${now.toISOString()}::timestamptz AT TIME ZONE ${tz})
+               - make_interval(days => ${input.days - 1})) AT TIME ZONE ${tz})::text AS since
+    `)),
+  ]
+  const since = new Date(windowStart?.since ?? now)
   /**
    * As text, not as a Date.
    *
@@ -95,13 +118,13 @@ export async function loadDashboard(
     downReasons,
   ] = await Promise.all([
     db.execute<{ day: string; count: number }>(sql`
-        SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
+        SELECT to_char(date_trunc('day', created_at AT TIME ZONE ${tz}), 'YYYY-MM-DD') AS day, count(*)::int AS count
         FROM ${schema.conversations}
         WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz
         GROUP BY 1
       `),
     db.execute<{ day: string; count: number }>(sql`
-        SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
+        SELECT to_char(date_trunc('day', created_at AT TIME ZONE ${tz}), 'YYYY-MM-DD') AS day, count(*)::int AS count
         FROM ${schema.messages}
         WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz AND direction = 'inbound'
         GROUP BY 1
@@ -110,18 +133,27 @@ export async function loadDashboard(
       day: string
       outcome: string
       count: number
+      delivered: number
       cost: string | null
       tokens_in: number | null
       tokens_out: number | null
     }>(sql`
-        SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+        SELECT to_char(date_trunc('day', t.created_at AT TIME ZONE ${tz}), 'YYYY-MM-DD') AS day,
                outcome,
                count(*)::int AS count,
+               -- A turn that wrote a reply is not an answered customer until the reply
+               -- reached them: withheld by a takeover, failed, or still queued, it is not.
+               (count(*) FILTER (WHERE EXISTS (
+                  SELECT 1 FROM ${schema.messages} m
+                  WHERE m.workspace_id = ${workspaceId}
+                    AND m.ai_trace_id = t.id
+                    AND m.status IN ('sent', 'delivered', 'read')
+               )))::int AS delivered,
                coalesce(sum(cost_estimate), 0)::text AS cost,
                coalesce(sum(tokens_in), 0)::int AS tokens_in,
                coalesce(sum(tokens_out), 0)::int AS tokens_out
-        FROM ${schema.aiTraces}
-        WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz
+        FROM ${schema.aiTraces} t
+        WHERE t.workspace_id = ${workspaceId} AND t.created_at >= ${sinceIso}::timestamptz
         GROUP BY 1, 2
       `),
     /**
@@ -132,7 +164,11 @@ export async function loadDashboard(
         WITH bounds AS (
           SELECT conversation_id,
                  min(created_at) FILTER (WHERE direction = 'inbound') AS asked,
-                 min(created_at) FILTER (WHERE direction = 'outbound') AS answered
+                 -- When a reply reached them, not when one was written: a queued, failed or
+                 -- withheld reply answers nobody.
+                 min(coalesce(sent_at, created_at)) FILTER (
+                   WHERE direction = 'outbound' AND status IN ('sent', 'delivered', 'read')
+                 ) AS answered
           FROM ${schema.messages}
           WHERE workspace_id = ${workspaceId} AND created_at >= ${sinceIso}::timestamptz
           GROUP BY conversation_id
@@ -161,11 +197,12 @@ export async function loadDashboard(
         WITH waits AS (
           SELECT h.id,
                  extract(epoch FROM (
-                   (SELECT min(m.created_at)
+                   (SELECT min(coalesce(m.sent_at, m.created_at))
                     FROM ${schema.messages} m
                     WHERE m.workspace_id = ${workspaceId}
                       AND m.conversation_id = h.conversation_id
                       AND m.sender_type = 'human'
+                      AND m.status IN ('sent', 'delivered', 'read')
                       AND m.created_at >= h.occurred_at)
                    - h.occurred_at
                  )) AS seconds
@@ -182,7 +219,7 @@ export async function loadDashboard(
         FROM waits
       `),
     db.execute<{ day: string; count: number }>(sql`
-        SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
+        SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE ${tz}), 'YYYY-MM-DD') AS day, count(*)::int AS count
         FROM ${schema.handoffEvents}
         WHERE workspace_id = ${workspaceId} AND occurred_at >= ${sinceIso}::timestamptz
         GROUP BY 1
@@ -248,10 +285,16 @@ export async function loadDashboard(
   // Every day in the window, including the quiet ones. A gap in a chart reads as missing
   // data rather than as nothing having happened.
   const days: DashboardDay[] = []
+  // The workspace's calendar dates, named the way Postgres named its buckets. Midday of
+  // each day, so a daylight-saving change cannot tip a label onto the neighbouring date.
+  const dayName = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
   for (let index = 0; index < input.days; index += 1) {
-    const date = new Date(since)
-    date.setUTCDate(date.getUTCDate() + index)
-    const day = date.toISOString().slice(0, 10)
+    const day = dayName.format(new Date(since.getTime() + (index * 24 + 12) * 60 * 60 * 1000))
     const traces = [...tracesPerDay].filter((row) => row.day === day)
 
     days.push({
@@ -260,7 +303,7 @@ export async function loadDashboard(
       customerMessages: [...messagesPerDay].find((row) => row.day === day)?.count ?? 0,
       answered: traces
         .filter((row) => row.outcome === 'sent')
-        .reduce((sum, row) => sum + row.count, 0),
+        .reduce((sum, row) => sum + row.delivered, 0),
       // From the event log, not from traces: a handoff triggered by media the AI cannot
       // read never ran a turn, so it has no trace and would otherwise be invisible here
       // while still appearing in the reasons beside it.
@@ -279,7 +322,9 @@ export async function loadDashboard(
     totals: {
       conversations: days.reduce((sum, day) => sum + day.conversations, 0),
       customerMessages: days.reduce((sum, day) => sum + day.customerMessages, 0),
-      answered: totalFor('sent'),
+      answered: allTraces
+        .filter((row) => row.outcome === 'sent')
+        .reduce((sum, row) => sum + row.delivered, 0),
       handoffs: days.reduce((sum, day) => sum + day.handoffs, 0),
       errors: totalFor('error'),
       cost: allTraces.reduce((sum, row) => sum + Number(row.cost ?? 0), 0),
@@ -308,5 +353,6 @@ export async function loadDashboard(
       reasons: [...downReasons].map((row) => ({ reason: row.reason, count: row.count })),
     },
     reviewQueueNow,
+    timezone: tz,
   }
 }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { loadEnv } from '@ci/config'
 import { newId, schema } from '@ci/db'
 import { signMediaUrl } from '@ci/infra'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
 import { type ApiFixture, createApiFixture } from './helpers/session'
@@ -641,5 +641,41 @@ describe('the inbox badges', () => {
 
     expect(await counts()).toEqual(before)
     await other.cleanup()
+  })
+})
+
+/**
+ * Recommendation #22: a queue longer than a page is reachable, every row once, even when
+ * rows tie on every sort key.
+ */
+describe('paging the queue', () => {
+  test('reaches every conversation exactly once', async () => {
+    const tied = minutesAgo(5)
+    for (let index = 0; index < 120; index += 1) {
+      await seed({ name: `page-${index}`, owner: null, customerSpokeAt: tied, answeredAt: tied })
+    }
+    const [{ total } = { total: 0 }] = await ctx.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.workspaceId, fixture.workspaceId))
+
+    const seen: string[] = []
+    let offset: number | null = 0
+    let pages = 0
+    while (offset !== null && pages < 20) {
+      const response = await fixture.as(
+        fixture.admin,
+        `/api/v1/conversations?limit=50&offset=${offset}`,
+      )
+      const body = (await response.json()) as {
+        conversations: { id: string; lastMessage: unknown }[]
+        nextOffset: number | null
+      }
+      seen.push(...body.conversations.map((row) => row.id))
+      offset = body.nextOffset
+      pages += 1
+    }
+    expect(new Set(seen).size).toBe(seen.length)
+    expect(seen.length).toBe(total)
   })
 })
