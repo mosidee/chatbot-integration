@@ -1,4 +1,4 @@
-import type { RetrieveOptions, RetrieveResult, Retriever, ScoredChunk } from '@ci/core'
+import type { FetchLike, RetrieveOptions, RetrieveResult, Retriever, ScoredChunk } from '@ci/core'
 
 /**
  * Retrieval from an existing knowledge platform.
@@ -22,6 +22,8 @@ export type ExternalRetrievalConfig = {
   topK?: number
   scoreThreshold?: number
   timeoutMs?: number
+  /** The tenant typed `baseUrl`, so this is `Runtime.providerFetch`, never the plain fetch. */
+  fetch: FetchLike
 }
 
 type NormalisedHit = {
@@ -45,7 +47,7 @@ async function queryDify(
   signal: AbortSignal,
 ): Promise<NormalisedHit[]> {
   const url = `${config.baseUrl.replace(/\/$/, '')}/datasets/${config.datasetId}/retrieve`
-  const response = await fetch(url, {
+  const response = await config.fetch(url, {
     method: 'POST',
     signal,
     headers: headers(config),
@@ -90,7 +92,7 @@ async function queryRagflow(
   signal: AbortSignal,
 ): Promise<NormalisedHit[]> {
   const url = `${config.baseUrl.replace(/\/$/, '')}/api/v1/retrieval`
-  const response = await fetch(url, {
+  const response = await config.fetch(url, {
     method: 'POST',
     signal,
     headers: headers(config),
@@ -135,7 +137,7 @@ async function queryGeneric(
   topK: number,
   signal: AbortSignal,
 ): Promise<NormalisedHit[]> {
-  const response = await fetch(config.baseUrl, {
+  const response = await config.fetch(config.baseUrl, {
     method: 'POST',
     signal,
     headers: headers(config),

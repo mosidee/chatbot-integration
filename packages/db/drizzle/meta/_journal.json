@@ -78,6 +78,13 @@
       "when": 1790099522485,
       "tag": "0010_lumpy_lizard",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790244096085,
+      "tag": "0011_fearless_hardball",
+      "breakpoints": true
     }
   ]
 }

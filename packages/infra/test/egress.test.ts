@@ -294,4 +294,159 @@ describe('createRestrictedFetch', () => {
     })
     expect(await refusal(fetcher('https://loop.example.com/'))).toContain('too many redirects')
   })
+
+  /**
+   * Recommendation #5: every redirect status, crossing origins and not.
+   *
+   * A tool's credential can travel in any header its tenant names, so the rule is which
+   * headers may cross, not which may not. And a 307 or 308 replays the body by definition,
+   * so across origins it is refused rather than handing account data to another host.
+   */
+  const TWO_HOSTS = resolvesTo({
+    'api.example.com': ['93.184.216.34'],
+    'elsewhere.example.com': ['93.184.216.35'],
+  })
+
+  for (const code of [301, 302, 303, 307, 308]) {
+    test(`a cross-origin ${code} carries no custom credential and no body`, async () => {
+      const seen: { url: string; headers: Headers; body: unknown }[] = []
+      const fetcher = createRestrictedFetch({
+        lookup: TWO_HOSTS,
+        transport: async (input, init) => {
+          seen.push({ url: String(input), headers: new Headers(init?.headers), body: init?.body })
+          return String(input).includes('api.example.com')
+            ? new Response(null, {
+                status: code,
+                headers: { location: 'https://elsewhere.example.com/next' },
+              })
+            : new Response('arrived')
+        },
+      })
+
+      const request = fetcher('https://api.example.com/v1', {
+        method: 'POST',
+        headers: {
+          'x-api-key': 'tenant-secret',
+          'x-custom-token': 'another-secret',
+          authorization: 'Bearer third-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ account: 'A-1' }),
+      })
+
+      if (code === 307 || code === 308) {
+        expect(await refusal(request)).toContain('another origin')
+        expect(seen).toHaveLength(1)
+        return
+      }
+
+      await request
+      expect(seen).toHaveLength(2)
+      const second = seen[1]
+      expect(second?.headers.get('x-api-key')).toBeNull()
+      expect(second?.headers.get('x-custom-token')).toBeNull()
+      expect(second?.headers.get('authorization')).toBeNull()
+      expect(second?.headers.get('content-type')).toBe('application/json')
+      expect(second?.body).toBeUndefined()
+    })
+
+    test(`a same-origin ${code} keeps the credential${code >= 307 ? ' and the body' : ''}`, async () => {
+      const seen: { headers: Headers; body: unknown; method?: string }[] = []
+      const fetcher = createRestrictedFetch({
+        lookup: TWO_HOSTS,
+        transport: async (input, init) => {
+          seen.push({ headers: new Headers(init?.headers), body: init?.body, method: init?.method })
+          return String(input).endsWith('/v1')
+            ? new Response(null, { status: code, headers: { location: '/v2' } })
+            : new Response('arrived')
+        },
+      })
+
+      await fetcher('https://api.example.com/v1', {
+        method: 'POST',
+        headers: { 'x-api-key': 'tenant-secret' },
+        body: 'payload',
+      })
+
+      expect(seen[1]?.headers.get('x-api-key')).toBe('tenant-secret')
+      if (code >= 307) {
+        expect(seen[1]?.method).toBe('POST')
+        expect(seen[1]?.body).toBe('payload')
+      } else {
+        expect(seen[1]?.method).toBe('GET')
+        expect(seen[1]?.body).toBeUndefined()
+      }
+    })
+  }
+
+  test('a Request object keeps its method, headers and body', async () => {
+    // The AI SDK may hand over a Request; reading only its URL sent a POST as a bare GET.
+    const seen: { method?: string; auth: string | null; body: string }[] = []
+    const fetcher = createRestrictedFetch({
+      lookup: PUBLIC,
+      transport: async (_input, init) => {
+        seen.push({
+          method: init?.method,
+          auth: new Headers(init?.headers).get('authorization'),
+          body: new TextDecoder().decode(init?.body as ArrayBuffer),
+        })
+        return new Response('ok')
+      },
+    })
+    await fetcher(
+      new Request('https://api.example.com/v1/chat', {
+        method: 'POST',
+        headers: { authorization: 'Bearer k' },
+        body: '{"model":"m"}',
+      }),
+    )
+    expect(seen).toEqual([{ method: 'POST', auth: 'Bearer k', body: '{"model":"m"}' }])
+  })
+})
+
+/**
+ * Recommendation #4: a tenant's provider URL is held to the same rule, except for origins a
+ * platform admin approved for that tenant.
+ */
+describe('approved origins', () => {
+  const GATEWAY = 'http://10.0.0.5:8080'
+
+  test('an approved private origin is reached, over http', async () => {
+    const fetcher = createRestrictedFetch({
+      allowedOrigins: [GATEWAY],
+      lookup: PUBLIC,
+      transport: async () => new Response('ok'),
+    })
+    const response = await fetcher(`${GATEWAY}/v1/models`)
+    expect(await response.text()).toBe('ok')
+  })
+
+  test('approval is the whole origin: another port or scheme on that host is refused', async () => {
+    const fetcher = createRestrictedFetch({
+      allowedOrigins: [GATEWAY],
+      lookup: PUBLIC,
+      transport: async () => new Response('ok'),
+    })
+    expect(await refusal(fetcher('http://10.0.0.5:5432/'))).toContain('only https')
+    expect(await refusal(fetcher('https://10.0.0.5:8080/'))).toContain('not a public address')
+    expect(await refusal(fetcher('http://127.0.0.1:20128/'))).toContain('only https')
+  })
+
+  test('an approved origin cannot redirect somewhere unapproved', async () => {
+    const fetcher = createRestrictedFetch({
+      allowedOrigins: [GATEWAY],
+      lookup: PUBLIC,
+      transport: async () =>
+        new Response(null, { status: 302, headers: { location: 'https://169.254.169.254/' } }),
+    })
+    expect(await refusal(fetcher(`${GATEWAY}/v1/models`))).toContain('not a public address')
+  })
+
+  test('without approval the same gateway is refused', async () => {
+    const fetcher = createRestrictedFetch({
+      lookup: PUBLIC,
+      transport: async () => new Response('ok'),
+    })
+    expect(await refusal(fetcher(`${GATEWAY}/v1/models`))).toContain('only https')
+  })
 })

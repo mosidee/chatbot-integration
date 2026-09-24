@@ -93,18 +93,42 @@ export function platformRoutes(ctx: ApiContext) {
       .patch(
         '/tenants/:id',
         async ({ params, body, status, user }) => {
-          if (body.name === undefined && body.slug === undefined) return { ok: true as const }
+          if (
+            body.name === undefined &&
+            body.slug === undefined &&
+            body.privateEgressOrigins === undefined
+          ) {
+            return { ok: true as const }
+          }
 
           try {
-            const updated = await db
-              .update(schema.organization)
-              .set({
-                ...(body.name !== undefined ? { name: body.name } : {}),
-                ...(body.slug !== undefined ? { slug: body.slug } : {}),
-              })
-              .where(eq(schema.organization.id, params.id))
-              .returning({ id: schema.organization.id })
-            if (updated.length === 0) return status(404, { error: 'Tenant not found' })
+            if (body.name !== undefined || body.slug !== undefined) {
+              const updated = await db
+                .update(schema.organization)
+                .set({
+                  ...(body.name !== undefined ? { name: body.name } : {}),
+                  ...(body.slug !== undefined ? { slug: body.slug } : {}),
+                })
+                .where(eq(schema.organization.id, params.id))
+                .returning({ id: schema.organization.id })
+              if (updated.length === 0) return status(404, { error: 'Tenant not found' })
+            }
+            /**
+             * Which private or plain-http origins this tenant's providers may reach. Here and
+             * nowhere else: a tenant admin configures providers, and letting them approve
+             * their own destinations would be the egress rule granting its own exception.
+             */
+            if (body.privateEgressOrigins !== undefined) {
+              const updated = await db
+                .update(schema.workspaces)
+                .set({
+                  privateEgressOrigins: [...new Set(body.privateEgressOrigins)],
+                  updatedAt: new Date(),
+                })
+                .where(eq(schema.workspaces.id, params.id))
+                .returning({ id: schema.workspaces.id })
+              if (updated.length === 0) return status(404, { error: 'Tenant not found' })
+            }
           } catch (error) {
             if (isUniqueViolation(error)) {
               return status(409, { error: `The slug "${body.slug}" is already in use` })

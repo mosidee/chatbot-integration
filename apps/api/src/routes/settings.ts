@@ -11,7 +11,7 @@ import {
   schema,
 } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
-import { withSettingsDefaults } from '@ci/infra'
+import { EgressRefusedError, withSettingsDefaults, workspaceProviderFetch } from '@ci/infra'
 import { aiTaskSchema, channelTypeSchema, conversationModeSchema, languageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -434,7 +434,10 @@ export function settingsRoutes(ctx: ApiContext) {
             : null
 
           try {
-            const response = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/models`, {
+            // Through the restricted client: the base URL is typed by a tenant admin, and
+            // this route used to be a way to make the server fetch any address it liked.
+            const providerFetch = await workspaceProviderFetch(runtime, workspaceId)
+            const response = await providerFetch(`${provider.baseUrl.replace(/\/$/, '')}/models`, {
               headers: key ? { authorization: `Bearer ${key}` } : {},
               signal: AbortSignal.timeout(10_000),
             })
@@ -446,7 +449,15 @@ export function settingsRoutes(ctx: ApiContext) {
                 .filter((id): id is string => Boolean(id)),
             }
           } catch (error) {
-            return { models: [], error: error instanceof Error ? error.message : String(error) }
+            const message = error instanceof Error ? error.message : String(error)
+            return {
+              models: [],
+              // The one refusal a tenant admin cannot fix alone, so say who can.
+              error:
+                error instanceof EgressRefusedError
+                  ? `${message}. A platform admin can approve this address for your workspace.`
+                  : message,
+            }
           }
         },
         { auth: 'admin', params: z.object({ id: z.string() }) },
@@ -488,6 +499,7 @@ export function settingsRoutes(ctx: ApiContext) {
                 : {},
               supportsTools: provider.supportsTools,
               supportsVision: provider.supportsVision,
+              fetch: await workspaceProviderFetch(runtime, workspaceId),
             },
             model: body.model,
           }

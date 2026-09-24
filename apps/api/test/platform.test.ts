@@ -352,3 +352,89 @@ describe('account recovery', () => {
     expect(response.status).toBe(403)
   })
 })
+
+/**
+ * Recommendation #4. A tenant admin types provider URLs, so reaching a private one is an
+ * exception only a platform admin may grant, one tenant at a time.
+ */
+describe('approved private endpoints', () => {
+  test('a provider on a private address is refused until a platform admin approves it', async () => {
+    const gateway = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () => Response.json({ data: [{ id: 'gateway-model' }] }),
+    })
+    const origin = `http://127.0.0.1:${gateway.port}`
+    try {
+      const created = await fixture.as(fixture.admin, '/api/v1/settings/providers', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'private gateway', baseUrl: `${origin}/v1` }),
+      })
+      const { id } = await created.json()
+      const models = () =>
+        fixture
+          .as(fixture.admin, `/api/v1/settings/providers/${id}/models`, { method: 'POST' })
+          .then((r) => r.json())
+
+      const refused = await models()
+      expect(refused.models).toEqual([])
+      expect(refused.error).toContain('platform admin')
+
+      // A tenant's own settings cannot grant it: the key is not part of what they may write.
+      await fixture.as(fixture.admin, '/api/v1/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ privateEgressOrigins: [origin] }),
+      })
+      const [unchanged] = await ctx.db
+        .select({ origins: schema.workspaces.privateEgressOrigins })
+        .from(schema.workspaces)
+        .where(eq(schema.workspaces.id, fixture.workspaceId))
+      expect(unchanged?.origins).toEqual([])
+
+      // Nor can somebody who is not a platform admin reach the route that can.
+      const denied = await fixture.as(
+        fixture.agent,
+        `/api/v1/platform/tenants/${fixture.workspaceId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ privateEgressOrigins: [origin] }),
+        },
+      )
+      expect(denied.status).toBe(403)
+
+      const approved = await fixture.as(
+        fixture.admin,
+        `/api/v1/platform/tenants/${fixture.workspaceId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ privateEgressOrigins: [`${origin}/ignored/path`] }),
+        },
+      )
+      expect(approved.status).toBe(200)
+
+      const { tenants } = await fixture
+        .as(fixture.admin, '/api/v1/platform/tenants')
+        .then((r) => r.json())
+      const row = tenants.find((t: { id: string }) => t.id === fixture.workspaceId)
+      // Stored as the bare origin, so a pasted path approves nothing narrower or wider.
+      expect(row.privateEgressOrigins).toEqual([origin])
+
+      expect((await models()).models).toEqual(['gateway-model'])
+    } finally {
+      gateway.stop(true)
+      await ctx.db
+        .update(schema.workspaces)
+        .set({ privateEgressOrigins: [] })
+        .where(eq(schema.workspaces.id, fixture.workspaceId))
+    }
+  })
+
+  test('refuses something that is not an origin', async () => {
+    const response = await fixture.as(
+      fixture.admin,
+      `/api/v1/platform/tenants/${fixture.workspaceId}`,
+      { method: 'PATCH', body: JSON.stringify({ privateEgressOrigins: ['not a url'] }) },
+    )
+    expect(response.status).toBe(422)
+  })
+})

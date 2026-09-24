@@ -248,8 +248,23 @@ without spending money.
   on an address must expand it rather than match its text. `packages/infra/src/egress.ts`
   does; an earlier version matched the dotted form only and let the hex form reach loopback.
 - `redirect: 'manual'` switches off everything `fetch` does with a redirect, not just the
-  following. Credential headers must be dropped by hand when the origin changes, and 301,
-  302 and 303 must become a GET without a body, or a write is replayed at the new location.
+  following. Headers must be filtered by hand when the origin changes — an **allowlist**,
+  because a tool's credential can be in any header its tenant names (`x-api-key` survived
+  the old denylist) — a cross-origin 307/308 is refused, and 301, 302 and 303 must become a
+  GET without a body, or a write is replayed at the new location.
+- **Every URL a tenant types is restricted egress, providers included.** Model calls,
+  embeddings, rerank, `/models` discovery and external retrieval use
+  `workspaceProviderFetch(runtime, workspaceId)`; `ProviderProfile.fetch` is required so a
+  builder cannot forget it. A private gateway (e.g. `http://10.0.0.5:8080`) is
+  reachable only when a **platform admin** lists its origin in `workspaces.
+  private_egress_origins` from the Platform page — a column, not a setting, because tenant
+  admins write settings. A new provider or retrieval call that uses the global `fetch` is an
+  SSRF hole.
+- **Stored files are served through `mediaServingHeaders`,** never with the stored MIME type
+  as-is: that type is whatever the sender claimed, and an SVG or HTML file served inline on
+  the console's origin runs with the agent's session. Uploads accept raster images by name
+  (not `image/`, which admits SVG) and take only a short alphanumeric extension from the
+  submitted file name, which used to be able to put `/` into the storage key.
 - An idempotency key must not depend on position. A retry re-runs the whole turn and the
   model may ask for the same operations in a different order, so a key built from an index
   hands the second operation the key the tenant already answered for the first. Keys are

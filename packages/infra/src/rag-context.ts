@@ -1,4 +1,4 @@
-import type { RetrievedChunk, SlotConfig } from '@ci/core'
+import type { FetchLike, RetrievedChunk, SlotConfig } from '@ci/core'
 import type { Database } from '@ci/db'
 import type { ChannelType, Language } from '@ci/shared'
 import { createPostgresRetriever, searchPastConversations } from './retrieval'
@@ -20,6 +20,7 @@ export type StoredExternalRetrieval = {
 export async function resolveExternalRetrieval(
   stored: StoredExternalRetrieval | null | undefined,
   secretKey: string,
+  fetch: FetchLike,
 ): Promise<ExternalRetrievalConfig | null> {
   if (!stored) return null
   const { decryptSecret } = await import('@ci/db')
@@ -28,6 +29,7 @@ export async function resolveExternalRetrieval(
     baseUrl: stored.baseUrl,
     apiKey: stored.apiKeyEncrypted ? await decryptSecret(stored.apiKeyEncrypted, secretKey) : null,
     datasetId: stored.datasetId,
+    fetch,
     ...(stored.topK !== undefined ? { topK: stored.topK } : {}),
     ...(stored.scoreThreshold !== undefined ? { scoreThreshold: stored.scoreThreshold } : {}),
   }

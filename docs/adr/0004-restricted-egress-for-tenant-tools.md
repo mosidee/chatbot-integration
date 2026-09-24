@@ -30,9 +30,8 @@ Tenant-defined tools are fetched through `createRestrictedFetch` in
   `::1`, `::`, `fc00::/7`, `fe80::/10`, and v4-mapped forms of any of those;
 - follows redirects by hand, at most three, applying the same check to each hop.
 
-Operator-level configuration — provider base URLs, external retrieval — keeps the ordinary
-client. A self-hosted gateway on a private address is the legitimate case there, and the
-person who configures it is the person who runs the infrastructure.
+~~Operator-level configuration — provider base URLs, external retrieval — keeps the ordinary
+client.~~ Superseded 2026-09-24; see "Providers are tenant-typed too" below.
 
 `TOOL_EGRESS_ALLOW_PRIVATE` relaxes the rule for local development and tests, where the
 tool endpoint is on localhost. `createRuntime` throws at startup if it is set while
@@ -64,6 +63,30 @@ hex form, `::ffff:0:a.b.c.d`, the deprecated `::a.b.c.d`, and NAT64's `64:ff9b::
 An address the expander cannot read is refused. This decides whether to send a request, so
 the safe answer to "I do not understand this" is no.
 
+## Providers are tenant-typed too (2026-09-24)
+
+The exemption above assumed the person typing a provider URL runs the infrastructure. Since
+M6 a workspace admin is a tenant's own admin, and the provider form, the `/models` discovery
+button and the external-retrieval settings are all theirs. Discovery alone was a way to make
+the server GET any address and read back the answer.
+
+So every URL a tenant types goes through the restricted client: tools (`Runtime.toolFetch`),
+and model providers, embeddings, rerank and external retrieval (`workspaceProviderFetch`).
+`ProviderProfile.fetch` and `ExternalRetrievalConfig.fetch` are required fields, so no
+builder can fall back to the global `fetch` by forgetting.
+
+A self-hosted gateway on a private address is still legitimate — the pilot's is on
+a private range — but approving one is not the tenant's call. `workspaces.private_egress_origins`
+lists the origins one tenant's providers may reach although private or plain http. It is a
+column, not a key in `settings`, because tenant admins write `settings`; only the
+`platform: true` tenant PATCH writes it, from the Platform page. Matching is on the whole
+origin, so approving a gateway approves nothing else on that machine, and a redirect from an
+approved origin is checked afresh. Tools never consult the list.
+
+Migration 0011 approved each tenant's already-configured plain-http and IP-literal provider and
+retrieval origins once,
+so deploying it did not cut off a working gateway. A platform admin prunes them from there.
+
 ## Redirects are followed by hand, so their rules must be too
 
 `redirect: 'manual'` is what lets each hop be checked, and it also switches off everything
@@ -72,6 +95,12 @@ was configured for, so replaying the headers would hand a tenant's API key to wh
 endpoint redirected to — an expired domain, or somebody else's server. And 303, along with
 301 and 302 in practice, means "go and GET this instead", so replaying a write's body is how
 one cancellation becomes two. Both are now done explicitly.
+
+Which headers cross is an allowlist (`accept`, `accept-encoding`, `accept-language`,
+`content-type`, `user-agent`), not a list of credential headers to strip. The first version
+stripped `authorization`, `cookie` and `proxy-authorization`, and a tool whose credential
+travelled as `x-api-key` — the header name is the tenant's choice — handed it to the redirect
+target. A cross-origin 307 or 308, which replays the body by definition, is refused.
 
 ## Residual risk, accepted
 

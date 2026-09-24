@@ -1,4 +1,5 @@
 import type { AiTask, HandoffReason, Language } from '@ci/shared'
+import type { FetchLike } from './http-tool'
 import type { PendingWrite } from './tools'
 
 /** A provider profile with its secrets already decrypted by the caller. */
@@ -11,6 +12,12 @@ export type ProviderProfile = {
   /** Models without function calling take the answer-only path. */
   supportsTools: boolean
   supportsVision: boolean
+  /**
+   * How this provider is reached. Required so that no builder can fall back to the plain
+   * `fetch` by forgetting it: the URL is typed by a tenant admin, so the runtime hands in a
+   * client that refuses internal addresses (`Runtime.providerFetch`).
+   */
+  fetch: FetchLike
 }
 
 export type SlotTarget = {

@@ -35,12 +35,19 @@ export type Runtime = {
    */
   outbox: Outbox
   blob: BlobStore
-  /**
-   * The client tenant-defined tools are fetched through. Restricted on purpose; see
-   * `egress.ts`. Provider and retrieval calls keep the plain `fetch`, because a self-hosted
-   * gateway on a private address is a legitimate operator configuration.
-   */
+  /** The client tenant-defined tools are fetched through. Restricted; see `egress.ts`. */
   toolFetch: FetchLike
+  /**
+   * The client model providers and external retrieval are fetched through, for a tenant.
+   *
+   * Restricted like `toolFetch`, since a tenant admin types these URLs too, except that the
+   * origins given are reachable although private or plain http: a self-hosted gateway on the
+   * operator's network is a legitimate configuration, but only a platform admin may approve
+   * one, per tenant (`workspaces.private_egress_origins`). Use `workspaceProviderFetch`
+   * rather than calling this with a list of your own. The same list returns the same client,
+   * which the model caches in `packages/core` are keyed on.
+   */
+  providerFetch: (allowedOrigins: readonly string[]) => FetchLike
   publisher: ReturnType<typeof createPublisher>
   logger: Logger
   close: () => Promise<void>
@@ -65,7 +72,7 @@ export function createRuntime(
     // The same refusal `db:reset` makes, for the same reason: this is a switch that is
     // harmless locally and hands the internal network to any tenant admin in production.
     throw new Error(
-      'TOOL_EGRESS_ALLOW_PRIVATE must not be set in production: it would let a tenant-defined tool reach Postgres, Redis, MinIO and the model gateway.',
+      'TOOL_EGRESS_ALLOW_PRIVATE must not be set in production: it would let any URL a tenant types — a tool, a provider, a retrieval endpoint — reach Postgres, Redis, MinIO and the model gateway. Approve a private gateway for one tenant from the Platform page instead.',
     )
   }
 
@@ -90,6 +97,7 @@ export function createRuntime(
       })
 
   const publisher = createPublisher(redis)
+  const providerClients = new Map<string, FetchLike>()
 
   return {
     env,
@@ -100,6 +108,15 @@ export function createRuntime(
     outbox: createOutbox(),
     blob,
     toolFetch: createRestrictedFetch({ allowPrivate: allowPrivateEgress }),
+    providerFetch: (allowedOrigins) => {
+      const key = [...allowedOrigins].sort().join(' ')
+      let client = providerClients.get(key)
+      if (!client) {
+        client = createRestrictedFetch({ allowPrivate: allowPrivateEgress, allowedOrigins })
+        providerClients.set(key, client)
+      }
+      return client
+    },
     publisher,
     logger,
     close: async () => {

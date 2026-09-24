@@ -25,6 +25,8 @@
  * response is repaired when it can be repaired, and passed through untouched otherwise.
  */
 
+import type { FetchLike } from './http-tool'
+
 type ToolCallFragment = {
   index?: number
   id?: string
@@ -205,7 +207,7 @@ function askedForStreaming(init: RequestInit | undefined): boolean {
  * request did not ask for one. Anything it cannot make sense of is returned exactly as it
  * arrived, so a real stream is never disturbed and a genuine error still reads as itself.
  */
-export function createCompatibleFetch(baseFetch: typeof fetch = fetch): typeof fetch {
+export function createCompatibleFetch(baseFetch: FetchLike = fetch): typeof fetch {
   const compatible = async (
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
@@ -239,6 +241,6 @@ export function createCompatibleFetch(baseFetch: typeof fetch = fetch): typeof f
 
   // The SDK's option is typed as the full fetch, which carries this. Delegate rather than
   // cast, so the shim stays a drop-in replacement.
-  compatible.preconnect = baseFetch.preconnect ?? (() => {})
+  compatible.preconnect = (baseFetch as Partial<typeof fetch>).preconnect ?? (() => {})
   return compatible as typeof fetch
 }

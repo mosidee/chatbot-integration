@@ -21,6 +21,7 @@ function profile(): ProviderProfile {
     headers: {},
     supportsTools: true,
     supportsVision: false,
+    fetch: (input, init) => globalThis.fetch(input, init),
   }
 }
 

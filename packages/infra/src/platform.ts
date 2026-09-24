@@ -17,6 +17,8 @@ export type TenantSummary = {
   slug: string
   status: WorkspaceStatus
   memberCount: number
+  /** Private or plain-http origins its providers may reach; see `workspaces`. */
+  privateEgressOrigins: string[]
   createdAt: Date
 }
 
@@ -28,6 +30,7 @@ export async function listTenants(db: Database): Promise<TenantSummary[]> {
       slug: schema.organization.slug,
       status: schema.workspaces.status,
       memberCount: count(schema.member.id),
+      privateEgressOrigins: schema.workspaces.privateEgressOrigins,
       createdAt: schema.organization.createdAt,
     })
     .from(schema.organization)
@@ -38,6 +41,7 @@ export async function listTenants(db: Database): Promise<TenantSummary[]> {
       schema.organization.name,
       schema.organization.slug,
       schema.workspaces.status,
+      schema.workspaces.privateEgressOrigins,
       schema.organization.createdAt,
     )
     .orderBy(desc(schema.organization.createdAt))

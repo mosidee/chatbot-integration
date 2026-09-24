@@ -8,6 +8,7 @@ import {
   type Runtime,
   usableSlot,
   workspaceIsWorkable,
+  workspaceProviderFetch,
 } from '@ci/infra'
 import { and, eq } from 'drizzle-orm'
 
@@ -52,7 +53,14 @@ export async function processKnowledgeIngest(
   const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'knowledge_ingest')
   if (!workspace) return
   const settings = workspace.settings
-  const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
+  const providerFetch = await workspaceProviderFetch(runtime, job.workspaceId)
+  const aiConfig = await loadAiConfig(
+    db,
+    job.workspaceId,
+    env.APP_SECRET_KEY,
+    settings.modelPrices,
+    providerFetch,
+  )
   const embedSlot = usableSlot(aiConfig, 'embed')
 
   try {

@@ -107,6 +107,7 @@ export async function createKnowledgeFixture(): Promise<KnowledgeFixture> {
           headers: {},
           supportsTools: false,
           supportsVision: false,
+          fetch: (input, init) => globalThis.fetch(input, init),
         },
         model: 'mock-embed-model',
       },

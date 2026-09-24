@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel } from 'ai'
 import { createCompatibleFetch } from './compat'
+import type { FetchLike } from './http-tool'
 import { NoSlotConfiguredError, type SlotConfig, type SlotTarget } from './types'
 
 /**
@@ -10,7 +11,8 @@ import { NoSlotConfiguredError, type SlotConfig, type SlotTarget } from './types
  * slot at OpenAI, OpenRouter, a self-hosted router or a local server without code changes.
  */
 
-const cache = new Map<string, LanguageModel>()
+/** Per transport, so a model built for one client is never handed out for another. */
+let cache = new WeakMap<FetchLike, Map<string, LanguageModel>>()
 
 function cacheKey(target: SlotTarget): string {
   return `${target.provider.id}:${target.provider.baseUrl}:${target.model}`
@@ -18,7 +20,12 @@ function cacheKey(target: SlotTarget): string {
 
 export function resolveModel(target: SlotTarget): LanguageModel {
   const key = cacheKey(target)
-  const existing = cache.get(key)
+  let models = cache.get(target.provider.fetch)
+  if (!models) {
+    models = new Map()
+    cache.set(target.provider.fetch, models)
+  }
+  const existing = models.get(key)
   if (existing) return existing
 
   const provider = createOpenAICompatible({
@@ -27,17 +34,17 @@ export function resolveModel(target: SlotTarget): LanguageModel {
     apiKey: target.provider.apiKey ?? undefined,
     headers: target.provider.headers,
     // Repairs gateways that frame a non-streaming answer as an event stream.
-    fetch: createCompatibleFetch(),
+    fetch: createCompatibleFetch(target.provider.fetch),
   })
 
   const model = provider.chatModel(target.model)
-  cache.set(key, model)
+  models.set(key, model)
   return model
 }
 
 /** Test helper: drop memoised model instances. */
 export function clearModelCache(): void {
-  cache.clear()
+  cache = new WeakMap()
 }
 
 export type FallbackAttempt<T> = {

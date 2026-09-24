@@ -13,6 +13,7 @@ import {
   recordTrace,
   usableSlot,
   workspaceIsWorkable,
+  workspaceProviderFetch,
 } from '@ci/infra'
 import { and, asc, eq } from 'drizzle-orm'
 
@@ -53,7 +54,14 @@ export async function processSummarize(
   const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'summarize')
   if (!workspace) return
   const settings = workspace.settings
-  const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
+  const providerFetch = await workspaceProviderFetch(runtime, job.workspaceId)
+  const aiConfig = await loadAiConfig(
+    db,
+    job.workspaceId,
+    env.APP_SECRET_KEY,
+    settings.modelPrices,
+    providerFetch,
+  )
 
   // Falls back to the chat slot so summaries work before a cheaper model is configured.
   const slot = usableSlot(aiConfig, 'summarize') ?? usableSlot(aiConfig, 'agent_chat')

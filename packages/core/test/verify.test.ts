@@ -22,6 +22,7 @@ const target: SlotTarget = {
     headers: {},
     supportsTools: true,
     supportsVision: false,
+    fetch: (input, init) => globalThis.fetch(input, init),
   } satisfies ProviderProfile,
   model: 'some-model',
 }

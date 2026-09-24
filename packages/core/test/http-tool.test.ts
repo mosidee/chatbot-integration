@@ -593,6 +593,7 @@ describe('a failing read inside a real turn', () => {
       headers: {},
       supportsTools: true,
       supportsVision: false,
+      fetch: (input, init) => globalThis.fetch(input, init),
     }
   }
 
