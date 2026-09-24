@@ -31,6 +31,14 @@ export const envSchema = z.object({
   S3_FORCE_PATH_STYLE: boolish.default(true),
   S3_PUBLIC_URL: z.string().optional(),
 
+  /**
+   * The Cloudflare Worker that fetches LINE message content (`workers/line-media`, ADR 0009).
+   * Both or neither: without them LINE media is fetched directly, which from the pilot VPS
+   * crawls at about 14 KB/s over a lossy route to LINE's Tokyo servers.
+   */
+  LINE_MEDIA_PROXY_URL: z.string().url().optional(),
+  LINE_MEDIA_PROXY_SECRET: z.string().min(32).optional(),
+
   BETTER_AUTH_SECRET: z.string().min(16),
   BETTER_AUTH_URL: z.string().default('http://localhost:3000'),
   GOOGLE_CLIENT_ID: z.string().optional(),

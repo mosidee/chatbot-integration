@@ -12,6 +12,7 @@ import {
   resolveConversation,
   resolveInboundMedia,
   storeMessage,
+  withLineMediaProxy,
   workspaceIsWorkable,
 } from '@ci/infra'
 import { hasImages } from '@ci/shared'
@@ -146,7 +147,13 @@ export async function processInbound(
       const media = await resolveInboundMedia(event.message, {
         workspaceId: job.workspaceId,
         channelType: channel.type,
-        adapter,
+        // LINE photos through the Cloudflare Worker when one is configured (ADR 0009).
+        adapter: withLineMediaProxy(adapter, {
+          channelType: channel.type,
+          proxyUrl: runtime.env.LINE_MEDIA_PROXY_URL,
+          proxySecret: runtime.env.LINE_MEDIA_PROXY_SECRET,
+          logger,
+        }),
         config,
         blob: runtime.blob,
         logger,

@@ -1,0 +1,11 @@
+# Fetches LINE message content on the VPS's behalf; see ADR 0009.
+name = "chatbot-line-media"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+account_id = "75e793a6d50738b2f37c5de090d0d806"
+workers_dev = true
+
+# Requests carry a LINE channel token in their body. Nothing is logged by the code, and
+# request logging is off here so the platform keeps nothing either.
+[observability]
+enabled = false
