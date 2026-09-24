@@ -25,7 +25,7 @@ import {
 } from '@ci/infra'
 import { type Job, Worker } from 'bullmq'
 
-import { processAiTurn } from './processors/ai-turn'
+import { handOffAfterFailure, processAiTurn } from './processors/ai-turn'
 import { IDLE_RESOLVE_EVERY_MINUTES, processIdleResolve } from './processors/idle-resolve'
 import { processInbound } from './processors/inbound'
 import { processKnowledgeIngest } from './processors/knowledge-ingest'
@@ -82,6 +82,8 @@ function makeWorker<T>(
     payload: T,
     meta: JobMeta,
   ) => Promise<void>,
+  /** Called once a job has failed its last attempt, for work somebody is waiting on. */
+  onTerminalFailure?: (payload: T, error: Error) => Promise<void>,
 ): Worker {
   const worker = new Worker(
     name,
@@ -109,6 +111,15 @@ function makeWorker<T>(
       attempt: job?.attemptsMade,
       error: error.message,
     })
+    if (onTerminalFailure && job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+      onTerminalFailure(job.data, error).catch((recoveryError: unknown) => {
+        logger.error('recovering from a failed job failed too', {
+          queue: name,
+          jobId: job.id,
+          error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+        })
+      })
+    }
   })
 
   return worker
@@ -146,6 +157,7 @@ async function main() {
       logger,
       CONCURRENCY.ai_turn,
       processAiTurn,
+      (job, error) => handOffAfterFailure(runtime, ports, logger, job, error),
     ),
     makeWorker<SuggestionJob>(
       QUEUE_NAMES.suggestion,

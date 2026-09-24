@@ -37,7 +37,7 @@ import {
   type MockServer,
   startMockOpenAI,
 } from '../../../packages/core/test/helpers/mock-openai-server'
-import { processAiTurn } from '../src/processors/ai-turn'
+import { handOffAfterFailure, processAiTurn } from '../src/processors/ai-turn'
 import { processIdleResolve } from '../src/processors/idle-resolve'
 import { processInbound } from '../src/processors/inbound'
 import { processOutbound } from '../src/processors/outbound'
@@ -3137,5 +3137,144 @@ describe('work that is done twice', () => {
     // Untouched. Receipts only ever raise a status, so `read` is as sent as it gets, and
     // an early return that covered only `sent` and `delivered` sent it a second time.
     expect(after?.status).toBe('read')
+  })
+})
+
+describe('the review, phase B', () => {
+  /**
+   * Recommendation #7. A colleague takes over while the model is still writing: nothing the
+   * turn produced is written or sent, and the colleague gets a suggestion instead.
+   */
+  test('a takeover during the model call leaves no reply and no learned field', async () => {
+    let f: Fixture | null = null
+    let conversationId = ''
+    const slow = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        if (!new URL(request.url).pathname.endsWith('/chat/completions')) {
+          return new Response('not found', { status: 404 })
+        }
+        const body = (await request.json()) as { tools?: unknown[] }
+        // The colleague clicks "take over" while this answer is being written.
+        if (f && conversationId) {
+          await humanAction(f, conversationId, {
+            type: 'human_take_over',
+            at: new Date(),
+            userId: f.userId,
+          })
+        }
+        const message = body.tools
+          ? {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call-1',
+                  type: 'function',
+                  function: {
+                    name: 'set_customer_field',
+                    arguments: JSON.stringify({ key: 'order_id', value: 'SO-TAKEN' }),
+                  },
+                },
+              ],
+            }
+          : { role: 'assistant', content: 'too late' }
+        return Response.json({
+          id: 'x',
+          object: 'chat.completion',
+          created: 1,
+          model: 'mock-model',
+          choices: [{ index: 0, message, finish_reason: body.tools ? 'tool_calls' : 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        })
+      },
+    })
+    try {
+      f = await fixture({ providerBaseUrl: `http://localhost:${slow.port}/v1` })
+      await customerSays(f, 'my order is SO-TAKEN')
+      conversationId = (await onlyConversation(f)).id
+      await runQueuedWork(f)
+
+      const messages = await messagesOf(f, conversationId)
+      expect(messages.filter((m) => m.senderType === 'ai')).toHaveLength(0)
+      const [customer] = await f.runtime.db
+        .select({ fields: schema.customers.fields })
+        .from(schema.customers)
+        .where(eq(schema.customers.workspaceId, f.workspaceId))
+      expect((customer?.fields as Record<string, string> | undefined)?.order_id).toBeUndefined()
+    } finally {
+      slow.stop(true)
+    }
+  })
+
+  /**
+   * Recommendation #11. A turn that failed every retry reaches a person, the same as every
+   * other path out of a turn.
+   */
+  test('a turn that failed for good is handed to a person, once', async () => {
+    const provider = mock([{ kind: 'text', text: 'unused' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    await customerSays(f, 'hello?')
+    const conversation = await onlyConversation(f)
+    const [job] = await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      deliver: 'send' | 'draft'
+    }>(f, f.queues.ai_turn)
+    if (!job) throw new Error('expected a queued AI turn')
+
+    const ports = portsFor(f)
+    await handOffAfterFailure(f.runtime, ports, f.runtime.logger, job, new Error('db down'))
+    await handOffAfterFailure(f.runtime, ports, f.runtime.logger, job, new Error('db down'))
+
+    expect((await onlyConversation(f)).mode).toBe('waiting_human')
+    const told = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'system')
+    expect(told).toHaveLength(1)
+  })
+
+  /**
+   * Recommendation #8. An event without an id used to get a random one at parse time, so a
+   * retried job stored the customer's message twice and answered it twice.
+   */
+  test('an event without an id is still one message when its job runs twice', async () => {
+    const provider = mock([{ kind: 'text', text: 'answer' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    const outcome = await ingestInternal(f.runtime, f.runtime.db, {
+      channelId: f.channelId,
+      expectedType: 'test',
+      body: { externalId: 'no-id-customer', message: { kind: 'text', text: 'once please' } },
+    })
+    if (!outcome.ok) throw new Error('ingest failed')
+    await drainQueue(f, f.queues.inbound)
+
+    const job = {
+      workspaceId: f.workspaceId,
+      channelId: f.channelId,
+      inboundEventId: outcome.inboundEventId,
+    }
+    // What was stored, before the worker empties it.
+    const [stored] = await f.runtime.db
+      .select({ payload: schema.inboundEvents.payload })
+      .from(schema.inboundEvents)
+      .where(eq(schema.inboundEvents.id, outcome.inboundEventId))
+    await processInbound(f.runtime, portsFor(f), f.runtime.logger, job)
+
+    // Processed events keep no raw body (recommendation #12).
+    const [emptied] = await f.runtime.db
+      .select({ payload: schema.inboundEvents.payload })
+      .from(schema.inboundEvents)
+      .where(eq(schema.inboundEvents.id, outcome.inboundEventId))
+    expect(emptied?.payload).toEqual({})
+
+    // As if the worker died after storing the message and before marking the event done.
+    await f.runtime.db
+      .update(schema.inboundEvents)
+      .set({ processedAt: null, payload: stored?.payload ?? {} })
+      .where(eq(schema.inboundEvents.id, outcome.inboundEventId))
+    await processInbound(f.runtime, portsFor(f), f.runtime.logger, job)
+
+    const conversation = await onlyConversation(f)
+    const inbound = (await messagesOf(f, conversation.id)).filter((m) => m.direction === 'inbound')
+    expect(inbound).toHaveLength(1)
   })
 })

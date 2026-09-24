@@ -500,6 +500,7 @@ export function settingsRoutes(ctx: ApiContext) {
               supportsTools: provider.supportsTools,
               supportsVision: provider.supportsVision,
               fetch: await workspaceProviderFetch(runtime, workspaceId),
+              revision: provider.updatedAt.getTime().toString(),
             },
             model: body.model,
           }

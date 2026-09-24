@@ -2,6 +2,7 @@ import type { ChannelAdapter } from '@ci/channels'
 import type { BlobStore, Logger } from '@ci/core'
 import { newId } from '@ci/db'
 import type { ChannelType, NormalizedMessage } from '@ci/shared'
+import { safeKeySegment } from './media-serving'
 
 /**
  * Resolving platform media into our own storage.
@@ -35,6 +36,11 @@ export async function resolveInboundMedia(
     config: unknown
     blob: BlobStore
     logger: Logger
+    /**
+     * Names the stored files after the event they arrived in, so a retried job writes the
+     * same objects again rather than leaving the first attempt's copies behind unreferenced.
+     */
+    eventKey?: string
   },
 ): Promise<MediaResolution> {
   if (
@@ -53,7 +59,7 @@ export async function resolveInboundMedia(
   let failed = 0
 
   const attachments = await Promise.all(
-    message.attachments.map(async (attachment) => {
+    message.attachments.map(async (attachment, index) => {
       // Already ours, or nothing to fetch from.
       if (attachment.storageKey || !attachment.sourceUrl) return attachment
 
@@ -67,7 +73,8 @@ export async function resolveInboundMedia(
         }
 
         const mime = pickMime(fetched.mime, attachment.mime, attachment.fileName)
-        const key = `${input.workspaceId}/inbound/${newId()}${extensionFor(mime)}`
+        const name = input.eventKey ? `${safeKeySegment(input.eventKey, 80)}-${index}` : newId()
+        const key = `${input.workspaceId}/inbound/${name}${extensionFor(mime)}`
         await input.blob.put(key, fetched.data, mime)
         downloaded += 1
 

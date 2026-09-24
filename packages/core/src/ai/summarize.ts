@@ -1,6 +1,7 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { estimateCost } from './cost'
+import { attemptSignal, DEFAULT_ATTEMPT_MS } from './deadline'
 import { runWithFallback } from './registry'
 import type {
   ConversationTurn,
@@ -112,6 +113,9 @@ export async function summarizeCustomer(options: {
         prompt,
         temperature: slot.params.temperature ?? 0.2,
         maxRetries: options.maxRetries ?? slot.params.maxRetries ?? 1,
+        abortSignal: attemptSignal(
+          (slot.params.timeoutMs as number | undefined) ?? DEFAULT_ATTEMPT_MS.summary,
+        ),
       }),
     )
 

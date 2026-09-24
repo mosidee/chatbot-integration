@@ -18,6 +18,12 @@ export type ProviderProfile = {
    * client that refuses internal addresses (`Runtime.providerFetch`).
    */
   fetch: FetchLike
+  /**
+   * Changes whenever the provider's key, headers or address do (its `updatedAt`). The model
+   * caches rebuild a client when it changes, so a rotated key takes effect on the next turn
+   * rather than on the next restart of the worker.
+   */
+  revision?: string
 }
 
 export type SlotTarget = {

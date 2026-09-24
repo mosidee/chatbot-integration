@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { embed, embedMany } from 'ai'
 import { createCompatibleFetch } from '../ai/compat'
+import { attemptSignal, DEFAULT_ATTEMPT_MS } from '../ai/deadline'
 import type { FetchLike } from '../ai/http-tool'
 import type { SlotConfig, SlotTarget } from '../ai/types'
 import { NoSlotConfiguredError } from '../ai/types'
@@ -25,7 +26,10 @@ export type EmbedResult = {
 }
 
 /** Per transport, so a provider built for one client is never handed out for another. */
-let cache = new WeakMap<FetchLike, Map<string, ReturnType<typeof createOpenAICompatible>>>()
+let cache = new WeakMap<
+  FetchLike,
+  Map<string, { revision: string; provider: ReturnType<typeof createOpenAICompatible> }>
+>()
 
 function providerFor(target: SlotTarget) {
   const key = `${target.provider.id}:${target.provider.baseUrl}`
@@ -34,7 +38,9 @@ function providerFor(target: SlotTarget) {
     providers = new Map()
     cache.set(target.provider.fetch, providers)
   }
-  let provider = providers.get(key)
+  const revision = target.provider.revision ?? ''
+  const cached = providers.get(key)
+  let provider = cached && cached.revision === revision ? cached.provider : undefined
   if (!provider) {
     provider = createOpenAICompatible({
       name: target.provider.name,
@@ -44,7 +50,7 @@ function providerFor(target: SlotTarget) {
       // Repairs gateways that frame a non-streaming answer as an event stream.
       fetch: createCompatibleFetch(target.provider.fetch),
     })
-    providers.set(key, provider)
+    providers.set(key, { revision, provider })
   }
   return provider
 }
@@ -86,11 +92,23 @@ async function attempt(
 
   if (values.length === 1) {
     const only = values[0] ?? ''
-    const result = await embed({ model, value: only, providerOptions, maxRetries })
+    const result = await embed({
+      model,
+      value: only,
+      providerOptions,
+      maxRetries,
+      abortSignal: attemptSignal(DEFAULT_ATTEMPT_MS.embed),
+    })
     return [result.embedding]
   }
 
-  const result = await embedMany({ model, values, providerOptions, maxRetries })
+  const result = await embedMany({
+    model,
+    values,
+    providerOptions,
+    maxRetries,
+    abortSignal: attemptSignal(DEFAULT_ATTEMPT_MS.embed),
+  })
   return result.embeddings
 }
 

@@ -389,7 +389,14 @@ export function widgetRoutes(ctx: ApiContext) {
                */
               visitorId: session.externalId,
               message: { kind: 'text', text: body.text },
-              eventId: `widget-${crypto.randomUUID()}`,
+              /**
+               * Chosen by the browser, once per message, so a send it retries after a
+               * dropped response is the same event and is stored once. Scoped by the
+               * visitor, so one visitor's ids cannot collide with another's.
+               */
+              eventId: body.clientMessageId
+                ? `widget-${session.externalId}-${body.clientMessageId}`
+                : `widget-${crypto.randomUUID()}`,
             },
             /**
              * Beside the body, out of reach of anything a caller could send. From the
@@ -413,7 +420,13 @@ export function widgetRoutes(ctx: ApiContext) {
         },
         {
           params: z.object({ channelId: z.string() }),
-          body: z.object({ text: z.string().min(1).max(4000) }),
+          body: z.object({
+            text: z.string().min(1).max(4000),
+            clientMessageId: z
+              .string()
+              .regex(/^[A-Za-z0-9_-]{8,64}$/)
+              .optional(),
+          }),
         },
       )
 

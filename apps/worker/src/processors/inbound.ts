@@ -144,6 +144,7 @@ export async function processInbound(
         config,
         blob: runtime.blob,
         logger,
+        eventKey: `${eventRow.id}-${event.platformEventId}`,
       })
       if (media.downloaded > 0 || media.failed > 0) {
         logger.info('inbound media resolved', {

@@ -12,7 +12,7 @@ import { NoSlotConfiguredError, type SlotConfig, type SlotTarget } from './types
  */
 
 /** Per transport, so a model built for one client is never handed out for another. */
-let cache = new WeakMap<FetchLike, Map<string, LanguageModel>>()
+let cache = new WeakMap<FetchLike, Map<string, { revision: string; model: LanguageModel }>>()
 
 function cacheKey(target: SlotTarget): string {
   return `${target.provider.id}:${target.provider.baseUrl}:${target.model}`
@@ -25,8 +25,9 @@ export function resolveModel(target: SlotTarget): LanguageModel {
     models = new Map()
     cache.set(target.provider.fetch, models)
   }
+  const revision = target.provider.revision ?? ''
   const existing = models.get(key)
-  if (existing) return existing
+  if (existing && existing.revision === revision) return existing.model
 
   const provider = createOpenAICompatible({
     name: target.provider.name,
@@ -38,7 +39,8 @@ export function resolveModel(target: SlotTarget): LanguageModel {
   })
 
   const model = provider.chatModel(target.model)
-  models.set(key, model)
+  // Replaces an entry built from an older revision, so the cache never grows with rotations.
+  models.set(key, { revision, model })
   return model
 }
 

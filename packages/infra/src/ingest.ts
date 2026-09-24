@@ -205,8 +205,17 @@ export async function ingestInternal(
   if (status === 'suspended') return { ok: false, reason: 'workspace_suspended' }
   if (status !== 'active') return { ok: false, reason: 'channel_not_found' }
 
-  const rawBody = JSON.stringify(input.body)
-  const platformEventId = await fingerprint(rawBody)
+  /**
+   * A body without an event id gets this one, written into the body before it is stored.
+   * The adapter used to invent a random id at parse time, inside the worker, so a retried
+   * job parsed the same body into a new event and stored the message twice.
+   */
+  const platformEventId = await fingerprint(JSON.stringify(input.body))
+  const body =
+    input.body && typeof input.body === 'object' && !('eventId' in input.body && input.body.eventId)
+      ? { ...(input.body as object), eventId: platformEventId }
+      : input.body
+  const rawBody = JSON.stringify(body)
 
   const existing = await db
     .select({ id: schema.inboundEvents.id })

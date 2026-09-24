@@ -1,6 +1,7 @@
 import { generateText, stepCountIs } from 'ai'
 import type { Logger } from '../ports'
 import { estimateCost } from './cost'
+import { attemptSignal, DEFAULT_ATTEMPT_MS } from './deadline'
 import { toPlainText } from './plain-text'
 import { buildMessages, buildSystemPrompt } from './prompt'
 import { stripReasoning } from './reasoning'
@@ -40,6 +41,8 @@ export type RunAgentTurnOptions = {
   turnKey: string
   identityVerificationAvailable?: boolean
   logger?: Logger
+  /** The whole turn's deadline. Each model attempt also has its own; see `deadline.ts`. */
+  signal?: AbortSignal
 }
 
 /**
@@ -51,7 +54,6 @@ export type RunAgentTurnOptions = {
 export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentTurnResult> {
   const { input, chatSlot, visionSlot, prices, mode } = options
   const startedAt = Date.now()
-  const scratchpad = createScratchpad()
 
   let visionSummary: string | null = null
   let visionCost = 0
@@ -59,6 +61,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
     if (visionSlot && input.images.length > 0) {
       const vision = await describeImages(visionSlot, input.images, {
         maxRetries: options.maxRetries ?? visionSlot.params.maxRetries ?? 1,
+        ...(options.signal ? { signal: options.signal } : {}),
       })
       if (vision) {
         visionSummary = vision.summary
@@ -82,6 +85,14 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
 
   try {
     const attempt = await runWithFallback(chatSlot, async (target, model) => {
+      /**
+       * Each attempt starts from a clean scratchpad.
+       *
+       * One shared across attempts let a primary that queued a write, set a field or asked
+       * for a handoff and then failed pass all of that to a fallback that never asked for
+       * it. Only the attempt that produced the answer contributes what the turn does.
+       */
+      const scratchpad = createScratchpad()
       // Models without function calling take the answer-only path: knowledge is already
       // in the system prompt, so they can still answer, just not act.
       const tools = target.provider.supportsTools
@@ -101,11 +112,15 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
           )
         : undefined
 
-      return generateText({
+      const generated = await generateText({
         model,
         system,
         messages,
         tools,
+        abortSignal: attemptSignal(
+          (chatSlot.params.timeoutMs as number | undefined) ?? DEFAULT_ATTEMPT_MS.chat,
+          options.signal,
+        ),
         stopWhen: stepCountIs(options.maxSteps ?? 4),
         temperature: chatSlot.params.temperature ?? 0.3,
         // Reasoning models count their thinking against this budget, so a cap sized for a
@@ -114,9 +129,11 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
         maxOutputTokens: chatSlot.params.maxOutputTokens ?? 2048,
         maxRetries: options.maxRetries ?? chatSlot.params.maxRetries ?? 1,
       })
+      return { generated, scratchpad }
     })
 
-    const { result, target, usedFallback } = attempt
+    const { target, usedFallback } = attempt
+    const { generated: result, scratchpad } = attempt.result
     const tokensIn = result.usage?.inputTokens ?? null
     const tokensOut = result.usage?.outputTokens ?? null
     const chatCost = estimateCost(prices, target.provider.name, target.model, tokensIn, tokensOut)

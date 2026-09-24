@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { runWithFallback } from '../src/ai/registry'
+import { resolveModel, runWithFallback } from '../src/ai/registry'
 import { NoSlotConfiguredError, type ProviderProfile, type SlotConfig } from '../src/ai/types'
 
 function provider(id: string): ProviderProfile {
@@ -59,5 +59,20 @@ describe('runWithFallback', () => {
     const attempt = await runWithFallback(slot({ primary: null }), async (t) => t.provider.id)
     expect(attempt.result).toBe('secondary')
     expect(attempt.usedFallback).toBe(true)
+  })
+})
+
+/** Recommendation #17: a rotated key must not keep using the client built from the old one. */
+describe('resolveModel', () => {
+  test('rebuilds the client when the provider changes, and not otherwise', () => {
+    const base = provider('rotating')
+    const first = resolveModel({ provider: { ...base, revision: '1' }, model: 'm' })
+    const same = resolveModel({ provider: { ...base, revision: '1' }, model: 'm' })
+    const rotated = resolveModel({
+      provider: { ...base, apiKey: 'new-key', revision: '2' },
+      model: 'm',
+    })
+    expect(same).toBe(first)
+    expect(rotated).not.toBe(first)
   })
 })

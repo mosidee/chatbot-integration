@@ -374,3 +374,27 @@ describe('embedding rules', () => {
     }
   })
 })
+
+/**
+ * Recommendation #8. A browser that retries a send whose response it never saw must not
+ * store the visitor's message twice.
+ */
+describe('a retried send', () => {
+  test('with the same client id is one event', async () => {
+    const send = () =>
+      app.handle(
+        new Request(`http://localhost/api/widget/${channelId}/messages`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-widget-session': session },
+          body: JSON.stringify({ text: 'only once', clientMessageId: 'retry-abc-12345' }),
+        }),
+      )
+    expect((await send()).status).toBe(200)
+    expect((await send()).status).toBe(200)
+    const events = await ctx.db
+      .select({ id: schema.inboundEvents.id })
+      .from(schema.inboundEvents)
+      .where(eq(schema.inboundEvents.channelId, channelId))
+    expect(events).toHaveLength(1)
+  })
+})
