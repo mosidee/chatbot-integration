@@ -35,7 +35,7 @@ rather than rounded away.
 | 6. Attachment ownership | Fixed | `isWorkspaceKey` judges keys canonically (no `..`, `.`, empty segments, backslashes) at every read, association, signature and deletion; the public media route re-checks signed keys. |
 | 7. Authoritative human takeover | Fixed | Learned fields and tags are written only while the AI still owns the conversation; the reply is committed under a row lock, so a takeover is either seen or waits; outbound re-checks the mode and records `canceled`. A turn steps aside when a newer customer message has its own turn owed — before the model call, after it and under the commit lock, the last only if none of its writes fired — so two quick messages get one answer (`apps/worker/test/loop.integration.test.ts`, migration 0015). |
 | 8. Outbox and durable steps | Fixed; external write keys residual | Transactional outbox; stable event ids for internal ingestion; widget client message ids; inbound media keyed by event. A retried model call that asks for different write arguments still gets a new idempotency key. |
-| 9. Delivery and multipart | Fixed; Messenger idempotency deferred | Unit checkpoints inside one message, every platform id kept, LINE `X-Line-Retry-Key`, `uncertain` status never resent blindly. Messenger offers no idempotency key. |
+| 9. Delivery and multipart | Fixed; Messenger idempotency deferred | Unit checkpoints inside one message, every platform id kept, LINE `X-Line-Retry-Key`, `uncertain` status never resent blindly. `failed` is written only once nothing will retry (`JobMeta.finalAttempt`, and the worker's terminal-failure hook), and an agent can resend it (`apps/api/test/resend.test.ts`). Messenger offers no idempotency key. |
 | 10. Fallback attempt isolation | Fixed | A scratchpad per attempt; only the winning attempt's intents count (`packages/core/test/agent.test.ts`). |
 | 11. Turn deadlines and final failure | Fixed | Per-attempt deadlines (slot `timeoutMs`) inside a 150 s turn deadline; bounded repair buffer; an AI turn that fails its last attempt hands off. |
 | 12. Redaction and retention breadth | Fixed | Raw events keep only the body, are emptied once processed, go with the customer's identity on erasure and are pruned by retention. Traces (prompt, tool calls, retrieved text, errors), drafts, AI and agent notes, summaries and their facts, field updates and vision descriptions are masked with the workspace's rules (`recordTrace` requires them; `redactDeep`). |
@@ -50,7 +50,7 @@ rather than rounded away.
 | 21. Persistent-thread memory | Fixed | Newest notes; incremental summaries from a cursor; new facts win; recall excludes only the visible window. |
 | 22. Pagination and bounded reads | Fixed | Total order and offset paging with load-more; lateral previews; history by cursor without a cap. Offset paging can repeat or skip a row that moves while paging a live queue. |
 | 23. Reporting semantics | Fixed; accounting scope stated | Answered and response times count delivered replies; workspace timezone. Cost excludes failed primary attempts and embedding/rerank usage, and the dashboard says so. |
-| 24. Deployment images and failure states | Fixed; restore rehearsal not done | Worker manifest; CI builds both images and requires them healthy; MinIO pinned by digest; console failure states (see the UX audit). A backup restore rehearsal has not been performed. |
+| 24. Deployment images and failure states | Fixed; restore rehearsal not done | Worker manifest; CI builds both images and requires them healthy; MinIO pinned by digest, then removed with media moved to Cloudflare R2 (ADR 0008); console failure states (see the UX audit). A backup restore rehearsal has not been performed. |
 
 ## UX/UI recommendations
 
@@ -128,7 +128,7 @@ ADR 0004 also acknowledges a DNS check/connection race. Close that gap before tr
 
 **Status (2026-09-24):** Fixed; retain cross-origin redirect regression coverage.
 
-**Evidence:** [egress.ts](packages/infra/src/egress.ts), `CREDENTIAL_HEADERS` and `strippedHeaders`; [http-tool.ts](packages/core/src/ai/http-tool.ts).
+**Evidence (at the time of the review; the fix replaced the denylist with the allowlist `CROSS_ORIGIN_SAFE_HEADERS`):** [egress.ts](packages/infra/src/egress.ts), `CREDENTIAL_HEADERS` and `strippedHeaders`; [http-tool.ts](packages/core/src/ai/http-tool.ts).
 
 Tools support a custom authentication header, but redirect handling strips only `authorization`, `cookie`, and `proxy-authorization`. An `x-api-key` credential survives a cross-origin redirect; this was reproduced with a fake transport. A 307/308 can also forward a request body containing account data to another origin.
 

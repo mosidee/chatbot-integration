@@ -12,8 +12,9 @@ Decisions taken during implementation are recorded in `docs/adr/`.
 
 ## Stack
 
-Bun + Elysia, Drizzle on Postgres 16 with pgvector and pg_trgm, BullMQ on Redis, Cloudflare R2 for
-media (the filesystem locally), Vite + React 19 for the console. Bun workspaces monorepo. Zod everywhere.
+Bun + Elysia, Drizzle on Postgres 16 with pgvector and pg_trgm, BullMQ on Redis, S3-compatible
+object storage for media (Cloudflare R2 in production, the filesystem locally and in CI), Vite
++ React 19 for the console. Bun workspaces monorepo. Zod everywhere.
 
 ```
 apps/api      HTTP, WebSocket, webhooks. Thin.
@@ -26,6 +27,10 @@ packages/db        Drizzle schema, migrations, auth config, encryption.
 packages/infra     Runtime wiring: Redis, queues, storage, repository, effect ports.
 packages/shared    Zod schemas and types shared with the browser.
 packages/config    Environment parsing.
+workers/line-media Cloudflare Worker that fetches LINE media (ADR 0009). Outside the Bun
+                   workspaces: not covered by `bun run typecheck` or `bun run test`.
+e2e/               Playwright browser tests.
+scripts/           Smoke test, local mock provider.
 ```
 
 ## Rules that matter
@@ -35,6 +40,10 @@ customer or a handoff to a person. An empty answer is a handoff, not a quiet ret
 reasoning model can spend its whole output budget thinking and emit nothing, and the
 customer is left waiting for a reply that no colleague knows is owed. Reasoning tokens
 count against `maxOutputTokens`, which is why its default is not sized for a short reply.
+There are exactly two sanctioned exceptions, each commented at its call site: a
+**suspended** workspace's turn is dropped (nobody could be handed it), and a turn
+**superseded** by a newer customer message steps aside because the newer turn answers both
+(see *AI turn*).
 
 **The AI never sends while the mode is `human`.** The state machine enforces it, an
 exhaustive test sweeps it, and the AI-turn processor re-reads the mode before sending
@@ -78,9 +87,9 @@ Meta retry or disable endpoints that answer slowly.
 the same transaction as the change that made it necessary; the worker's relay moves those
 rows to BullMQ. `Runtime` carries no queues, so this is a rule the types keep rather than one
 a comment asks for. The writer chooses the job id, which is what makes both the relay's retry
-and the consumer's retry safe. See ADR 0006. The one exception is registering the job *schedulers* in
-the worker (nightly retention, quarter-hourly idle resolve), which describe when jobs come
-into being rather than asking for one.
+and the consumer's retry safe. See ADR 0006. The one exception is registering the job
+*schedulers* in the worker (nightly retention, quarter-hourly idle resolve), which describe
+when jobs come into being rather than asking for one.
 
 **Effects must be idempotent.** The queue retries jobs and `applyEffects` re-runs the whole
 list when it does.
@@ -97,18 +106,27 @@ an ADR.
 ## Commands
 
 ```
-bun run infra:up        # Postgres and Redis in Docker
-bun run db:migrate      # apply migrations (creates extensions first)
-bun run db:seed         # workspace, admin user, test and web channels
-bun run db:reset        # DESTROYS ALL DATA, then migrates and seeds. Local only:
-                        # it refuses production and any non-local database
-bun run dev             # api + worker + web with hot reload
-bun run test            # unit and integration (needs infra:up)
-bun run test:e2e        # Playwright browser tests (starts the app itself)
-bun run typecheck       # server packages, the web app and the widget
-bun run lint            # Biome
-bun run auth:generate   # regenerate the Better Auth schema after changing auth config
-./scripts/smoke.sh      # end-to-end: sign in, configure a mock provider, assert the AI answers
+bun run infra:up          # Postgres and Redis in Docker
+bun run infra:down        # stop them
+bun run infra:reset       # stop, delete their volumes, start again (clears stale jobs)
+bun run db:generate       # write a migration from schema changes
+bun run db:migrate        # apply migrations (creates extensions first)
+bun run db:seed           # workspace, admin user, test and web channels
+bun run db:reset          # DESTROYS ALL DATA, then migrates and seeds. Local only:
+                          # it refuses production and any non-local database
+bun run dev               # api + worker + web with hot reload
+bun run build:web         # the console; the API serves it in production
+bun run build:widget      # the widget; the API serves it in every environment
+bun run test              # unit and integration (needs infra:up, dev servers stopped)
+bun run test:e2e          # Playwright browser tests (starts the app itself)
+bun run test:e2e:ui       # the same, in Playwright's UI
+bun run typecheck         # server packages, the web app and the widget
+bun run lint              # Biome; lint:fix writes the fixes
+bun run auth:generate     # regenerate the Better Auth schema after changing auth config
+bun run backfill:plain-text    # convert old markdown replies; dry by default
+bun run conversations:merge    # merge duplicate threads; dry unless CONFIRM_MERGE_CONVERSATIONS=yes
+./scripts/smoke.sh        # end-to-end: sign in, configure a mock provider, assert the AI answers
+cd workers/line-media && bunx wrangler deploy   # the LINE media Worker (ADR 0009)
 ```
 
 `scripts/mock-provider.ts` is a local OpenAI-compatible stand-in, so the loop can be driven
@@ -116,13 +134,112 @@ without spending money.
 
 ## Gotchas learned the hard way
 
+### Tooling, build and deploy
+
 - The Better Auth schema generator is the **`auth`** package, not `@better-auth/cli`, which
   stopped tracking releases at 1.4.21. Keep its version equal to `better-auth`.
+- **Membership uniqueness (`member_org_user_uq`) lives in migration 0012, not in
+  `schema/auth.ts`,** because `bun run auth:generate` rewrites that file. Inserts into
+  `member` use `onConflictDoNothing()`.
+- When adding a workspace package, run `bun install` **before** committing, or CI's
+  `--frozen-lockfile` fails on a package.json the lockfile has never seen.
+- `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,
+  or the stack silently runs the previous image.
+- Bun installs workspace dependencies into each workspace's own `node_modules`, not only the
+  root. A Docker runtime stage that copies `/app/node_modules` alone leaves every package
+  unable to resolve its imports; copy the whole built tree.
+- Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
+- TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
+  risk on that path.
+- `bun test` would pick up Playwright specs, so the root script scopes it to `apps packages`.
+  Browser tests run through `bun run test:e2e`.
+
+### Local infrastructure and storage
+
+- **MinIO is gone** (unpublished from Docker Hub on 2026-09-11 and quay.io on 2026-09-24).
+  Production media is in Cloudflare R2 (ADR 0008); locally and in CI
+  `S3_ENDPOINT=file://./.data/media` selects the filesystem store (ADR 0002). The S3 half of
+  `packages/infra/test/blob.test.ts` runs only where `S3_ENDPOINT` is an http(s) URL, so run
+  it against the bucket after changing the S3 client or its SDK. Nothing may depend on
+  pulling a MinIO image.
+- Redis outlives a database reset. After `bun run db:seed` on a wiped database, old jobs can
+  reference rows that no longer exist and the worker logs "message vanished" warnings. They
+  are harmless; `bun run infra:reset` clears them.
+- `DROP SCHEMA public CASCADE` leaves Drizzle's journal in its own `drizzle` schema, so the
+  next migrate is a no-op against an empty database that claims to be migrated. `bun run
+  db:reset` drops both, and refuses to run against production or a non-local host.
+- The widget is served by the API from `apps/widget/dist` in every environment, not only
+  production, because nothing else serves it: there is no Vite dev server in front of it
+  and the browser tests embed it. Run `bun run build:widget` or its routes 404.
+- The seed grants platform admin to `SEED_ADMIN_EMAIL`, idempotently. Without a platform
+  admin the Platform page is invisible to everybody and no second tenant can be created.
+
+### Auth, tenancy and access
+
 - Better Auth's routes must be mounted at the **root** of the app. Mounting them inside a
   prefixed group buries `/api/auth` and sign-in returns 404.
-- **MinIO is gone** (unpublished from Docker Hub on 2026-09-11 and quay.io on 2026-09-24).
-  Production media is in Cloudflare R2; CI and local development use the filesystem store.
-  Nothing may depend on pulling a MinIO image. See ADR 0008.
+- Better Auth needs `trustedOrigins`. In development the console runs on Vite's port and
+  proxies to the API on another, so without it every browser sign-in is `Forbidden`.
+- Better Auth's `setPassword` refuses an account that already has a password, which is every
+  account a reset link is ever issued for. Go through `auth.$context` and the internal
+  adapter — `password.hash`, `findCredentialAccount`, `updatePassword`, then
+  `deleteUserSessions` — which is what its own reset flow does.
+- **A workspace admin may reset a password only for a member whose sole membership is that
+  workspace and who is not a platform admin.** A reset link sets the password on a global
+  account, so anything wider is a takeover of access the issuer has no authority over.
+  Everyone else is recovered from `/platform/users/reset-link`; see ADR 0005. The link
+  carries `issuer_scope`, and a workspace-issued one is re-checked at redemption with
+  `accountReach`: an account widened since issue is refused with 409.
+- The API holds a **second auth instance** (`ctx.authSignUp`) that allows sign-up, and it is
+  never mounted. `disableSignUp` is checked inside Better Auth's handler, per instance, so
+  this is what lets an invitation create an account while the public API stays invite-only.
+  Do not pass it to `authHandler`, and do not reach for it outside the accept route.
+- Spending an invitation and writing the membership share a transaction. Apart, a failure
+  between them leaves somebody with an account, no membership, and a link that will never
+  work again — the one outcome with no way out but an admin issuing another.
+- **A last-admin check and the change it guards share one transaction.** The `FOR UPDATE`
+  lock over the admin set lives only as long as its transaction: checking in one and mutating
+  after it returned let two concurrent demotions both through, which is the outcome the lock
+  exists to prevent. Return the refusal from inside the transaction rather than calling
+  `tx.rollback()`, which throws and surfaces as a 500.
+- Two Elysia plugins each carrying a `.as('global')` macro do not merge in the type: a route
+  can only see the macros of one of them. All three guards live in one `.macro()` call for
+  that reason. None of them branches on its own parameter either: a macro only runs for a
+  route that names it, and returning `{}` for `false` widens every handler's type until
+  `user` is no longer known to be there.
+- Drizzle wraps a driver error in `DrizzleQueryError`, which carries the query and the
+  parameters but not the code. `isUniqueViolation` walks the `cause` chain; a check on
+  `error.code` alone silently turns a duplicate slug into a 500.
+- A bare `/<slug>` in the console switches to that workspace, so **a tenant cannot be named
+  after a console path**: a static route outranks the `$slug` parameter, and a tenant slugged
+  `settings` would be unreachable by URL while looking perfectly normal in every list.
+  `RESERVED_SLUGS` in `packages/shared/src/workspace.ts` refuses them at creation. Add to it
+  when you add a top-level route.
+- The slug route resolves against the caller's own memberships, never a lookup by slug. A
+  workspace somebody does not belong to must be indistinguishable from one that does not
+  exist, or the URL becomes a way to enumerate the tenants on an installation.
+- `session.activeOrganizationId` is plain text with no foreign key. It survives being
+  removed from a workspace and survives that workspace being deleted, so `chooseMembership`
+  falls back rather than trusting it.
+- **A socket re-proves itself on `auth.changed` and `workspace.status`.** Publish
+  `auth.changed` (to each of the person's workspaces) whenever something narrows somebody's
+  access; the socket server closes what no longer qualifies with 4401/4403, and the console
+  does not retry those codes.
+- **The console asks `can(me, capability)` (`apps/web/src/lib/capabilities.ts`)** before
+  offering an action or firing a query a role will be refused. Viewers get read-only notes.
+  Gate on a loaded role: `me.data?.role !== 'viewer'` is true while `me` is still loading.
+
+### Suspension
+
+- A suspended workspace's queued AI turn is **dropped** — one of the two exceptions to "the
+  AI never goes silent". There is no colleague to hand off to, because every agent in the
+  tenant is locked out too.
+- A webhook for a suspended tenant answers **200 and discards**. Erroring would be more
+  honest and would cost the operator their webhook registration: LINE and Meta disable an
+  endpoint that keeps failing, and a suspension is meant to be reversible in an afternoon.
+
+### Models and gateways
+
 - The AI SDK refuses to download images from loopback and private hosts. Vision receives
   **bytes**, not URLs; see ADR 0001.
 - The AI SDK's `image` content part is deprecated in v7. Use a `file` part with `mediaType`.
@@ -145,108 +262,112 @@ without spending money.
   `response_format: {type: 'json_object'}` and the schema is dropped. Put the schema in the
   prompt yourself, derived from the Zod schema so it cannot drift. DeepSeek additionally
   refuses `json_object` unless the prompt contains the word "json".
-- When adding a workspace package, run `bun install` **before** committing, or CI's
-  `--frozen-lockfile` fails on a package.json the lockfile has never seen.
-- On macOS with Colima, a host process cannot reach MinIO: the port forwarder corrupts
-  SigV4 requests and every call fails with `InvalidAccessKeyId`, even though containers on
-  the same network work. Set `S3_ENDPOINT=file://./.data/media` locally; see ADR 0002.
-- Redis outlives a database reset. After `bun run db:seed` on a wiped database, old jobs can
-  reference rows that no longer exist and the worker logs "message vanished" warnings. They
-  are harmless; `bun run infra:reset` clears them.
-- BullMQ rejects a custom job id containing `:` unless it splits into exactly three parts.
-  Use `-` as the separator; a two-part `prefix:id` throws at enqueue time.
-- Better Auth needs `trustedOrigins`. In development the console runs on Vite's port and
-  proxies to the API on another, so without it every browser sign-in is `Forbidden`.
-- For trigram search use `word_similarity`, never `similarity`. The latter compares whole
-  strings, so a short query against a longer chunk always scores near zero and falls below
-  the default threshold. See ADR 0003.
-- `bun test` would pick up Playwright specs, so the root script scopes it to `apps packages`.
-  Browser tests run through `bun run test:e2e`.
-- Browser tests find controls by `data-testid`, not by visible text: the console defaults to
-  Thai, so label matchers would depend on the active language.
-- A browser test must not put a bare thirteen-digit number in message text. `Date.now()` is
-  thirteen digits, and about one in ten of those satisfies the Thai national ID checksum, so
-  redaction masks it, the text the test waits for never appears, and the suite fails one run
-  in ten while the product is correct. Use `uniqueToken()` from the e2e helpers.
-- `DROP SCHEMA public CASCADE` leaves Drizzle's journal in its own `drizzle` schema, so the
-  next migrate is a no-op against an empty database that claims to be migrated. `bun run
-  db:reset` drops both, and refuses to run against production or a non-local host.
-- Card redaction requires an issuer prefix as well as a Luhn check. Roughly one in ten random
-  digit strings passes Luhn, so without the prefix a timestamp or a long order reference gets
-  masked, which contradicts deliberately preserving order references.
-- Webhook signatures must be computed over the exact bytes received. Never parse and
-  re-serialise the body before verifying: it passes for ASCII and fails for Thai, so the bug
-  looks like a platform outage.
-- Delivery and read receipts are not messages. Messenger reports them as a watermark over
-  the conversation, so they raise the status of every outbound message sent at or before
-  that instant and never appear in the thread. They arrive out of order, so `applyReceipt`
-  only ever raises a status, never lowers it.
-- The widget is served by the API from `apps/widget/dist` in every environment, not only
-  production, because nothing else serves it: there is no Vite dev server in front of it
-  and the browser tests embed it. Run `bun run build:widget` or its routes 404.
-- A widget visitor's channel identity carries a prefix, `anon:` or `host:`, and the
-  prefixed form is what the identity is stored under. Sending the raw id instead created
-  an identity the session could never find again.
-- A raw `sql` template hands its parameters straight to postgres-js, which refuses a Date:
-  "The 'string' argument must be of type string". The query builder serialises Dates, raw
-  SQL does not. Pass `date.toISOString()` and cast it, as `packages/infra/src/dashboard.ts`
-  does.
-- LINE reply tokens are single-use and expire in about a minute. They are stored on the
-  conversation and cleared the moment they are spent.
-- `docker compose up -d` does not rebuild when a Dockerfile changes. Always pass `--build`,
-  or the stack silently runs the previous image.
-- Bun installs workspace dependencies into each workspace's own `node_modules`, not only the
-  root. A Docker runtime stage that copies `/app/node_modules` alone leaves every package
-  unable to resolve its imports; copy the whole built tree.
-- Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - A gateway's `/models` catalogue lists what it is configured to offer, not what it will
   serve. On the pilot gateway 8 of 39 entries are refused when called, for three unrelated
   reasons. Settings has a per-model test button for this; it calls the model through the
   same path a real turn uses, so the compatibility shim is exercised too.
-- A `<datalist>` is not a picker. Browsers filter its options by whatever the input already
-  contains, so a field holding a saved value offers only the entries resembling it and the
-  rest cannot be reached. Its arrow is also hidden until hover. Where every option must be
-  visible, as in the model field, use a `<select>` and give it an entry that switches to
-  free text for values the list does not carry.
-- `conversations.reviewed_at` is set with the database's `now()`, never a Date from the API
-  process. It is compared against `messages.created_at`, which `defaultNow()` writes on the
-  database clock, and two clocks a second apart would either mark AI replies reviewed before
-  they were written or leave a conversation stuck in the review queue.
-- A popover inside the message thread is clipped by its scroll container, so its bounding box
-  can extend over the header and the click lands on the header instead. Panels that open from
-  a bubble go in the normal flow and let the thread grow.
-- `conversations.handoff_reason` is cleared when a conversation goes back to the AI, so it
-  can never be the source for reporting: the dashboard list of what the AI could not handle
-  emptied itself as agents worked their queue. `handoff_events` is the history; the column
-  stays for the inbox badge. Both exist on purpose.
-- Merging two customers must repoint every table holding a person's history before the
-  losing row is deleted, in one transaction. Five tables reference `customers.id` and all
-  cascade on delete, which is how erasure wipes a person in one statement, so the wrong
-  order destroys history instead of moving it. `packages/infra/src/merge.ts` repoints four
-  and leaves `merge_suggestions` to the cascade on purpose; a new table that stores anything
-  worth keeping goes on the repoint list.
-- The e2e mock provider answers a phone number with a `set_customer_field` tool call, but
-  only while no `tool` message is in the request. Without that guard the turn calls the tool
-  forever and the harness gives up.
-- `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool — and a provider or external
-  retrieval URL — reach loopback and private addresses. Tests and local development need it; `createRuntime` **throws at startup** if
-  it is set with `NODE_ENV=production`, because the worker shares a network with Postgres and
-  Redis. `playwright.config.ts` sets it for the servers it starts, which does not
-  cover a dev server Playwright reuses: restart that one with the flag, or the tools spec
-  fails with an egress refusal that reads like a product bug.
-- A writing tool is never offered while the AI is drafting for a human (`mode: 'suggest'`).
-  A draft nobody has approved must not change anything in the tenant's system.
+- **`ProviderProfile.revision` is the provider's `updatedAt`.** The model caches rebuild a
+  client when it changes; a builder of profiles sets it, or a rotated key lingers.
+
+### AI turn
+
+- **A turn answers once because of `messages.turn_key`,** which is the turn's BullMQ job id,
+  which is the customer message that prompted it. The processor reads it before calling the
+  model; the unique index behind it catches the race that read cannot. On a collision
+  `storeMessage` reports `duplicate` and the id it returns names no row — the AI turn
+  re-selects the winner rather than queueing delivery for a message that does not exist.
+  Holding messages use the same column, keyed `ack-<kind>-<conversation>-<at ms>` where `at`
+  travels on the effect, so a replayed effect list sends one acknowledgement per wait; on a
+  collision `findMessageIdByTurnKey` reads the winner back and delivery is queued anyway.
+- **One turn per customer message, but a superseded one steps aside** (`newerTurnOwed` in
+  `ai-turn.ts`). A turn that finds a newer customer message with its own `ai-turn-<id>` row in
+  the outbox (not one marked `cancelled before relay`) drops itself: before the model call,
+  after it, before a draft is stored, and under the commit lock — the last only if none of its
+  tenant writes fired, since then its reply is the customer's only account of them. A newer
+  message with no turn owed (it arrived while a colleague held the conversation) never
+  silences the older turn, and a turn with no triggering message (the one a completed
+  verification asks for) is never superseded. `outbox_job_id_idx` (migration 0015) keeps the
+  lookup cheap.
+- **"Drafting" has two names for one thing:** the job's `deliver: 'draft'` and the agent's
+  `mode: 'suggest'`. A writing tool is never offered there — a draft nobody has approved must
+  not change anything in the tenant's system — and neither is a tool whose promise only the
+  `send` path can keep: `request_identity_verification` was, so a supervised workspace could
+  approve a draft saying a link had been sent when nothing would ever send it.
 - Writes fire after the turn and before the reply is stored, so a failed write discards the
   reply and hands off. The handoff note names what *did* succeed as well as what failed:
   `runPendingWrites` stops at the first failure, so the writes ahead of it already landed
   and the person picking it up needs to know that.
+- An idempotency key must not depend on position. A retry re-runs the whole turn and the
+  model may ask for the same operations in a different order, so a key built from an index
+  hands the second operation the key the tenant already answered for the first. Keys are
+  decided when the model asks, from the turn, the tool and a fingerprint of the arguments.
+- Anything after the outbound job is queued in `ai-turn.ts` runs with the reply already
+  sent, so a throw there re-runs the whole turn: another model call, another reply to the
+  customer, another pass over the writes. Work in that tail catches its own errors.
 - `customers.fields.account_id` is what a customer typed into a chat. `channel_identities.
   verified_subject` is what an identity proof carried. Only the second may be bound into a
   tool call, and they are separate columns so that the difference cannot be lost.
-- Browser tests must clear tenant tools before defining their own. Tools persist between
-  runs and the AI is offered all of them, so one left behind points at a port that died with
-  its test process, the model picks it, and the conversation hands off before reaching the
-  tool under test. `clearTools()` in `e2e/helpers.ts`.
+- **A handoff always tells the customer.** `ai_handoff` and the unsupported-media branch
+  emit `send_acknowledgement {kind:'handoff'}` before the note and the nudge to agents; the
+  waiting-human timer sends `kind:'still_waiting'`, a separate apology, so the customer never
+  reads the same sentence twice. The language comes from what the customer last typed —
+  `customerLanguageEvidence`, the newest of their last five messages with words in it, via
+  `typedText` — never `messages.text`, where a photo is our English `[image]`; then their
+  record, then the workspace default. Both texts are editable per language in Settings →
+  General; if both are empty it logs a warning rather than returning in silence.
+
+### Retrieval, memory and search
+
+- For trigram similarity use `word_similarity`, never `similarity`. The latter compares whole
+  strings, so a short query against a longer chunk always scores near zero and falls below
+  the default threshold. See ADR 0003.
+- **Inbox search (`GET /api/v1/conversations?q=`) is a substring `ILIKE`, not similarity:**
+  the customer's display name, the *values* of `customers.fields` (`jsonb_each_text`, so a
+  field's name does not match) and `messages.text`, within the workspace and the current
+  tab. At least two characters; `%`, `_` and `\` are escaped. `messages_text_trgm_idx`
+  (migration 0016) serves it.
+- **Every stored vector has an `embedding_space`** (`model|dims` or `model|native`), and
+  dense search and recall compare only within the query's space. A new embedding writer
+  stores `embedded.space` from `embedTexts`.
+- **Index swaps re-check under a lock.** `indexEntry` locks the entry and stores nothing if
+  its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
+  the source row, since two concurrent swaps could not see each other's new entry and left
+  the document indexed twice.
+- **Summaries are incremental** from `conversations.summarized_through_message_id`; recall
+  rows are appended, never rebuilt, and recall excludes the current conversation only from
+  the start of the visible window.
+- **Summariser facts go to `customers.notes`, never `customers.fields`.** `fields` holds the
+  five identifiers `set_customer_field` accepts, which merge matching compares; the
+  summariser used to merge free-form keys in and filled the panel with invented ones. See
+  ADR 0007. `notes` is named in the survivor-wins block in `merge.ts`.
+
+### Redaction
+
+- Card redaction requires an issuer prefix as well as a Luhn check. Roughly one in ten random
+  digit strings passes Luhn, so without the prefix a timestamp or a long order reference gets
+  masked, which contradicts deliberately preserving order references.
+- A browser test must not put a bare thirteen-digit number in message text. `Date.now()` is
+  thirteen digits, and about one in ten of those satisfies the Thai national ID checksum, so
+  redaction masks it, the text the test waits for never appears, and the suite fails one run
+  in ten while the product is correct. Use `uniqueToken()` from the e2e helpers.
+
+### Egress
+
+- **Every URL a tenant types is restricted egress, providers included.** Model calls,
+  embeddings, rerank, `/models` discovery and external retrieval use
+  `workspaceProviderFetch(runtime, workspaceId)`; `ProviderProfile.fetch` is required so a
+  builder cannot forget it. A private gateway (e.g. `http://10.0.0.5:8080`) is reachable
+  only when a **platform admin** lists its origin in `workspaces.private_egress_origins` from
+  the Platform page — a column, not a setting, because tenant admins write settings. A new
+  provider or retrieval call that uses the global `fetch` is an SSRF hole. URLs the
+  *operator* sets in the environment (`LINE_MEDIA_PROXY_URL`) and fixed platform hosts are
+  not tenant-typed and use a plain `fetch` on purpose.
+- `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool — and a provider or external
+  retrieval URL — reach loopback and private addresses. Tests and local development need it;
+  `createRuntime` **throws at startup** if it is set with `NODE_ENV=production`, because the
+  worker shares a network with Postgres and Redis. `playwright.config.ts` sets it for the
+  servers it starts, which does not cover a dev server Playwright reuses: restart that one
+  with the flag, or the tools spec fails with an egress refusal that reads like a product bug.
 - An IPv6 address has many spellings and only one meaning. `::ffff:127.0.0.1` and
   `::ffff:7f00:1` are the same host, and a URL preserves whichever was typed, so any check
   on an address must expand it rather than match its text. `packages/infra/src/egress.ts`
@@ -256,33 +377,15 @@ without spending money.
   because a tool's credential can be in any header its tenant names (`x-api-key` survived
   the old denylist) — a cross-origin 307/308 is refused, and 301, 302 and 303 must become a
   GET without a body, or a write is replayed at the new location.
-- **Every URL a tenant types is restricted egress, providers included.** Model calls,
-  embeddings, rerank, `/models` discovery and external retrieval use
-  `workspaceProviderFetch(runtime, workspaceId)`; `ProviderProfile.fetch` is required so a
-  builder cannot forget it. A private gateway (e.g. `http://10.0.0.5:8080`) is
-  reachable only when a **platform admin** lists its origin in `workspaces.
-  private_egress_origins` from the Platform page — a column, not a setting, because tenant
-  admins write settings. A new provider or retrieval call that uses the global `fetch` is an
-  SSRF hole.
-- **Stored files are served through `mediaServingHeaders`,** never with the stored MIME type
-  as-is: that type is whatever the sender claimed, and an SVG or HTML file served inline on
-  the console's origin runs with the agent's session. Uploads accept raster images by name
-  (not `image/`, which admits SVG) and take only a short alphanumeric extension from the
-  submitted file name, which used to be able to put `/` into the storage key.
-- An idempotency key must not depend on position. A retry re-runs the whole turn and the
-  model may ask for the same operations in a different order, so a key built from an index
-  hands the second operation the key the tenant already answered for the first. Keys are
-  decided when the model asks, from the turn, the tool and a fingerprint of the arguments.
-- Anything after the outbound job is queued in `ai-turn.ts` runs with the reply already
-  sent, so a throw there re-runs the whole turn: another model call, another reply to the
-  customer, another pass over the writes. Work in that tail catches its own errors.
-- A tool whose promise only the `send` path can keep must not be offered on the `draft`
-  path. `request_identity_verification` was, so a supervised workspace could approve a
-  draft saying a link had been sent when nothing would ever send it.
-- Better Auth's `setPassword` refuses an account that already has a password, which is every
-  account a reset link is ever issued for. Go through `auth.$context` and the internal
-  adapter — `password.hash`, `findCredentialAccount`, `updatePassword`, then
-  `deleteUserSessions` — which is what its own reset flow does.
+- **The restricted fetch connects to the address it checked** (`pinnedRequest`, Node
+  `https.request` with a pinned `lookup`, `agent: false`). A pooled agent skips `lookup`
+  and would reconnect wherever the pool first went, which reopens the DNS race.
+
+### Channels and webhooks
+
+- Webhook signatures must be computed over the exact bytes received. Never parse and
+  re-serialise the body before verifying: it passes for ASCII and fails for Thai, so the bug
+  looks like a platform outage.
 - **The public webhook route serves only adapters that verify a platform signature**
   (`capabilities.publicWebhook`). The web and test channels do not: their callers are our own
   widget and console, authenticated by session before ingestion, so they come in through
@@ -295,15 +398,62 @@ without spending money.
   the event; it was written to `channel_identities.verified_subject` and bound into the
   tenant's tool calls from there, and the public route reached that adapter with an id
   anybody could read. The adapter no longer knows the concept exists.
-- **A workspace admin may reset a password only for a member whose sole membership is that
-  workspace and who is not a platform admin.** A reset link sets the password on a global
-  account, so anything wider is a takeover of access the issuer has no authority over.
-  Everyone else is recovered from `/platform/users/reset-link`; see ADR 0005.
-- **`storeMessage` refuses an attachment whose storage key is outside the workspace.** The
-  key arrives in a request body on the agent-send and simulator routes and nothing downstream
-  re-derives it: vision reads those bytes and erasure deletes them. `mediaKeysOf` filters by
-  the same prefix, because deletion is irreversible and a row written before the rule existed
-  must not take another tenant's file with it.
+- **Internal ingestion writes an event id into a body that has none** (a fingerprint of the
+  body). Two identical simulator messages to the same customer without an `eventId` are
+  therefore one event; a test that means two sends gives each its own id or text.
+- A widget visitor's channel identity carries a prefix, `anon:` or `host:`, and the
+  prefixed form is what the identity is stored under. Sending the raw id instead created
+  an identity the session could never find again.
+- LINE reply tokens are single-use and expire in about a minute. They are stored on the
+  conversation and cleared the moment they are spent; a reply sent later goes as a push,
+  which counts against the channel's monthly quota.
+- **LINE has no document message.** Its outbound types are text, sticker, image, video,
+  audio, location, imagemap, template and flex. A file therefore goes as a **Flex card**
+  naming it with a button that opens the link; Messenger carries it natively. The card's
+  `altText` carries the link too, because a client too old for Flex sees only that. Neither
+  platform's image or file carries a caption, so an agent's note is sent as its own message
+  first rather than dropped.
+- **LINE media goes through a Cloudflare Worker** (`workers/line-media`, ADR 0009) when
+  `LINE_MEDIA_PROXY_URL` and `LINE_MEDIA_PROXY_SECRET` are set (`withLineMediaProxy`): the
+  VPS's route to LINE's Tokyo content server runs at ~14 KB/s (65 s for one photo; 1.2 s
+  through the Worker). The Worker builds LINE's content URL from a numeric id only and holds
+  no R2 binding. The proxy call has 30 s (`PROXY_TIMEOUT_MS`), then the app falls back to the
+  direct fetch, which has **no deadline on purpose** — the endpoint is slow, not stalled, and
+  a 15-second limit failed every photo over ~200 KB. The Worker's secret lives in two places
+  (the Worker's `PROXY_SECRET` and the server's `.env`); change both together.
+
+### Media and storage keys
+
+- **Storage keys are judged by `isWorkspaceKey`, never `startsWith`.** A prefix check
+  accepted `workspaceA/../workspaceB/file`, which the filesystem store resolves into another
+  tenant's directory. `storeMessage` refuses an attachment whose key fails it (the key
+  arrives in a request body on the agent-send and simulator routes, and vision reads and
+  erasure deletes whatever it names), and every read, signature and deletion uses the same
+  check — `mediaKeysOf` included, so a row written before the rule cannot take another
+  tenant's file with it.
+- **Stored files are served through `mediaServingHeaders`,** never with the stored MIME type
+  as-is: that type is whatever the sender claimed, and an SVG or HTML file served inline on
+  the console's origin runs with the agent's session. Uploads accept raster images by name
+  (not `image/`, which admits SVG) and take only a short alphanumeric extension from the
+  submitted file name, which used to be able to put `/` into the storage key.
+- **Outbound media leaves as a signed link, not as bytes.** LINE and Messenger do not accept
+  a file: they take a URL and fetch it themselves, from their own servers, with no session.
+  `withMediaLinks` in the outbound processor turns a storage key into a link signed with
+  `APP_SECRET_KEY` and expiring after `MEDIA_LINK_TTL_DAYS`, and `/api/media/*` serves it
+  publicly. Adapters stay pure translators and read `sourceUrl` only. This is the one place
+  the private-bucket posture of ADR 0001 is relaxed, and the link is what makes it safe.
+- **Delete rows that name stored files and queue the files in one transaction**
+  (`queueBlobDeletions`), then `drainBlobDeletions`. A failed removal stays queued; the
+  nightly retention job retries it and queues agent uploads never sent after a day.
+- `eraseWorkspace` refuses to delete anything unless a `workspace_erasures` row says the
+  deletion was asked for, and saves the media keys onto that row **before** the rows go.
+  After the cascade there is nothing left to read them from, so a retry would otherwise
+  leave every object behind. It collects message attachments, `knowledge_sources.
+  storage_key` and anything still queued in `blob_deletions`; `mediaKeysOf` only knows about
+  the first.
+
+### Outbox, queues and delivery
+
 - `pg_notify` inside a transaction fires **at commit** and is dropped on rollback, which is
   exactly what the outbox needs: the relay is woken when the row becomes visible and never
   for one that was rolled back. It is called on the same executor as the insert for that
@@ -314,124 +464,81 @@ without spending money.
   workspace-erasure job must outlive the cascade it was queued to perform, and the nightly
   sweep belongs to no tenant — nor does the idle-resolve planning pass, which fans out one
   job per active workspace keyed `idle-resolve-<workspace>-<slot>`.
-- **A turn answers once because of `messages.turn_key`,** which is the turn's BullMQ job id,
-  which is the customer message that prompted it. The processor reads it before calling the
-  model; the unique index behind it catches the race that read cannot. On a collision
-  `storeMessage` reports `duplicate` and the id it returns names no row — the AI turn
-  re-selects the winner rather than queueing delivery for a message that does not exist.
-  Holding messages use the same column, keyed `ack-<kind>-<conversation>-<at ms>` where `at`
-  travels on the effect, so a replayed effect list sends one acknowledgement per wait; on a
-  collision `findMessageIdByTurnKey` reads the winner back and delivery is queued anyway.
+- BullMQ rejects a custom job id containing `:` unless it splits into exactly three parts.
+  Use `-` as the separator; a two-part `prefix:id` throws at enqueue time.
+- **Delivery statuses.** `queued` until sent; `sent`, `delivered`, `read` only ever rise —
+  receipts arrive out of order, so `applyReceipt` never lowers one, and the outbound job's
+  early return covers all three. `canceled`: withheld because a colleague took over.
+  `uncertain`: the platform did not answer (`UncertainDeliveryError`), so it may have
+  arrived; never resent automatically. `failed` means **nothing will try again**: the
+  outbound job writes it only on its last attempt (`JobMeta.finalAttempt`) and until then
+  leaves the row `queued` with the error noted. That is what makes the console's resend
+  (`POST /conversations/:id/messages/:messageId/resend`) safe: it locks the row, requires
+  `failed` (and refuses an AI reply with 409 while a colleague owns the conversation), moves
+  it to `queued` and writes an outbox row in the same transaction with a fresh job id
+  (`outbound-<id>-resend-<uuid>`), since BullMQ keeps the failed job under the old one and
+  would ignore the add.
+- Delivery and read receipts are not messages. Messenger reports them as a watermark over
+  the conversation, so they raise the status of every outbound message sent at or before
+  that instant and never appear in the thread.
 - **`messages.sent_parts` is the delivery checkpoint.** Long text goes out as several sends;
   without it a failure on part three restarted at part one and the customer read the opening
-  twice. Delivery state is monotonic: the early return covers `sent`, `delivered` **and**
-  `read`, because receipts only ever raise a status.
+  twice. An adapter that sends one message as several requests reports each (`startAt`,
+  `onUnitSent` on `SendContext`), and the job checkpoints units for a non-text message. LINE
+  pushes carry `X-Line-Retry-Key` from the message id and part, and a 409 on it means an
+  earlier attempt delivered.
 - **Telling the console is not part of delivering.** The publish used to sit inside the try
   that wraps the adapter call, so a Redis hiccup after a successful send marked the message
   failed and threw, and the retry sent the customer the same words again.
-- Tests must **relay before looking at a queue** (`drainQueue` in the worker fixture does it
-  for you). A test that reads BullMQ directly sees an empty queue and concludes nothing was
-  asked for.
-- **A last-admin check and the change it guards share one transaction.** The `FOR UPDATE`
-  lock over the admin set lives only as long as its transaction: checking in one and mutating
-  after it returned let two concurrent demotions both through, which is the outcome the lock
-  exists to prevent. Return the refusal from inside the transaction rather than calling
-  `tx.rollback()`, which throws and surfaces as a 500.
-- The API holds a **second auth instance** (`ctx.authSignUp`) that allows sign-up, and it is
-  never mounted. `disableSignUp` is checked inside Better Auth's handler, per instance, so
-  this is what lets an invitation create an account while the public API stays invite-only.
-  Do not pass it to `authHandler`, and do not reach for it outside the accept route.
-- Spending an invitation and writing the membership share a transaction. Apart, a failure
-  between them leaves somebody with an account, no membership, and a link that will never
-  work again — the one outcome with no way out but an admin issuing another.
-- Two Elysia plugins each carrying a `.as('global')` macro do not merge in the type: a route
-  can only see the macros of one of them. All three guards live in one `.macro()` call for
-  that reason. None of them branches on its own parameter either: a macro only runs for a
-  route that names it, and returning `{}` for `false` widens every handler's type until
-  `user` is no longer known to be there.
-- Drizzle wraps a driver error in `DrizzleQueryError`, which carries the query and the
-  parameters but not the code. `isUniqueViolation` walks the `cause` chain; a check on
-  `error.code` alone silently turns a duplicate slug into a 500.
-- A suspended workspace's queued AI turn is **dropped**, which contradicts "the AI never goes
-  silent" everywhere else. It is deliberate and commented at the call site: there is no
-  colleague to hand off to, because every agent in the tenant is locked out too.
-- A webhook for a suspended tenant answers **200 and discards**. Erroring would be more
-  honest and would cost the operator their webhook registration: LINE and Meta disable an
-  endpoint that keeps failing, and a suspension is meant to be reversible in an afternoon.
-- `eraseWorkspace` refuses to delete anything unless a `workspace_erasures` row says the
-  deletion was asked for, and saves the media keys onto that row **before** the rows go.
-  After the cascade there is nothing left to read them from, so a retry would otherwise
-  leave every object behind. It collects `knowledge_sources.storage_key` as well as message
-  attachments; `mediaKeysOf` only knows about the latter.
-- The seed grants platform admin to `SEED_ADMIN_EMAIL`. An installation seeded before M6
-  must re-run `bun run db:seed`, or the platform page is invisible to everybody and no
-  second tenant can ever be created.
-- **Outbound media leaves as a signed link, not as bytes.** LINE and Messenger do not accept
-  a file: they take a URL and fetch it themselves, from their own servers, with no session.
-  `withMediaLinks` in the outbound processor turns a storage key into a link signed with
-  `APP_SECRET_KEY` and expiring after `MEDIA_LINK_TTL_DAYS`, and `/api/media/*` serves it
-  publicly. Adapters stay pure translators and read `sourceUrl` only. This is the one place
-  the private-bucket posture of ADR 0001 is relaxed, and the link is what makes it safe.
-- **LINE has no document message.** Its outbound types are text, sticker, image, video,
-  audio, location, imagemap, template and flex. A file therefore goes as a **Flex card**
-  naming it with a button that opens the link; Messenger carries it natively. The card's
-  `altText` carries the link too, because a client too old for Flex sees only that. Neither platform's image or file carries a
-  caption, so an agent's note is sent as its own message first rather than dropped.
-- The conversation panel keeps the **most recent** thirty messages live and fetches older
-  pages by cursor (`GET /conversations/:id?before=<message id>`) as somebody scrolls up —
-  and only on the way up: opening a thread lands at its end instantly, because a smooth
-  scroll from the top passed every older-page trigger and loaded the whole history. It
-  used to widen one window to a cap of 500, which left a long thread's opening unreachable.
+
+### Conversations, customers and time
+
+- A raw `sql` template hands its parameters straight to postgres-js, which refuses a Date:
+  "The 'string' argument must be of type string". The query builder serialises Dates, raw
+  SQL does not. Pass `date.toISOString()` and cast it, as `packages/infra/src/dashboard.ts`
+  does.
+- **Postgres keeps microseconds and a JavaScript Date keeps milliseconds.** A `created_at`
+  read into JS and compared back reads as earlier than its own row, so "nothing newer than
+  this" is never true. Compare by message id — ids are time-ordered — as
+  `packages/infra/src/idle-resolve.ts` does, and break `created_at` ties on id.
+- `conversations.reviewed_at` is set with the database's `now()`, never a Date from the API
+  process. It is compared against `messages.created_at`, which `defaultNow()` writes on the
+  database clock, and two clocks a second apart would either mark AI replies reviewed before
+  they were written or leave a conversation stuck in the review queue.
 - Finding or creating a conversation happens under a row lock on the channel identity, and
   the identity insert tolerates a conflict. Inbound runs ten jobs at a time, so two messages
   typed in quick succession are two jobs: without both, one burst of typing became two
-  conversations, or the second job failed on the unique index.
-- The inbox order lives in SQL and the browser must not re-sort it. It used to lift
-  `waiting_human` to the top client-side, which was right when the whole queue arrived in
-  one page; the order now depends on who owns each customer, which only the database knows,
-  so re-sorting a page of fifty contradicts it.
+  conversations, or the second job failed on the unique index. A customer writing to a
+  **resolved** conversation reopens it rather than starting another, in the workspace's
+  default mode and with the customer's owner.
 - **`customers.assignee_user_id` is the relationship; `conversations.assignee_user_id` is
   the thread.** A new conversation inherits the customer's owner, a colleague can take one
   thread without inheriting the customer, and a merge carries the owner onto the survivor
   when it has none. A column on `customers` is not covered by the repoint list in
   `merge.ts`: it has to be named in the survivor-wins block or it is dropped with the row.
-- Browser tests resolve every open conversation before the suite runs (`clearInbox`). The
-  suite creates conversations and never deletes them, which cost nothing while the inbox was
-  newest-first; with longest-wait-first, days of unanswered test conversations sit at the top
-  and push each new arrival past the fifty the list asks for. CI never saw it because it
-  seeds from empty.
-- A bare `/<slug>` in the console switches to that workspace, so **a tenant cannot be named
-  after a console path**: a static route outranks the `$slug` parameter, and a tenant slugged
-  `settings` would be unreachable by URL while looking perfectly normal in every list.
-  `RESERVED_SLUGS` in `packages/shared/src/workspace.ts` refuses them at creation. Add to it
-  when you add a top-level route.
-- The slug route resolves against the caller's own memberships, never a lookup by slug. A
-  workspace somebody does not belong to must be indistinguishable from one that does not
-  exist, or the URL becomes a way to enumerate the tenants on an installation.
-- `session.activeOrganizationId` is plain text with no foreign key. It survives being
-  removed from a workspace and survives that workspace being deleted, so `chooseMembership`
-  falls back rather than trusting it.
-- **A handoff always tells the customer.** `ai_handoff` and the unsupported-media branch
-  emit `send_acknowledgement {kind:'handoff'}` before the note and the nudge to agents; the
-  waiting-human timer sends `kind:'still_waiting'`, a separate apology, so the customer never
-  reads the same sentence twice. The language comes from what the customer last typed
-  (`customerLanguageEvidence`, over `typedText` — never `messages.text`, where a photo is
-  our English `[image]`), then their record, then the workspace default. Both texts are editable
-  per language in Settings → General; if both are empty it logs a warning rather than
-  returning in silence.
-- **Postgres keeps microseconds and a JavaScript Date keeps milliseconds.** A `created_at`
-  read into JS and compared back reads as earlier than its own row, so "nothing newer than
-  this" is never true. Compare by message id — ids are time-ordered — as
-  `packages/infra/src/idle-resolve.ts` does, and break `created_at` ties on id.
+- Merging two customers must repoint every table holding a person's history before the
+  losing row is deleted, in one transaction. Five tables reference `customers.id` and all
+  cascade on delete, which is how erasure wipes a person in one statement, so the wrong
+  order destroys history instead of moving it. `mergeCustomers` in
+  `packages/infra/src/merge.ts` repoints four and leaves `merge_suggestions` to the cascade on
+  purpose; a new table that stores anything worth keeping goes on the repoint list. Merging
+  two *conversations* (`mergeConversations`, `bun run conversations:merge`) has its own
+  repoint list for tables keyed by `conversation_id`.
+- `conversations.handoff_reason` is cleared when a conversation goes back to the AI, so it
+  can never be the source for reporting: the dashboard list of what the AI could not handle
+  emptied itself as agents worked their queue. `handoff_events` is the history; the column
+  stays for the inbox badge. Both exist on purpose.
 - **An agent's reply does not update `conversations.last_message_at`.** Only an inbound
   message and the AI turn write it; the agent send route and holding messages do not. The
-  inbox's "customer spoke last" ordering therefore treats an agent-answered conversation as
-  unanswered, and retention ages from the last customer or AI message. Where it matters, read
-  the last row of `messages`, as idle-resolve does. Known and not yet fixed.
+  inbox's waiting order compares `last_customer_message_at >= last_message_at`, so it treats
+  an agent-answered conversation as unanswered, and retention ages from the last customer or
+  AI message. Where it matters, read the last row of `messages`, as idle-resolve does.
+  **Known and not yet fixed.**
 - **Resolving does not change `mode`.** "Waiting" means `status = 'open' AND mode =
-  'waiting_human'` everywhere it is counted: the Inbox badge (`/v1/conversations/counts`),
-  the inbox's Waiting tab and the dashboard's `waitingNow`. Filtering on mode alone kept a
-  conversation closed mid-wait counted forever, until red read higher than blue.
+  'waiting_human'` everywhere it is counted: the Inbox badge
+  (`/api/v1/conversations/counts`), the inbox's Waiting tab and the dashboard's `waitingNow`.
+  Filtering on mode alone kept a conversation closed mid-wait counted forever, until red read
+  higher than blue.
 - **Conversations close on their own** after `autoResolveAfterHours` (default 24, null =
   off) when open, in `ai` mode, our side (AI or colleague — not a system message) spoke last,
   and the customer has been quiet since. A sweep every 15 minutes, not a timer per
@@ -441,92 +548,95 @@ without spending money.
 - **A nullable workspace setting needs `'key' in settings`, not `??`, for its read-time
   default.** Absent means a workspace older than the setting; `null` means somebody switched
   it off, which `??` silently undoes (`withSettingsDefaults`, `autoResolveAfterHours`).
-- **Summariser facts go to `customers.notes`, never `customers.fields`.** `fields` holds the
-  five identifiers `set_customer_field` accepts, which merge matching compares; the
-  summariser used to merge free-form keys in and filled the panel with invented ones. See
-  ADR 0007. `notes` is named in the survivor-wins block in `merge.ts`.
-- **A running `bun run dev` steals integration-test work.** Queue prefixes are per fixture,
-  but `outbox` is one shared table: the dev worker's relay claims a test's rows and runs them,
-  and the test's `drainQueue` sees nothing — failures look like unrelated bugs ("job locked
-  by another worker", a reply that never arrived). Stop the dev servers before `bun run test`
-  and before `bun run test:e2e`.
+- **Settings and knowledge entries carry a revision** (`revision` from `GET /settings/
+  workspace`, an entry's `updatedAt`). A save sends the one it started from and a mismatch
+  is a 409, so nobody overwrites a value they never saw. **Never take that revision from the
+  query cache at save time**: the socket's reconnect refetches every query, which moves the
+  cache on while the fields still show the old text. Settings keep it in a ref (first load,
+  own saves, a conflict); the entry editor takes it at focus and follows its own chain of
+  saves through a map. Saves go one at a time. Omitting `revision` still overwrites.
+
+### Console
+
+- The inbox order lives in SQL and the browser must not re-sort it. It used to lift
+  `waiting_human` to the top client-side, which was right when the whole queue arrived in
+  one page; the order now depends on who owns each customer, which only the database knows,
+  so re-sorting a page of fifty contradicts it.
+- The conversation panel keeps the **most recent** thirty messages live and fetches older
+  pages by cursor (`GET /conversations/:id?before=<message id>`) as somebody scrolls up —
+  and only on the way up: opening a thread lands at its end instantly, because a smooth
+  scroll from the top passed every older-page trigger and loaded the whole history.
+- **Internal notes are interleaved with messages in the thread, clamped to the loaded
+  window.** The endpoint windows messages but not notes, so a note older than the oldest
+  loaded message is held back until the window reaches it.
+- **Settings and the inbox keep their place in the address** (`/settings?tab=general|
+  channels|models|integrations`, `/?tab=open|waiting|review|resolved&c=<conversation>`). A
+  browser test must go to the tab its control lives on, or the control is not rendered.
+  Integrations is admins only. The inbox search box is not in the address.
+- **Do not call `useSearch({ from })`.** The routes are declared inline and have no id for
+  `from` to resolve, so it throws on first render. Read `useRouterState({ select: s =>
+  s.location.search })` instead.
 - **Destructive actions use `ConfirmButton`, never `window.confirm`.** A native dialog blocks
   the page, cannot be styled, is dismissed by reflex, and hangs a browser test with no dialog
   handler. Where there is no button to arm — a select — confirm inline, as the self-demotion
   panel in `Admin.tsx` does. `ConfirmButton` ignores a confirm within 400 ms of arming, which
   is a double-click, so a browser test uses `confirmTwice()` from `e2e/helpers.ts`; erasing
   a customer is a separate step naming them, not a second click.
-- **Settings and the inbox keep their tab in the address** (`/settings?tab=general|channels|
-  models|integrations`, `/?tab=open|waiting|review|resolved`). A browser test must go to the
-  tab its control lives on, or the control is not rendered. Integrations is admins only.
-- **Do not call `useSearch({ from })`.** The routes are declared inline and have no id for
-  `from` to resolve, so it throws on first render. Read `useRouterState({ select: s =>
-  s.location.search })` instead.
-- **`display:flex` beats the `hidden` attribute,** which only sets `display:none` in the
-  user-agent stylesheet. An element styled as flex needs `[hidden] { display: none }` — the
-  widget's typing dots showed from page load without it.
-- **The widget's own words are in `COPY` in `apps/widget/src/app.ts`, Thai and English.**
-  The language is `data-lang` on the embed tag, else the workspace's language from the
-  session, else Thai. The line saying who is answering (`stateText`) comes from the API in
-  the visitor's language.
-- **`loader.js` must not share a module with the chat app.** It is embedded with a classic
-  `<script>`; a shared chunk turns it into a module whose `import` a host page cannot run.
-  That is why `launcher-colour.ts` duplicates `readableOn` from `contrast.ts`.
-- **Internal notes are interleaved with messages in the thread, clamped to the loaded
-  window.** The endpoint windows messages but not notes, so a note older than the oldest
-  loaded message is held back until the window reaches it.
-- TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
-  risk on that path.
-- **Storage keys are judged by `isWorkspaceKey`, never `startsWith`.** A prefix check
-  accepted `workspaceA/../workspaceB/file`, which the filesystem store resolves into another
-  tenant's directory. Every read, signature and deletion uses the canonical check.
-- **The restricted fetch connects to the address it checked** (`pinnedRequest`, Node
-  `https.request` with a pinned `lookup`, `agent: false`). A pooled agent skips `lookup`
-  and would reconnect wherever the pool first went, which reopens the DNS race.
-- **The widget shows only delivered replies and pages by `coalesce(sent_at, created_at)`.**
-  A reply withheld by a takeover (`canceled`) or still `queued` never reaches the visitor;
-  paging by creation time would skip a reply sent after a later row moved the cursor.
-- **Messages have `canceled` and `uncertain` statuses.** `canceled`: withheld because a
-  colleague took over. `uncertain`: the platform did not answer (`UncertainDeliveryError`),
-  so it may have arrived; the outbound job never resends either.
-- **`failed` means nothing will try again.** The outbound job writes it only on its last
-  attempt (`JobMeta.finalAttempt`); before that the row stays `queued` with the error noted.
-  That is what makes the console's resend (`POST /conversations/:id/messages/:messageId/
-  resend`) safe: it locks the row, requires `failed`, moves it to `queued` and queues a job
-  with a fresh id (`outbound-<id>-resend-<uuid>`), since BullMQ keeps the failed job under
-  the old one and would ignore the add.
-- **An adapter that sends one message as several requests reports each** (`startAt`,
-  `onUnitSent` on `SendContext`); the outbound job checkpoints units in `sent_parts` for a
-  non-text message. LINE pushes carry `X-Line-Retry-Key` from the message id and part, and
-  a 409 on it means an earlier attempt delivered.
-- **Delete rows that name stored files and queue the files in one transaction**
-  (`queueBlobDeletions`), then `drainBlobDeletions`. A failed removal stays queued; the
-  nightly retention job retries it and queues agent uploads never sent after a day.
-- **Membership uniqueness (`member_org_user_uq`) lives in migration 0012, not in
-  `schema/auth.ts`,** because `bun run auth:generate` rewrites that file. Inserts into
-  `member` use `onConflictDoNothing()`.
-- **A reset link carries `issuer_scope`.** A workspace-issued one is re-checked at
-  redemption with `accountReach`; widening the account since issue refuses it with 409.
-- **A socket re-proves itself on `auth.changed`.** Publish it (to each of the person's
-  workspaces) whenever something narrows somebody's access; the socket server closes what
-  no longer qualifies with 4401/4403, and the console does not retry those codes.
-- **Internal ingestion writes an event id into a body that has none** (a fingerprint of the
-  body). Two identical simulator messages to the same customer without an `eventId` are
-  therefore one event; a test that means two sends gives each its own id or text.
-- **Every stored vector has an `embedding_space`** (`model|dims` or `model|native`), and
-  dense search and recall compare only within the query's space. A new embedding writer
-  stores `embedded.space` from `embedTexts`.
-- **Summaries are incremental** from `conversations.summarized_through_message_id`; recall
-  rows are appended, never rebuilt, and recall excludes the current conversation only from
-  the start of the visible window.
-- **`ProviderProfile.revision` is the provider's `updatedAt`.** The model caches rebuild a
-  client when it changes; a builder of profiles sets it, or a rotated key lingers.
-- **The console asks `can(me, capability)` (`apps/web/src/lib/capabilities.ts`)** before
-  offering an action or firing a query a role will be refused. Viewers get read-only notes.
 - **Modals use `Dialog` from `ui.tsx`** (focus in, trap, Escape, inert `#root`, focus back).
 - **`useSaveState` returns a sequence from `onMutate`;** pass `(data, variables, context)`
   through when wrapping `onSuccess`/`onError`, or an older save's outcome can overwrite a
   newer one.
+- A `<datalist>` is not a picker. Browsers filter its options by whatever the input already
+  contains, so a field holding a saved value offers only the entries resembling it and the
+  rest cannot be reached. Its arrow is also hidden until hover. Where every option must be
+  visible, as in the model field, use a `<select>` and give it an entry that switches to
+  free text for values the list does not carry.
+- A popover inside the message thread is clipped by its scroll container, so its bounding box
+  can extend over the header and the click lands on the header instead. Panels that open from
+  a bubble go in the normal flow and let the thread grow.
+
+### Widget
+
+- **The widget's own words are in `COPY` in `apps/widget/src/app.ts`, Thai and English.**
+  The language is `data-lang` on the embed tag, else the workspace's language from the
+  session, else Thai. The line saying who is answering (`stateText`) comes from the API in
+  the visitor's language, judged the same way as the handoff message
+  (`customerLanguageEvidence`).
+- **`loader.js` must not share a module with the chat app.** It is embedded with a classic
+  `<script>`; a shared chunk turns it into a module whose `import` a host page cannot run.
+  That is why `launcher-colour.ts` duplicates `readableOn` from `contrast.ts`.
+- **The widget shows only delivered replies and pages by `coalesce(sent_at, created_at)`.**
+  A reply withheld by a takeover (`canceled`) or still `queued` never reaches the visitor;
+  paging by creation time would skip a reply sent after a later row moved the cursor.
+- **`display:flex` beats the `hidden` attribute,** which only sets `display:none` in the
+  user-agent stylesheet. An element styled as flex needs `[hidden] { display: none }` — the
+  widget's typing dots showed from page load without it.
+
+### Tests
+
+- **A running `bun run dev` steals integration-test work.** Queue prefixes are per fixture,
+  but `outbox` is one shared table: the dev worker's relay claims a test's rows and runs them,
+  and the test's `drainQueue` sees nothing — failures look like unrelated bugs ("job locked
+  by another worker", a reply that never arrived). Stop the dev servers before `bun run test`
+  and before `bun run test:e2e`.
+- Tests must **relay before looking at a queue** (`drainQueue` in the worker fixture does it
+  for you). A test that reads BullMQ directly sees an empty queue and concludes nothing was
+  asked for. The relay moves *every* pending row, so a queue can hold jobs an earlier test
+  left behind: filter what you drain by `workspaceId`.
+- Browser tests find controls by `data-testid`, not by visible text: the console defaults to
+  Thai, so label matchers would depend on the active language.
+- The e2e mock provider answers a phone number with a `set_customer_field` tool call, but
+  only while no `tool` message is in the request. Without that guard the turn calls the tool
+  forever and the harness gives up.
+- Browser tests must clear tenant tools before defining their own. Tools persist between
+  runs and the AI is offered all of them, so one left behind points at a port that died with
+  its test process, the model picks it, and the conversation hands off before reaching the
+  tool under test. `clearTools()` in `e2e/helpers.ts`.
+- Browser tests resolve every open conversation before the suite runs (`clearInbox`). The
+  suite creates conversations and never deletes them, which cost nothing while the inbox was
+  newest-first; with longest-wait-first, days of unanswered test conversations sit at the top
+  and push each new arrival past the fifty the list asks for. CI never saw it because it
+  seeds from empty.
 - **Browser tests that embed the widget serve a host page from `127.0.0.1`** against the
   widget on `localhost`, with Chrome's `LocalNetworkAccessChecks` disabled in
   `playwright.config.ts`; a public-looking hostname cannot load a loopback script at all. A
@@ -537,12 +647,15 @@ without spending money.
 ## Adding things
 
 **A channel:** implement `ChannelAdapter` in `packages/channels/src/adapters/`, register it in
-that package's `index.ts`, and add fixture tests. Nothing else changes: the webhook route,
-worker and console are already channel-neutral. Where the platform publishes typed webhook
-definitions, type the fixtures with them, so a payload the platform would not send fails to
-compile. Where it does not, say so in the test file rather than letting composed fixtures read
-as authoritative. Implement `fetchMedia` if the platform sends references rather than bytes,
-and `checkCredentials` so settings can verify a token without waiting for a customer.
+that package's `index.ts`, and add fixture tests. Add the type to `channelTypeSchema`
+(`packages/shared/src/conversation.ts`) and `channelTypeEnum` (`packages/db/src/schema/app.ts`,
+which needs a migration), and give Settings and `SetupChecklist` its configuration form. The
+webhook route and the worker are otherwise channel-neutral. Where the platform publishes typed
+webhook definitions, type the fixtures with them, so a payload the platform would not send
+fails to compile. Where it does not, say so in the test file rather than letting composed
+fixtures read as authoritative. Implement `fetchMedia` if the platform sends references rather
+than bytes, and `checkCredentials` so settings can verify a token without waiting for a
+customer.
 
 **An AI tool:** add it to `createInternalTools` in `packages/core/src/ai/tools.ts` **and to
 `RESERVED_TOOL_NAMES` in `packages/shared/src/tools.ts`**. Both: the reserved list is what
@@ -560,50 +673,31 @@ wins any name clash.
 
 **A tenant-owned table:** add `workspace_id` with `onDelete: 'cascade'`, and ask whether it
 holds anything a person would want to keep. If it does, it goes on the repoint list in
-`packages/infra/src/merge.ts`. If it points at stored media, its key column goes into
-`eraseWorkspace`, because blobs do not cascade.
+`mergeCustomers` (`packages/infra/src/merge.ts`), and a table keyed by `conversation_id` goes
+on `mergeConversations`' list too. If it points at stored media, its key column goes into
+`eraseWorkspace`, because blobs do not cascade, and its deletions go through
+`queueBlobDeletions`.
 
 **A migration:** edit `packages/db/src/schema/app.ts`, run `bun run db:generate`, review the
 generated SQL, then `bun run db:migrate`. A migration that moves data should be idempotent
 (a second run finds nothing to move); take a `pg_dump` before deploying it.
 
 **A workspace setting:** it is one jsonb document, so no migration. Add the key to
-`WorkspaceSettings` (`packages/db/src/schema/app.ts`) and `defaultWorkspaceSettings`, give
-it a read-time default in `withSettingsDefaults` (`packages/infra/src/repo.ts`) so older
-workspaces get it, accept it in the PATCH schema in `apps/api/src/routes/settings.ts`, add it
-to the web `WorkspaceSettings` type, and set it in `DEFAULT_SETTINGS` in
-`apps/worker/test/helpers/fixture.ts` if tests depend on it.
+`WorkspaceSettings` (`packages/db/src/schema/app.ts`) and `defaultWorkspaceSettings`
+(`packages/db/src/workspace.ts`), give it a read-time default in `withSettingsDefaults`
+(`packages/infra/src/repo.ts`) so older workspaces get it, accept it in the PATCH schema in
+`apps/api/src/routes/settings.ts`, add it to the web `WorkspaceSettings` type, and set it in
+`DEFAULT_SETTINGS` in `apps/worker/test/helpers/fixture.ts` if tests depend on it.
+
+**An environment variable:** add it to `packages/config/src/index.ts` and `.env.example`, and
+to `docs/DEPLOY.md` if production needs it. Compose passes `.env` to both services.
 
 ## Pull requests
 
 Feature branches into `main`. CI runs lint, typecheck, migrations, tests, the web build, the
 browser tests, and builds both release images and requires them to start healthy.
-End commit messages with:
+End commit messages with the co-author trailer the session provides, for example:
 
 ```
 Co-Authored-By: Claude <model> <noreply@anthropic.com>
 ```
-- **One turn per customer message, but a superseded one steps aside.** An AI turn that finds
-  a newer customer message with its own `ai-turn-<id>` row in the outbox drops itself: before
-  the model call, after it, and under the commit lock — the last only if none of its tenant
-  writes fired, since then its reply is the customer's only account of them. A newer message
-  with no turn owed (it arrived while a colleague held the conversation) never silences the
-  older turn. `outbox_job_id_idx` (migration 0015) keeps the lookup cheap.
-- **Settings and knowledge entries carry a revision** (`revision` from `GET /settings/
-  workspace`, an entry's `updatedAt`). A save sends the one it started from and a mismatch
-  is a 409, so nobody overwrites a value they never saw. **Never take that revision from the
-  query cache at save time**: the socket's reconnect refetches every query, which moves the
-  cache on while the fields still show the old text. Settings keep it in a ref (first load,
-  own saves, a conflict); the entry editor takes it at focus and follows its own chain of
-  saves through a map. Saves go one at a time. Omitting `revision` still overwrites.
-- **Index swaps re-check under a lock.** `indexEntry` locks the entry and stores nothing if
-  its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
-  the source row, since two concurrent swaps could not see each other's new entry and left
-  the document indexed twice.
-- **LINE media goes through a Cloudflare Worker** (`workers/line-media`, ADR 0009) when
-  `LINE_MEDIA_PROXY_URL`/`_SECRET` are set: the VPS's route to LINE's Tokyo content server
-  runs at ~14 KB/s (65 s for one photo; 1.2 s through the Worker). The Worker only builds
-  LINE's content URL from a numeric id and holds no R2 binding; the app falls back to the
-  direct fetch. **Do not put a total deadline on LINE downloads** — the endpoint is slow, not
-  stalled, and a 15-second limit failed every photo over ~200 KB. The Worker lives outside
-  the Bun workspaces and is deployed with `bunx wrangler deploy` from its own folder.

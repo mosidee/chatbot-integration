@@ -27,7 +27,7 @@ Milestones one to six are delivered, and one to four are running in a pilot on t
 | AI | Any OpenAI-compatible provider, per-task model slots with a fallback, vision, tool calling |
 | Knowledge | Hybrid retrieval over Postgres with pgvector and trigram search, Thai and English |
 | Memory | Rolling per-customer summaries, plus recall over that customer's past conversations |
-| Console | Inbox with open and waiting badges, takeover, suggested replies, knowledge, tabbed settings, dashboard; usable on a phone |
+| Console | Inbox with open and waiting badges, search, takeover, suggested replies, resend of failed deliveries, knowledge, tabbed settings, dashboard; usable on a phone |
 | Tools | Tenant-defined HTTP tools the AI can call, with restricted egress and proved identity |
 | Security | Every URL a tenant types goes through restricted egress; a private model gateway is approved per tenant by a platform admin. Stored files are served as downloads or inert media |
 | Quality | Thumbs and reasons on AI replies, and a review queue of conversations nobody has read |
@@ -59,7 +59,8 @@ are deliberately absent.
 ## Requirements
 
 - [Bun](https://bun.sh) 1.4 or newer. There is no Node build.
-- Docker, for Postgres, Redis and object storage.
+- Docker, for Postgres and Redis. Media is stored on disk locally (`.data/media`) and in
+  Cloudflare R2 in production (ADR 0008).
 
 ## Getting it running
 
@@ -146,6 +147,8 @@ packages/db        Drizzle schema, migrations, auth config, encryption.
 packages/infra     Runtime wiring: Redis, queues, storage, repository.
 packages/shared    Schemas and types shared with the browser.
 packages/config    Environment parsing.
+workers/line-media A Cloudflare Worker that fetches LINE media (optional, ADR 0009).
+e2e/               Playwright browser tests.
 ```
 
 `packages/core` has no framework in it: no HTTP server, no React, no database client. It
@@ -158,8 +161,9 @@ and the worker portable.
 accident, and a long list of things that cost somebody a day to find out. Worth reading
 before a first change.
 
-Feature branches into `main`. CI runs lint, typecheck, migrations, the tests and the console
-build.
+Feature branches into `main`. CI runs lint, typecheck, migrations, the web and widget builds,
+the unit and integration tests and the browser tests, and builds both release images and
+requires them to start healthy.
 
 ## Licence
 

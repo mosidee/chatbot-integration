@@ -14,7 +14,7 @@ asked for.
 | U03 Everything reachable | Done | Selected conversation in the address (`?c=`), load-more on the queue (total order, offset paging), history paged upward by cursor with no cap. Search above the list finds a conversation by customer name, identifier or message text within the current tab (`q`, trigram-indexed). `e2e/search.spec.ts` |
 | U04 Keep the reader's place | Done | Follows only at the bottom or after one's own send; "New messages" pill; instant landing on open; older pages load only when scrolling up; widget follows only at the bottom. |
 | U05 Connection freshness | Done | One socket in the shell with a status pill, full refetch on reconnect, stop on 4401/4403, workspace status refreshes the session. Server re-validates live sockets (finding 18). |
-| U06 Controls match the role | Done | `lib/capabilities.ts`; read-only notes for viewers in the inbox, knowledge and settings; admin-only queries not issued; simulator not offered to viewers. `e2e/roles.spec.ts` |
+| U06 Controls match the role | Done | `apps/web/src/lib/capabilities.ts`; read-only notes for viewers in the inbox, knowledge and settings; admin-only queries not issued; simulator not offered to viewers. `e2e/roles.spec.ts` |
 | U07 Keyboard and assistive tech | Done for the listed defects | `Dialog` (focus in, trap, Escape, inert background, focus return) for lightbox, trace, promote and the More sheet; labels tied to fields; pressed state on tabs and language; delivery states announced; launcher focus ring, `aria-expanded`, unread in its name. Automated critical-level axe pass in `e2e/accessibility.spec.ts`; a manual screen-reader pass has not been done. |
 | U08 Widget language and recovery | Done | Thai/English copy from `data-lang`, then the workspace language; `lang` on the document; Retry after a failed start; session renewal with backoff; "taking longer" line after the typing budget. `e2e/widget-embed.spec.ts` |
 | U09 Delivery outcomes | Done | Failed, withdrawn (`canceled`) and uncertain deliveries are named on the bubble with the reason; the widget shows only delivered replies. A message that failed for good (after its last automatic attempt) offers **Send again**, which resumes after the parts already sent. `apps/api/test/resend.test.ts` |
@@ -25,17 +25,17 @@ asked for.
 | U14 Dashboard definitions | Done | Each figure states what it counts; days are the workspace's timezone and say so; answered and response times count delivered replies only (finding 23). |
 | U15 Regression coverage | Done | `failNext` and `signInAs` helpers; resilience, roles, cross-origin embed, phone-width and dark/Thai projects selected by tag; axe checks. |
 
-## What is already working and should be retained
+## What was already working before the fixes, and should be retained
 
 | Area | Implemented improvement |
 | --- | --- |
 | Navigation | Inbox/settings tabs persist in search parameters; dashboard waiting/review cards link to the corresponding queue; mobile navigation has a More sheet. |
-| Conversation reading | Latest-message window, older-message loading, day separators, channel/mode labels, interleaved notes, attachment previews and image lightbox. These do not solve unlimited history or live-scroll disruption. |
+| Conversation reading | Latest-message window, older-message loading, day separators, channel/mode labels, interleaved notes, attachment previews and image lightbox. (Unlimited history and live-scroll disruption were solved later: U03, U04.) |
 | Human handoff | Localized handoff and still-waiting acknowledgments, editable copy, and a note when returning a conversation to AI. |
 | Widget feedback | Optimistic bubbles, restoration after ordinary send failure, offline/suspended/unconfigured messages, bounded typing animation, unread badge, mobile layout, reduced-motion rule for typing dots. |
 | Editing and administration | `SaveStatus`/`ErrorNote`, local save feedback in several editors, confirmation before destructive actions, typed tenant-slug deletion, single-use link copy/select behavior. Coverage is incomplete. |
 | Knowledge and diagnosis | Source processing/error status, ingestion polling, model verification, knowledge search diagnostics, trace detail, and feedback reasons. |
-| Localization and theme | Console Thai/English strings, locale-aware date formatting, document language updates, and shared light/dark surface tokens. Widget interface copy still needs localization. |
+| Localization and theme | Console Thai/English strings, locale-aware date formatting, document language updates, and shared light/dark surface tokens. (Widget copy was localised later: U08.) |
 
 ## UX/UI recommendations
 
@@ -43,7 +43,7 @@ Priority: **P1** = lost work, blocked core task, misleading state, or inaccessib
 
 ### U01 — Make failure and recovery visible at the action (P1, M)
 
-**Evidence:** [Inbox](apps/web/src/routes/Inbox.tsx), `ConversationPane` mutations; [Knowledge](apps/web/src/routes/Knowledge.tsx), source queries and `TestSearch`; [WidgetPanel](apps/web/src/components/WidgetPanel.tsx); [Admin](apps/web/src/routes/Admin.tsx); [Platform](apps/web/src/routes/Platform.tsx); [Invite](apps/web/src/routes/Invite.tsx).
+**Evidence:** [Inbox](../apps/web/src/routes/Inbox.tsx), `ConversationPane` mutations; [Knowledge](../apps/web/src/routes/Knowledge.tsx), source queries and `TestSearch`; [WidgetPanel](../apps/web/src/components/WidgetPanel.tsx); [Admin](../apps/web/src/routes/Admin.tsx); [Platform](../apps/web/src/routes/Platform.tsx); [Invite](../apps/web/src/routes/Invite.tsx).
 
 Inbox send/takeover/resolve/feedback mutations have no rendered failure state. An inbox or knowledge list request can fail and look empty; member/tenant queries fall back to empty arrays. Knowledge search can leave the previous results visible after a failed new search. Widget origin save has no error output. Invitation lookup treats network/server failure as an invalid invitation.
 
@@ -53,7 +53,7 @@ Inbox send/takeover/resolve/feedback mutations have no rendered failure state. A
 
 ### U02 — Preserve drafts and prevent in-flight edits from disappearing (P1, M)
 
-**Evidence:** [Inbox](apps/web/src/routes/Inbox.tsx), keyed `ConversationPane`, local `draft`/attachment state and send `onSuccess`; [Simulator](apps/web/src/routes/Simulator.tsx); [widget app](apps/widget/src/app.ts), submit/catch handlers.
+**Evidence:** [Inbox](../apps/web/src/routes/Inbox.tsx), keyed `ConversationPane`, local `draft`/attachment state and send `onSuccess`; [Simulator](../apps/web/src/routes/Simulator.tsx); [widget app](../apps/widget/src/app.ts), submit/catch handlers.
 
 Changing selected conversation remounts the pane and discards the draft/attachment. While send is pending, the console composer remains editable but success unconditionally clears it, including text typed after submission. Widget failure restores the old message with `input.value = text`, overwriting a newer draft. The widget has no explicit pending guard in its submit handler; Simulator's Enter handler bypasses the button's pending protection. Chat Enter handlers do not check IME composition.
 
@@ -63,7 +63,7 @@ Changing selected conversation remounts the pane and discards the draft/attachme
 
 ### U03 — Make all conversations and history reachable (P1, L)
 
-**Evidence:** [Inbox](apps/web/src/routes/Inbox.tsx), list query and `MAX_MESSAGE_WINDOW`; [conversation routes](apps/api/src/routes/conversations.ts), list ordering/limit/preview query. Related original finding: **22**.
+**Evidence:** [Inbox](../apps/web/src/routes/Inbox.tsx), list query and `MAX_MESSAGE_WINDOW`; [conversation routes](../apps/api/src/routes/conversations.ts), list ordering/limit/preview query. Related original finding: **22**.
 
 A queue can report more work than its first 50 visible rows expose. There is no conversation search or list paging, and selected conversation lives only in component state, so refresh/share/back cannot restore the exact thread. Historical traversal stops at the maximum message window.
 
@@ -73,7 +73,7 @@ A queue can report more work than its first 50 visible rows expose. There is no 
 
 ### U04 — Keep a reader's place when new messages arrive (P1, M)
 
-**Evidence:** [Inbox](apps/web/src/routes/Inbox.tsx), effect on `newestMessageId`; [widget app](apps/widget/src/app.ts), `append`/`setTyping`.
+**Evidence:** [Inbox](../apps/web/src/routes/Inbox.tsx), effect on `newestMessageId`; [widget app](../apps/widget/src/app.ts), `append`/`setTyping`.
 
 The console scrolls to the bottom for every newest-message change even when the agent is reading history. The widget also scrolls on every appended bubble and when typing starts. Existing prepend restoration helps only the older-page path.
 
@@ -83,7 +83,7 @@ The console scrolls to the bottom for every newest-message change even when the 
 
 ### U05 — Show connection freshness and resynchronize on reconnect (P1, M)
 
-**Evidence:** [client WebSocket](apps/web/src/lib/ws.ts), `socket.onopen`; [Inbox](apps/web/src/routes/Inbox.tsx), detail query; [Layout](apps/web/src/components/Layout.tsx); original finding **18**.
+**Evidence:** [client WebSocket](../apps/web/src/lib/ws.ts), `socket.onopen`; [Inbox](../apps/web/src/routes/Inbox.tsx), detail query; [Layout](../apps/web/src/components/Layout.tsx); original finding **18**.
 
 The socket reconnects silently. Its `ready` event has no conversation ID, so Inbox's event callback does not invalidate the selected thread. The list polls, but the open detail has no periodic recovery query. An agent can therefore see a plausible but stale conversation after missing events.
 
@@ -93,7 +93,7 @@ The socket reconnects silently. Its `ready` event has no conversation ID, so Inb
 
 ### U06 — Match visible controls to the user's capabilities (P1, M)
 
-**Evidence:** [Inbox](apps/web/src/routes/Inbox.tsx), `canWrite` versus ungated header/composer; [Knowledge](apps/web/src/routes/Knowledge.tsx); [Settings](apps/web/src/routes/Settings.tsx); [API role guards](apps/api/src/routes/settings.ts).
+**Evidence:** [Inbox](../apps/web/src/routes/Inbox.tsx), `canWrite` versus ungated header/composer; [Knowledge](../apps/web/src/routes/Knowledge.tsx); [Settings](../apps/web/src/routes/Settings.tsx); [API role guards](../apps/api/src/routes/settings.ts).
 
 Some feedback/ownership controls respect `canWrite`, but takeover, resolve and the composer do not. Knowledge editors are shown to viewers. Settings hides Integrations from non-admins while other admin-only editors/queries remain. Simulator is in navigation for viewers although its API requires agent access.
 
@@ -103,7 +103,7 @@ Some feedback/ownership controls respect `canWrite`, but takeover, resolve and t
 
 ### U07 — Complete keyboard and assistive-technology support (P1, M)
 
-**Evidence:** [Lightbox](apps/web/src/components/Lightbox.tsx); [Inbox](apps/web/src/routes/Inbox.tsx), trace/promote overlays; [Layout](apps/web/src/components/Layout.tsx), More sheet; [Settings](apps/web/src/routes/Settings.tsx), ToolEditor labels; [Knowledge](apps/web/src/routes/Knowledge.tsx), EntryEditor; [widget loader](apps/widget/src/loader.ts).
+**Evidence:** [Lightbox](../apps/web/src/components/Lightbox.tsx); [Inbox](../apps/web/src/routes/Inbox.tsx), trace/promote overlays; [Layout](../apps/web/src/components/Layout.tsx), More sheet; [Settings](../apps/web/src/routes/Settings.tsx), ToolEditor labels; [Knowledge](../apps/web/src/routes/Knowledge.tsx), EntryEditor; [widget loader](../apps/widget/src/loader.ts).
 
 Lightbox has dialog semantics and Escape, but no initial focus, focus containment or restoration. Trace/promote overlays have no dialog semantics/focus management. More sheet lacks equivalent lifecycle behavior. Numerous labels omit `htmlFor`/input IDs; entry textareas rely on context. Inbox filter selection is visual only. Launcher `all:initial` resets its outline without supplying a focus style, and launcher expanded/unread state is not exposed in its accessible name/state.
 
@@ -113,7 +113,7 @@ Lightbox has dialog semantics and Escape, but no initial focus, focus containmen
 
 ### U08 — Make the widget language and recovery experience complete (P1, M)
 
-**Evidence:** [widget app](apps/widget/src/app.ts), hardcoded Thai shell/refusal/failure copy and `main`; [widget loader](apps/widget/src/loader.ts); [widget HTML](apps/widget/index.html); original findings **15–16**.
+**Evidence:** [widget app](../apps/widget/src/app.ts), hardcoded Thai shell/refusal/failure copy and `main`; [widget loader](../apps/widget/src/loader.ts); [widget HTML](../apps/widget/index.html); original findings **15–16**.
 
 The console supports English and the API can return English handoff text, but the widget's greeting, Send, labels and errors remain Thai, with `lang="th"`. After five startup failures it permanently disables the session for that page with “try again” copy but no retry action. A failure renewing an expired session can leave `session = null`, after which later polls return immediately. Typing stops at 60 seconds without a corresponding “taking longer” state.
 
@@ -123,7 +123,7 @@ The console supports English and the API can return English handoff text, but th
 
 ### U09 — Make delivery outcomes understandable and recoverable (P1, M/L)
 
-**Evidence:** [DeliveryTicks](apps/web/src/components/DeliveryTicks.tsx); [Inbox](apps/web/src/routes/Inbox.tsx), `MessageBubble`; [outbound processor](apps/worker/src/processors/outbound.ts); [widget polling](apps/api/src/routes/widget.ts); original findings **7, 9, 16, 23**.
+**Evidence:** [DeliveryTicks](../apps/web/src/components/DeliveryTicks.tsx); [Inbox](../apps/web/src/routes/Inbox.tsx), `MessageBubble`; [outbound processor](../apps/worker/src/processors/outbound.ts); [widget polling](../apps/api/src/routes/widget.ts); original findings **7, 9, 16, 23**.
 
 A failed message gets a small `!` with a hover title, without a visible reason or recovery action in its bubble. Canceled AI delivery after human takeover is stored as generic `failed`. Widget polling can display queued/failed outbound rows without explaining their delivery state. This makes “what the customer actually received” hard to establish.
 
@@ -133,7 +133,7 @@ A failed message gets a small `!` with a hover title, without a visible reason o
 
 ### U10 — Finish contrast, density and responsive validation (P1 contrast; P2 layout, M)
 
-**Evidence:** [widget app](apps/widget/src/app.ts), `applyAccent`; [widget styles](apps/widget/src/styles.css); [Layout](apps/web/src/components/Layout.tsx), desktop `sm:flex` navigation; [Inbox](apps/web/src/routes/Inbox.tsx), header/sidebar and 10–11px metadata; [shared styles](apps/web/src/styles.css).
+**Evidence:** [widget app](../apps/widget/src/app.ts), `applyAccent`; [widget styles](../apps/widget/src/styles.css); [Layout](../apps/web/src/components/Layout.tsx), desktop `sm:flex` navigation; [Inbox](../apps/web/src/routes/Inbox.tsx), header/sidebar and 10–11px metadata; [shared styles](../apps/web/src/styles.css).
 
 The accent chooser uses a luminance cutoff of 0.45 instead of comparing foreground contrast: `#808080` gets white at 3.95:1. Widget errors retain `#b42318` in dark mode. Dense metadata and multiple no-wrap navigation/header actions merit testing at intermediate widths, particularly seven destinations plus workspace/language/sign-out controls starting at the small breakpoint. These overflow risks have not been visually reproduced.
 
@@ -143,7 +143,7 @@ The accent chooser uses a luminance cutoff of 0.45 instead of comparing foregrou
 
 ### U11 — Make autosave ordering and indexing status trustworthy (P1, M/L)
 
-**Evidence:** [ui.tsx](apps/web/src/components/ui.tsx), `useSaveState`; [Knowledge](apps/web/src/routes/Knowledge.tsx), `EntryEditor`; [Settings](apps/web/src/routes/Settings.tsx), blur/change saves; [settings API](apps/api/src/routes/settings.ts), read/merge/write of settings.
+**Evidence:** [ui.tsx](../apps/web/src/components/ui.tsx), `useSaveState`; [Knowledge](../apps/web/src/routes/Knowledge.tsx), `EntryEditor`; [Settings](../apps/web/src/routes/Settings.tsx), blur/change saves; [settings API](../apps/api/src/routes/settings.ts), read/merge/write of settings.
 
 Local SaveStatus is a good improvement but tracks one state without request identity. Concurrent completions can overwrite the most recent status. Uncontrolled `defaultValue` fields do not synchronize with server changes; knowledge entry save invalidates source metadata rather than the entry query. The server settings read/merge/write also permits concurrent updates to overwrite one another. “Saved” does not mean the changed knowledge has finished indexing.
 
@@ -153,7 +153,7 @@ Local SaveStatus is a good improvement but tracks one state without request iden
 
 ### U12 — Give new operators a short path to a working conversation (P2, M)
 
-**Evidence:** [Settings](apps/web/src/routes/Settings.tsx), task/provider/channel editors; [Simulator](apps/web/src/routes/Simulator.tsx); [Knowledge](apps/web/src/routes/Knowledge.tsx), empty state and search diagnostics; [README](README.md), manual setup sequence.
+**Evidence:** [Settings](../apps/web/src/routes/Settings.tsx), task/provider/channel editors; [Simulator](../apps/web/src/routes/Simulator.tsx); [Knowledge](../apps/web/src/routes/Knowledge.tsx), empty state and search diagnostics; [README](../README.md), manual setup sequence.
 
 Working setup is spread across provider, task slot, channel, knowledge and simulator pages. Existing connection/model tests are valuable but do not form a single readiness view. Simulator confirms a sent count without presenting the resulting support conversation. Knowledge diagnostics foreground fused/dense/keyword internals rather than the operator's question of whether an answer is ready.
 
@@ -163,7 +163,7 @@ Working setup is spread across provider, task slot, channel, knowledge and simul
 
 ### U13 — Make irreversible actions deliberate and progress observable (P2, M)
 
-**Evidence:** [ui.tsx](apps/web/src/components/ui.tsx), `ConfirmButton`; [EraseCustomer](apps/web/src/components/EraseCustomer.tsx); [MergeSuggestions](apps/web/src/components/MergeSuggestions.tsx); [Platform](apps/web/src/routes/Platform.tsx); original finding **13**.
+**Evidence:** [ui.tsx](../apps/web/src/components/ui.tsx), `ConfirmButton`; [EraseCustomer](../apps/web/src/components/EraseCustomer.tsx); [MergeSuggestions](../apps/web/src/components/MergeSuggestions.tsx); [Platform](../apps/web/src/routes/Platform.tsx); original finding **13**.
 
 Two clicks on the same target within five seconds are better than one, but a double-click can immediately confirm and the short timer can frustrate slower readers. Customer erasure displays “queued” without durable completion/progress. Merging shows the survivor and identity match, but limited detail about conflicting fields/ownership that will be kept or dropped.
 
@@ -173,7 +173,7 @@ Two clicks on the same target within five seconds are better than one, but a dou
 
 ### U14 — Define dashboard measures in operator language (P2, M/L)
 
-**Evidence:** [Dashboard](apps/web/src/routes/Dashboard.tsx); [dashboard aggregation](packages/infra/src/dashboard.ts); [agent accounting](packages/core/src/ai/agent.ts); original finding **23**.
+**Evidence:** [Dashboard](../apps/web/src/routes/Dashboard.tsx); [dashboard aggregation](../packages/infra/src/dashboard.ts); [agent accounting](../packages/core/src/ai/agent.ts); original finding **23**.
 
 The dashboard already links waiting/review counts to useful actions and distinguishes unpriced work. But generated answers can be counted as successful before delivery, and cost/token scope is incomplete. Operators need to distinguish current backlog from activity in the selected reporting window.
 
@@ -183,7 +183,7 @@ The dashboard already links waiting/review counts to useful actions and distingu
 
 ### U15 — Close the UX regression coverage gaps (P2, M)
 
-**Evidence:** [Playwright config](playwright.config.ts); [browser tests](e2e/); [widget API tests](apps/api/test/widget-poll.test.ts).
+**Evidence:** [Playwright config](../playwright.config.ts); [browser tests](../e2e/); [widget API tests](../apps/api/test/widget-poll.test.ts).
 
 There is meaningful workflow coverage for takeover, handback, images/files, invites, tools, review, merge and history paging. The configured browser project is desktop Chromium; existing widget chat tests open the iframe app directly on the API origin, which does not exercise a real host page plus restrictive embedding policy.
 

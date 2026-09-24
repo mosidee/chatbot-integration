@@ -58,6 +58,11 @@ happening when you message the account. Send a test message to confirm.
 Add the Official Account as a friend using the QR code on the LINE Developers Console, send it
 a message, and watch the conversation appear in the inbox.
 
+Send a photo too. LINE sends media only as a reference that the server downloads from LINE's
+content servers in Tokyo; if a photo takes a minute or more to be answered, the server's route
+there is poor, and the optional Cloudflare Worker in [DEPLOY.md](./DEPLOY.md) (ADR 0009) fixes
+it. The pilot's took 65 seconds for one photo without it and about one second with it.
+
 ### Costs worth knowing
 
 Replying inside LINE's reply window is free; a push message counts against the account's

@@ -129,7 +129,8 @@ starts a new one rather than going quiet.
 - `state` says who is answering. `ai_supervised` reads as `ai`: a customer does not need to
   know a colleague approves each reply.
 - `stateText` is null while the AI answers, and otherwise one line composed by the server in
-  the language of the visitor's last message, so the widget carries no copy of its own for it.
+  the language the visitor last typed in (a photo's placeholder text does not count), so the
+  widget carries no copy of its own for it.
 - `sender` says who wrote each message; `system` is the product itself, such as the holding
   message sent on a handoff. `from` is kept for a loader cached on a host page from before
   `sender` existed.

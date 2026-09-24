@@ -45,9 +45,9 @@ the *consumer's* retry idempotent too.
 
 **Two wake-ups.** `pg_notify` runs on the same executor as the insert, so Postgres holds the
 notification until commit and drops it on rollback: the relay is woken exactly when the row
-becomes visible and never for one that was rolled back. Measured at 29ms against a 30-second
-timer, which is how we know the notification and not the timer is doing the work. A
-one-second sweep runs regardless, covering a dropped connection, a lost notification, and a
+becomes visible and never for one that was rolled back. Measured at 29ms when the fallback timer was
+30 seconds, which is how we know the notification and not the timer is doing the work. The
+sweep is now one second, and runs regardless, covering a dropped connection, a lost notification, and a
 connection pooler in transaction mode, which does not carry notifications at all. There is no
 pooler in front of Postgres in this deployment; if one is introduced, this degrades to the
 timer's pace rather than stopping.
@@ -67,9 +67,11 @@ An outbox re-delivers reliably, which makes a non-idempotent consumer produce du
 
 - The AI turn writes its job id onto the reply as `turn_key`, behind a unique index. A retry
   that finds one knows an earlier attempt already answered and resumes at delivery. It also
-  re-reads the conversation's mode three times — before the model call, before the tenant's
-  systems are written to, and before the reply is stored — because a colleague can take the
-  conversation over during any of them.
+  re-reads the conversation's mode before the model call, before the tenant's systems are
+  written to, and before the reply is stored, and finally under a lock on the conversation row
+  as the reply is committed, because a colleague can take the conversation over during any of
+  them. (Since 2026-09-24 the same points also ask whether a newer customer message has made
+  this turn redundant: `newerTurnOwed`.)
 - Outbound keeps delivery state monotonic. Publishing to the console moved out of the `try`
   that wraps the send, the early return covers `read`, split messages checkpoint each part
   in `sent_parts`, and the LINE reply token is claimed conditionally rather than cleared.

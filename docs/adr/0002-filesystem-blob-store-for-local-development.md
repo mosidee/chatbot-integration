@@ -1,7 +1,7 @@
 # 0002 — A filesystem blob store for local development
 
 Date: 2026-09-20
-Status: accepted
+Status: accepted; amended by ADR 0008, which removed MinIO
 
 ## Context
 
@@ -25,15 +25,19 @@ with a routable address, or let the storage implementation swap.
 path uses filesystem storage, anything else uses the S3 client. Local development on macOS
 sets `S3_ENDPOINT=file://./.data/media`; CI and production keep an http endpoint.
 
+*Since ADR 0008 (2026-09-24) CI uses the filesystem store too, and production uses
+Cloudflare R2.*
+
 ## Consequences
 
 - Local development works with no VM reconfiguration and one less running container.
 - Development and CI exercise different storage implementations. To keep that honest, the
-  storage test suite runs against whichever implementation the environment selects, and CI
-  runs MinIO so the S3 path is proven on every push.
+  storage test suite runs against whichever implementation the environment selects. CI ran
+  MinIO so the S3 path was proven on every push, until MinIO was removed; the S3 half of
+  `blob.test.ts` now runs only where `S3_ENDPOINT` is an http(s) URL (ADR 0008).
 - The filesystem store keeps each object's media type in a sibling `.mime` file, since a
   filesystem has nowhere else to record it.
 - Storage keys are attacker-influenced, so the filesystem store refuses any key that
   resolves outside its root.
-- A developer on Linux, where Docker networking is native, can keep using MinIO by leaving
-  `S3_ENDPOINT` alone.
+- A developer on Linux, where Docker networking is native, could keep using MinIO by leaving
+  `S3_ENDPOINT` alone — no longer, since MinIO's images are not published (ADR 0008).
