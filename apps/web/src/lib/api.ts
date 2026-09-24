@@ -420,7 +420,7 @@ export type Dashboard = {
     tokensOut: number
   }
   firstResponse: { medianSeconds: number | null; conversations: number }
-  handoffWait: { medianSeconds: number | null; events: number }
+  handoffWait: { medianSeconds: number | null; events: number; unanswered: number }
   handoffReasons: { reason: string; conversations: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number

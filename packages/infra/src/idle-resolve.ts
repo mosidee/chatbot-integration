@@ -1,6 +1,6 @@
 import { applyEffects, type Effect, type Logger, transition } from '@ci/core'
 import { type Database, schema } from '@ci/db'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { createEffectPorts } from './effect-ports'
 import type { Runtime } from './runtime'
 
@@ -14,9 +14,12 @@ import type { Runtime } from './runtime'
  *
  * What qualifies, all of it:
  *
- * - **Open, and the AI is the one answering.** A conversation waiting for a person is owed
- *   a reply by somebody, and closing it would hide that; one a colleague owns right now is
- *   theirs to close. A conversation a colleague handed *back* is the AI's again and counts.
+ * - **Open, and the AI is the one answering** — on its own (`ai`) or drafting for a person
+ *   to approve (`ai_supervised`). A conversation waiting for a person is owed a reply by
+ *   somebody, and closing it would hide that; one a colleague owns right now is theirs to
+ *   close. A conversation a colleague handed *back* is the AI's again and counts. Leaving
+ *   supervised workspaces out would have meant none of their customers was ever summarised,
+ *   which is the thing this exists to fix.
  * - **Our side spoke last**, the AI or a colleague. The customer speaking last means they
  *   are the one waiting. A system message last — the "somebody is coming" line, with
  *   nobody having come — also does not count: that customer was promised a person.
@@ -59,7 +62,7 @@ export async function findIdleConversations(
     ) last ON true
     WHERE c.workspace_id = ${input.workspaceId}
       AND c.status = 'open'
-      AND c.mode = 'ai'
+      AND c.mode IN ('ai', 'ai_supervised')
       AND last.sender_type IN ('ai', 'human')
       AND last.created_at < ${cutoff.toISOString()}::timestamptz
   `)
@@ -102,7 +105,7 @@ export async function resolveIdleConversations(
             eq(schema.conversations.id, candidate.id),
             eq(schema.conversations.workspaceId, input.workspaceId),
             eq(schema.conversations.status, 'open'),
-            eq(schema.conversations.mode, 'ai'),
+            inArray(schema.conversations.mode, ['ai', 'ai_supervised']),
             // Nobody has written since the message the search found. A customer reply in
             // between reopens the question, and a newer reply from our side restarts the
             // clock; either way this is no longer the conversation that qualified.
@@ -121,6 +124,7 @@ export async function resolveIdleConversations(
           ),
         )
         .returning({
+          mode: schema.conversations.mode,
           assigneeUserId: schema.conversations.assigneeUserId,
           handoffReason: schema.conversations.handoffReason,
         })
@@ -129,7 +133,7 @@ export async function resolveIdleConversations(
 
       const { effects } = transition(
         {
-          mode: 'ai',
+          mode: row.mode,
           status: 'open',
           assigneeUserId: row.assigneeUserId,
           waitingHumanSince: null,

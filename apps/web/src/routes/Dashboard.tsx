@@ -199,14 +199,21 @@ export function Dashboard() {
           testId="figure-handoff-wait"
           label={t('dashboard.handoffWait')}
           value={formatDuration(data.handoffWait.medianSeconds, t)}
-          // `events` counts handoffs a person has answered, so zero of them with handoffs
-          // on the board below means nobody has picked any up — which is worth saying
-          // plainly rather than reporting as "no handoffs".
-          hint={
+          // Answered waits give the median; unanswered ones are said beside it, because they
+          // are the longest waits of all and leaving them out flatters the number.
+          hint={[
             data.handoffWait.events > 0
-              ? `${data.handoffWait.events} ${t('dashboard.handoffs')} · ${t('dashboard.firstResponse')} ${formatDuration(data.firstResponse.medianSeconds, t)}`
-              : t('dashboard.noneAnswered')
-          }
+              ? `${data.handoffWait.events} ${t('dashboard.handoffs')}`
+              : data.handoffWait.unanswered > 0
+                ? t('dashboard.noneAnswered')
+                : t('dashboard.noHandoffs'),
+            data.handoffWait.unanswered > 0
+              ? t('dashboard.stillUnanswered', { count: data.handoffWait.unanswered })
+              : null,
+            `${t('dashboard.firstResponse')} ${formatDuration(data.firstResponse.medianSeconds, t)}`,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         />
         <Figure
           testId="figure-cost"
@@ -325,7 +332,7 @@ export function Dashboard() {
                   <span className="truncate">
                     {row.channel}{' '}
                     <span className="text-[11px] uppercase text-[var(--text-muted)]">
-                      {row.type}
+                      {t(`channels.${row.type}`)}
                     </span>
                   </span>
                   <span className="tabular-nums">{row.conversations}</span>

@@ -9,7 +9,7 @@ import { schema } from '@ci/db'
 import { ingestInternal } from '@ci/infra'
 import type { ConversationMode, Language } from '@ci/shared'
 import { identityAttributesSchema } from '@ci/shared'
-import { and, asc, desc, eq, gt, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import type { ApiContext } from '../context'
@@ -184,12 +184,16 @@ export function widgetRoutes(ctx: ApiContext) {
   }
 
   /** The last thing this visitor typed, which is the evidence for what language they read. */
-  async function lastCustomerText(conversationId: string): Promise<string | null> {
+  async function lastCustomerText(
+    workspaceId: string,
+    conversationId: string,
+  ): Promise<string | null> {
     const rows = await db
       .select({ text: schema.messages.text })
       .from(schema.messages)
       .where(
         and(
+          eq(schema.messages.workspaceId, workspaceId),
           eq(schema.messages.conversationId, conversationId),
           eq(schema.messages.senderType, 'customer'),
         ),
@@ -393,7 +397,6 @@ export function widgetRoutes(ctx: ApiContext) {
             .select({
               id: schema.messages.id,
               senderType: schema.messages.senderType,
-              senderUserId: schema.messages.senderUserId,
               direction: schema.messages.direction,
               content: schema.messages.content,
               createdAt: schema.messages.createdAt,
@@ -401,11 +404,14 @@ export function widgetRoutes(ctx: ApiContext) {
             .from(schema.messages)
             .where(
               and(
+                eq(schema.messages.workspaceId, conversation.workspaceId),
                 eq(schema.messages.conversationId, conversation.id),
                 // Internal events are not part of a customer's view of their own
                 // conversation. Excluded in SQL rather than afterwards, or a burst of them
                 // eats the page and the visitor is handed fewer messages than were asked for.
-                ne(sql`${schema.messages.content}->>'kind'`, 'event'),
+                // Through coalesce: a row with no kind is not an event, and a bare `<>` against
+                // NULL is NULL, which would have hidden it.
+                sql`coalesce(${schema.messages.content}->>'kind', '') <> 'event'`,
                 ...(resuming ? [] : [gt(schema.messages.createdAt, since as Date)]),
               ),
             )
@@ -426,7 +432,9 @@ export function widgetRoutes(ctx: ApiContext) {
           const language =
             state === 'ai'
               ? loaded.language
-              : (detectLanguage(await lastCustomerText(conversation.id)) ?? loaded.language)
+              : (detectLanguage(
+                  await lastCustomerText(conversation.workspaceId, conversation.id),
+                ) ?? loaded.language)
 
           return {
             conversationId: conversation.id,
@@ -441,7 +449,8 @@ export function widgetRoutes(ctx: ApiContext) {
             stateText: stateText(state, language),
             messages: rows.map((row) => ({
               id: row.id,
-              // Kept for a loader cached on a tenant's page from before `sender` existed.
+              // The iframe app still keys its bubbles on this. It is served with the API, so
+              // the two always move together; `sender` is the richer answer.
               from: row.direction === 'inbound' ? 'you' : 'support',
               /**
                * Who actually wrote it.

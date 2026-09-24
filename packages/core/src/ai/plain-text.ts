@@ -56,14 +56,15 @@ function convertLine(line: string): string {
 function convertInline(line: string): string {
   return (
     line
+      // An image is a link to something the bubble will not show. Before the link rule,
+      // which would otherwise match inside it and leave a stray `!` in front.
+      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt: string, href: string) =>
+        alt ? `${alt}: ${href}` : href,
+      )
       // A link becomes its text and its address, because the address is the useful half and
       // a bubble cannot make the text clickable.
       .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label: string, href: string) =>
         label.trim() === href.trim() ? href : `${label} (${href})`,
-      )
-      // An image is a link to something the bubble will not show.
-      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt: string, href: string) =>
-        alt ? `${alt}: ${href}` : href,
       )
       // Bold and italic, longest marker first so `***both***` does not leave a stray star.
       .replace(/\*\*\*(?=\S)([\s\S]*?\S)\*\*\*/g, '$1')

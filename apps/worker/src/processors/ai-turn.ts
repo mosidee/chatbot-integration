@@ -15,6 +15,7 @@ import type { AiTurnJob, JobMeta, Runtime } from '@ci/infra'
 import {
   addConversationTags,
   boundIdentityFor,
+  createEffectPorts,
   createTurnRetrieval,
   createWorkspaceToolSources,
   describeWriteFailure,
@@ -509,7 +510,8 @@ async function suggestInstead(runtime: Runtime, job: AiTurnJob): Promise<void> {
 
 async function handOff(
   runtime: Runtime,
-  ports: EffectPorts,
+  // Unused: the handoff builds its own ports, bound to the transaction it runs in.
+  _ports: EffectPorts,
   logger: Logger,
   job: AiTurnJob,
   reason: HandoffReason,
@@ -554,6 +556,25 @@ async function handOff(
     .orderBy(desc(schema.messages.createdAt))
     .limit(1)
 
+  /**
+   * The instant this handoff happened, the same on every attempt of the job.
+   *
+   * It keys both the handoff row and the acknowledgement, so it has to be something a retry
+   * computes identically: the customer message the turn is answering, where there is one.
+   */
+  const trigger = job.triggerMessageId
+    ? await db
+        .select({ createdAt: schema.messages.createdAt })
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.id, job.triggerMessageId),
+            eq(schema.messages.workspaceId, job.workspaceId),
+          ),
+        )
+        .limit(1)
+    : []
+
   const { patch, effects } = transition(
     {
       mode: conversation.mode,
@@ -564,7 +585,7 @@ async function handOff(
     },
     {
       type: 'ai_handoff',
-      at: new Date(),
+      at: trigger[0]?.createdAt ?? new Date(),
       reason,
       note,
       language: detectLanguage(lastCustomerMessage[0]?.text),
@@ -572,15 +593,38 @@ async function handOff(
     { waitingHumanFallbackMinutes: settings.waitingHumanFallbackMinutes },
   )
 
-  if (Object.keys(patch).length > 0) {
-    await updateConversation(db, job.workspaceId, job.conversationId, patch)
+  /**
+   * The new mode and everything it owes, in one commit.
+   *
+   * They used to be two steps. If an effect threw after the mode was saved, the retry found
+   * the conversation already waiting: a send stopped at its first mode check, and the
+   * acknowledgement, the note, the nudge and the fallback timer were lost for good — the
+   * customer heard nothing and no colleague was told. Together, a retry finds either
+   * nothing done or everything done, and the state machine ignores a second handoff.
+   */
+  const notifications: (() => Promise<void>)[] = []
+  await db.transaction(async (tx) => {
+    if (Object.keys(patch).length > 0) {
+      await updateConversation(tx, job.workspaceId, job.conversationId, patch)
+    }
+    await applyEffects(
+      effects,
+      { workspaceId: job.workspaceId, conversationId: job.conversationId },
+      createEffectPorts(runtime, logger, {
+        executor: tx,
+        afterCommit: (fn) => notifications.push(fn),
+      }),
+      logger,
+    )
+  })
+  for (const notify of notifications) {
+    await notify().catch((error: unknown) => {
+      logger.warn('notifying agents failed after a handoff', {
+        conversationId: job.conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
   }
-  await applyEffects(
-    effects,
-    { workspaceId: job.workspaceId, conversationId: job.conversationId },
-    ports,
-    logger,
-  )
 }
 
 function toTurn(message: typeof schema.messages.$inferSelect): ConversationTurn {

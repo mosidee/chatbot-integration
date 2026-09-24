@@ -144,6 +144,9 @@ function mount(settings: Settings): void {
    * chat shut and had to go looking for it again.
    */
   let open = (() => {
+    // Desktop only. On a phone the chat is the whole page, so restoring it would cover
+    // every page the visitor moved to — Back included — until they closed it again.
+    if (phone()) return false
     try {
       return sessionStorage.getItem(OPEN_KEY) === '1'
     } catch {

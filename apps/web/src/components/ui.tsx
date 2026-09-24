@@ -194,14 +194,14 @@ export function ErrorNote({ message }: { message: string }) {
  * so they follow whatever text colour they sit in. Every one of them is decorative — the
  * button around it carries the name — hence `aria-hidden` throughout.
  */
-const ICON_PATHS: Record<string, string> = {
+// `satisfies` rather than an annotation, so `keyof` is the four real names and a typo is a
+// compile error instead of an empty icon.
+const ICON_PATHS = {
   back: 'M10 4 4 10l6 6M4 10h12',
   close: 'M5 5l10 10M15 5 5 15',
   attach: 'M13 7.5 8.6 12a2 2 0 0 0 2.8 2.8l4.6-4.6a3.5 3.5 0 0 0-5-5l-5 5a5 5 0 0 0 7 7',
   sparkle: 'M10 3l1.8 4.2L16 9l-4.2 1.8L10 15l-1.8-4.2L4 9l4.2-1.8z',
-  check: 'M4 10.5 8 14.5 16 5.5',
-  more: 'M5 10h.01M10 10h.01M15 10h.01',
-}
+} as const satisfies Record<string, string>
 
 export function Icon({ name, className }: { name: keyof typeof ICON_PATHS; className?: string }) {
   return (

@@ -129,8 +129,15 @@ export function transition(
       return onCustomerMessage(state, event, opts)
 
     case 'ai_handoff': {
-      // Handoff only means anything while the AI owns the conversation.
-      if (state.mode === 'human') {
+      /**
+       * Handoff only means anything while the AI owns the conversation.
+       *
+       * Already waiting counts too. A retried turn — the draft path in particular, which is
+       * not stopped by the mode check a send is — would otherwise hand off a second time:
+       * a second acknowledgement to the customer, a second note, a second row counted on
+       * the dashboard, for one handoff.
+       */
+      if (state.mode === 'human' || state.mode === 'waiting_human') {
         return { patch: {}, effects: [] }
       }
       const effects: Effect[] = [

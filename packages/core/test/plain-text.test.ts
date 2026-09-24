@@ -46,6 +46,11 @@ describe('markdown a customer would otherwise read as punctuation', () => {
     expect(toPlainText('[https://example.com](https://example.com)')).toBe('https://example.com')
   })
 
+  test('an image keeps its description and address, with no stray punctuation', () => {
+    expect(toPlainText('![screenshot](https://x.co/a.png)')).toBe('screenshot: https://x.co/a.png')
+    expect(toPlainText('![](https://x.co/a.png)')).toBe('https://x.co/a.png')
+  })
+
   test('a plain URL is untouched', () => {
     expect(toPlainText('go to https://salon.mosidee.com/settings now')).toBe(
       'go to https://salon.mosidee.com/settings now',

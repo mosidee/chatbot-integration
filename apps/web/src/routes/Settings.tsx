@@ -379,6 +379,7 @@ function AutoResolve({
   onSave: (patch: Partial<WorkspaceSettings>) => void
 }) {
   const { t } = useTranslation()
+  const [invalid, setInvalid] = useState(false)
   return (
     <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
       <div>
@@ -398,14 +399,26 @@ function AutoResolve({
           onBlur={(event) => {
             const raw = event.target.value.trim()
             const next = raw === '' ? null : Number(raw)
-            if (next !== null && (!Number.isInteger(next) || next < 1 || next > 720)) return
+            // Refused out loud. Ignoring it left the box showing a number that was never
+            // saved, which is the one thing a setting must not look like.
+            if (next !== null && (!Number.isInteger(next) || next < 1 || next > 720)) {
+              setInvalid(true)
+              return
+            }
+            setInvalid(false)
             if (next === settings.autoResolveAfterHours) return
             onSave({ autoResolveAfterHours: next })
           }}
         />
-        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-          {t('settings.autoResolveOffHint')}
-        </p>
+        {invalid ? (
+          <p role="alert" className="mt-1 text-[11px] text-red-700 dark:text-red-300">
+            {t('settings.autoResolveInvalid')}
+          </p>
+        ) : (
+          <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+            {t('settings.autoResolveOffHint')}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -909,7 +922,7 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{channel.name}</span>
         <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] uppercase text-[var(--text-muted)]">
-          {channel.type}
+          {t(`channels.${channel.type}`)}
         </span>
         {needsCredentials ? (
           <span

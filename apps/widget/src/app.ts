@@ -141,6 +141,16 @@ let failedPolls = 0
 /** Set when the chat cannot work at all, so nothing re-enables the box behind it. */
 let shutDown = false
 let unread = 0
+/** Set once the first poll has drawn what was already there. */
+let primed = false
+/**
+ * Whether the launcher is open, as the parent understands it.
+ *
+ * The iframe is hidden rather than unloaded when the launcher closes, so it cannot tell
+ * from its own document alone. The parent says, and the answer decides whether an arriving
+ * reply counts as unread. Declared here, before anything can read it.
+ */
+let visible = true
 const seen = new Set<string>()
 
 /**
@@ -261,7 +271,16 @@ function append(message: WidgetMessage, optimistic = false): void {
    * The iframe goes on polling while the launcher is closed, so without this a customer
    * who tabbed away never learns their answer came. The loader draws the count.
    */
-  if (message.from === 'support' && !optimistic && (document.hidden || !visible)) {
+  /**
+   * Only once the first poll has landed, and only while the chat is shut.
+   *
+   * The iframe reloads with every page of the host site and the first poll brings back the
+   * last thirty messages, all of them "new" to a fresh page. Counting those gave a returning
+   * visitor "9+" on every page for replies they read yesterday. And a chat that is open in a
+   * background tab is not unread: the count only resets when the launcher opens, so counting
+   * there left a stale number waiting for the next time it was shut.
+   */
+  if (message.from === 'support' && !optimistic && primed && !visible) {
     unread += 1
     parent.postMessage({ type: 'chat-widget:unread', count: unread }, '*')
   }
@@ -399,7 +418,12 @@ form.addEventListener('submit', async (event) => {
       body: JSON.stringify({ text }),
     })
     if (!response.ok) {
-      if (await handleRefusal(response)) return
+      if (await handleRefusal(response)) {
+        // Never sent, so it must not stay on screen looking like it is on its way.
+        takePending(text)?.remove()
+        awaitingReplySince = null
+        return
+      }
       throw new Error('send')
     }
     await poll()
@@ -419,15 +443,6 @@ form.addEventListener('submit', async (event) => {
     }
   }
 })
-
-/**
- * Whether the launcher is open, as the parent understands it.
- *
- * The iframe is hidden rather than unloaded when the launcher closes, so it cannot tell
- * from its own document alone. The parent says, and the answer decides whether an arriving
- * reply counts as unread.
- */
-let visible = true
 
 window.addEventListener('message', (event) => {
   const data = event.data as { type?: string } | null
@@ -471,6 +486,7 @@ async function main(): Promise<void> {
   input.disabled = false
   send.disabled = false
   await poll()
+  primed = true
   setInterval(() => void poll().catch(() => {}), POLL_MS)
 }
 

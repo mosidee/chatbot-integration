@@ -106,9 +106,14 @@ export function Inbox() {
    * So the dashboard's "three are waiting" can be the way to go and read them, and so a
    * reload keeps somebody on the tab they were working through.
    */
-  const tab = useRouterState({
-    select: (state) => (state.location.search as { tab?: InboxTab }).tab ?? 'open',
+  const requested = useRouterState({
+    select: (state) => (state.location.search as { tab?: string }).tab,
   })
+  // The raw location, not what `validateSearch` returns, so it is checked here too: an
+  // unknown value otherwise matched no filter and listed every conversation under no tab.
+  const tab: InboxTab = INBOX_TABS.includes(requested as InboxTab)
+    ? (requested as InboxTab)
+    : 'open'
   const setTab = (next: InboxTab) => void navigate({ to: '/', search: { tab: next } })
 
   // Waiting is open conversations only. Resolving does not change the mode, so without

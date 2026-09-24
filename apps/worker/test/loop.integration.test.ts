@@ -1336,6 +1336,34 @@ describe('closing a conversation the customer walked away from', () => {
     expect(await statusOf(f, conversation.id)).toBe('resolved')
   })
 
+  test('a supervised conversation qualifies as well', async () => {
+    // A person approves each reply, so what went out last is a colleague's message. Leaving
+    // these out meant a supervised workspace never had a customer summarised.
+    const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url })
+    const conversation = await answeredByAi(f)
+    await f.runtime.db
+      .update(schema.conversations)
+      .set({ mode: 'ai_supervised' })
+      .where(eq(schema.conversations.id, conversation.id))
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'outbound',
+      senderType: 'human',
+      senderUserId: f.userId,
+      message: { kind: 'text', text: 'ร่างที่อนุมัติแล้วค่ะ' },
+      redaction: { cardNumbers: true, thaiNationalId: true },
+    })
+
+    const result = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(result.resolved).toBe(1)
+    expect(await statusOf(f, conversation.id)).toBe('resolved')
+  })
+
   test('a customer told a person is coming is not closed because nobody came', async () => {
     // The last thing they read is the acknowledgement. Handing back to the AI without a
     // word leaves that promise standing, so the conversation stays open.
@@ -2126,6 +2154,53 @@ describe('a handoff reaches the customer', () => {
 
     const said = await systemMessages(f, conversation.id)
     expect(said[0]?.text).toBe('One moment please.')
+  })
+
+  test('a turn retried after it handed off tells the customer once', async () => {
+    // A real retry of the whole turn, not a replay of its effects: the job runs again with
+    // the same id, on both delivery paths. The draft path matters most, because nothing
+    // stops it at the mode check a send gets.
+    for (const deliver of ['send', 'draft'] as const) {
+      const f = await fixture({ providerBaseUrl: mock([{ kind: 'text', text: 'unused' }]).url })
+      await f.runtime.db
+        .delete(schema.taskSlots)
+        .where(eq(schema.taskSlots.workspaceId, f.workspaceId))
+      await customerSays(f, 'สวัสดีค่ะ')
+      const conversation = await onlyConversation(f)
+      const trigger = (await messagesOf(f, conversation.id)).find(
+        (m) => m.senderType === 'customer',
+      )
+      const job = {
+        workspaceId: f.workspaceId,
+        conversationId: conversation.id,
+        deliver,
+        ...(trigger ? { triggerMessageId: trigger.id } : {}),
+      }
+      const ports = createEffectPorts(f.runtime, f.runtime.logger)
+      // Drain what inbound queued, then run the same job twice by hand.
+      await drainQueue(f, f.queues.ai_turn)
+      await processAiTurn(f.runtime, ports, f.runtime.logger, job, {
+        jobId: `ai-turn-${trigger?.id}`,
+      })
+      await processAiTurn(f.runtime, ports, f.runtime.logger, job, {
+        jobId: `ai-turn-${trigger?.id}`,
+      })
+
+      const said = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'system')
+      expect(said).toHaveLength(1)
+      const handoffs = await f.runtime.db
+        .select()
+        .from(schema.handoffEvents)
+        .where(eq(schema.handoffEvents.conversationId, conversation.id))
+      expect(handoffs).toHaveLength(1)
+      // And one note for agents. The stable instant dedupes the message and the row above;
+      // only the state machine ignoring a second handoff stops a second note.
+      const notes = await f.runtime.db
+        .select()
+        .from(schema.internalNotes)
+        .where(eq(schema.internalNotes.conversationId, conversation.id))
+      expect(notes).toHaveLength(1)
+    }
   })
 
   test('a retried turn does not tell the customer twice', async () => {
