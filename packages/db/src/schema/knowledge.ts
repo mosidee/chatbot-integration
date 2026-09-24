@@ -134,6 +134,12 @@ export const knowledgeChunks = pgTable(
     embedding: vector('embedding', { dimensions: EMBEDDING_DIMENSIONS }),
     /** Which model produced the embedding, so a model change can be detected and re-run. */
     embeddingModel: text('embedding_model'),
+    /**
+     * The vector space it lives in: the model and whether a size was requested. Two models
+     * can both answer with 1024 numbers that mean nothing to each other, so a query is only
+     * ever compared with vectors from its own space.
+     */
+    embeddingSpace: text('embedding_space'),
     createdAt: ts('created_at').defaultNow().notNull(),
   },
   (t) => [
@@ -169,6 +175,8 @@ export const conversationEmbeddings = pgTable(
     text: text('text').notNull(),
     embedding: vector('embedding', { dimensions: EMBEDDING_DIMENSIONS }),
     embeddingModel: text('embedding_model'),
+    /** See `knowledgeChunks.embeddingSpace`. */
+    embeddingSpace: text('embedding_space'),
     createdAt: ts('created_at').defaultNow().notNull(),
   },
   (t) => [

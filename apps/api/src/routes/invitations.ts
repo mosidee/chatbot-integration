@@ -1,7 +1,7 @@
 import { newId, schema } from '@ci/db'
 import { accountReach, consumeInvitation, findInvitation } from '@ci/infra'
 import { acceptInvitationBodySchema, type UserRoleName } from '@ci/shared'
-import { eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import type { ApiContext } from '../context'

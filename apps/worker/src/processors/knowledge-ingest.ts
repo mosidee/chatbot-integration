@@ -1,11 +1,12 @@
 import { chunkText, type EffectPorts, type Logger } from '@ci/core'
-import { newId, schema } from '@ci/db'
+import { schema } from '@ci/db'
 import {
   indexSource,
   type KnowledgeIngestJob,
   loadAiConfig,
   parseDocument,
   type Runtime,
+  replaceFileSource,
   usableSlot,
   workspaceIsWorkable,
   workspaceProviderFetch,
@@ -74,24 +75,25 @@ export async function processKnowledgeIngest(
       if (!source.storageKey) throw new Error('The source has no stored file')
 
       const object = await blob.get(source.storageKey)
-      const parsed = await parseDocument(object.data, source.mime ?? object.mime, source.title)
+      let parsed: Awaited<ReturnType<typeof parseDocument>>
+      try {
+        parsed = await parseDocument(object.data, source.mime ?? object.mime, source.title)
+      } catch (error) {
+        // The document itself is the problem: retrying cannot help, so it is shown instead.
+        throw new DocumentProblem(error instanceof Error ? error.message : String(error))
+      }
 
-      // Replace whatever a previous ingestion produced, so re-uploading cannot leave stale
-      // text the AI would still quote.
-      await db
-        .delete(schema.knowledgeEntries)
-        .where(eq(schema.knowledgeEntries.sourceId, source.id))
-
-      const entryId = newId()
-      await db.insert(schema.knowledgeEntries).values({
-        id: entryId,
-        workspaceId: job.workspaceId,
-        sourceId: source.id,
-        variantGroup: entryId,
-        language: settings.defaultLanguage,
-        question: null,
-        body: parsed.text,
-      })
+      // Embedded before anything is replaced; see `replaceFileSource`.
+      const replaced = await replaceFileSource(
+        db,
+        {
+          workspaceId: job.workspaceId,
+          sourceId: source.id,
+          language: settings.defaultLanguage,
+          body: parsed.text,
+        },
+        embedSlot,
+      )
 
       await db
         .update(schema.knowledgeSources)
@@ -107,11 +109,13 @@ export async function processKnowledgeIngest(
         })
         .where(eq(schema.knowledgeSources.id, source.id))
 
-      logger.info('document parsed', {
+      logger.info('document parsed and indexed', {
         sourceId: source.id,
         characters: parsed.text.length,
         pages: parsed.pages,
+        chunks: replaced.chunks,
       })
+      return
     }
 
     const result = await indexSource(db, source.id, embedSlot)
@@ -127,7 +131,19 @@ export async function processKnowledgeIngest(
       .set({ status: 'failed', error: message, updatedAt: new Date() })
       .where(eq(schema.knowledgeSources.id, source.id))
     logger.error('knowledge ingestion failed', { sourceId: source.id, error: message })
-    // Not rethrown: a bad document is an operator problem shown in the knowledge screen,
-    // not a transient fault worth retrying three times.
+    /**
+     * A document that cannot be parsed is an operator problem, shown on the knowledge
+     * screen and not worth three more attempts. Anything else — the store, the embedding
+     * provider — is usually passing, so it is rethrown and retried; the previous index is
+     * still answering meanwhile.
+     */
+    if (!(error instanceof DocumentProblem)) throw error
+  }
+}
+
+class DocumentProblem extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DocumentProblem'
   }
 }

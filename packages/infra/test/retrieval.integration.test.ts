@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { schema } from '@ci/db'
+import { newId, schema } from '@ci/db'
 import { eq } from 'drizzle-orm'
 import { type MockServer, startMockOpenAI } from '../../core/test/helpers/mock-openai-server'
-import { createEntry, indexConversationText, indexEntry, indexSource } from '../src/knowledge'
+import {
+  createEntry,
+  indexConversationText,
+  indexEntry,
+  indexSource,
+  replaceFileSource,
+} from '../src/knowledge'
+import { loadTurnContext } from '../src/repo'
 import { createPostgresRetriever, searchPastConversations } from '../src/retrieval'
 import { createKnowledgeFixture, type KnowledgeFixture } from './helpers/knowledge-fixture'
 
@@ -461,5 +468,135 @@ describe('reranking', () => {
 
     expect(ranked.usedRerank).toBe(false)
     expect(ranked.chunks.map((c) => c.id)).toEqual(plain.chunks.map((c) => c.id))
+  })
+})
+
+describe('the review, phase D', () => {
+  /** #19: two models can both answer with 1024 numbers that mean nothing to each other. */
+  test('never compares a query with vectors from another model', async () => {
+    const { fixture, embedSlot } = await setup()
+    const entryId = await createEntry(fixture.db, {
+      workspaceId: fixture.workspaceId,
+      sourceId: fixture.sourceId,
+      language: 'en',
+      question: null,
+      body: 'Opening hours are nine to six.',
+    })
+    await indexEntry(fixture.db, entryId, embedSlot)
+
+    // Same server, same size of vector, a different model name: a different space.
+    const otherModel = {
+      ...embedSlot,
+      primary: embedSlot.primary ? { ...embedSlot.primary, model: 'another-embed-model' } : null,
+    }
+    const retriever = createPostgresRetriever(fixture.db, {
+      embedSlot: otherModel,
+      fusion: TEST_FUSION,
+    })
+    const result = await retriever.retrieve({
+      workspaceId: fixture.workspaceId,
+      query: 'opening hours',
+    })
+    expect(result.dense).toHaveLength(0)
+    expect(result.embeddingModel).toBe('another-embed-model')
+  })
+
+  /** #20: a reindex that cannot embed leaves the previous index answering. */
+  test('a file reindex that fails keeps the old index', async () => {
+    const { fixture, embedSlot } = await setup()
+    await replaceFileSource(
+      fixture.db,
+      {
+        workspaceId: fixture.workspaceId,
+        sourceId: fixture.sourceId,
+        language: 'en',
+        body: 'Version one of the price list.',
+      },
+      embedSlot,
+    )
+    const dead = {
+      ...embedSlot,
+      primary: embedSlot.primary
+        ? {
+            ...embedSlot.primary,
+            provider: { ...embedSlot.primary.provider, baseUrl: 'http://127.0.0.1:9/v1' },
+          }
+        : null,
+    }
+    await expect(
+      replaceFileSource(
+        fixture.db,
+        {
+          workspaceId: fixture.workspaceId,
+          sourceId: fixture.sourceId,
+          language: 'en',
+          body: 'Version two.',
+        },
+        dead,
+      ),
+    ).rejects.toThrow()
+
+    const chunks = await fixture.db
+      .select({ text: schema.knowledgeChunks.text })
+      .from(schema.knowledgeChunks)
+      .where(eq(schema.knowledgeChunks.sourceId, fixture.sourceId))
+    expect(chunks.map((c) => c.text).join(' ')).toContain('Version one')
+  })
+
+  /** #21: a permanent conversation's earlier episodes stay recallable. */
+  test('recalls an earlier part of the conversation in progress', async () => {
+    const { fixture, embedSlot } = await setup()
+    await indexConversationText(
+      fixture.db,
+      {
+        workspaceId: fixture.workspaceId,
+        customerId: fixture.customerA.id,
+        conversationId: fixture.customerA.conversationId,
+        text: 'Last month they asked about moving the salon to the premium plan.',
+      },
+      embedSlot,
+    )
+
+    const search = (since: Date) =>
+      searchPastConversations(
+        fixture.db,
+        {
+          workspaceId: fixture.workspaceId,
+          customerId: fixture.customerA.id,
+          query: 'premium plan',
+          excludeConversationId: fixture.customerA.conversationId,
+          excludeSince: since,
+        },
+        embedSlot,
+      )
+    // The visible window began after it was indexed: recallable.
+    expect(await search(new Date(Date.now() + 60_000))).toHaveLength(1)
+    // It is on screen already: not repeated back.
+    expect(await search(new Date(Date.now() - 60_000))).toHaveLength(0)
+  })
+
+  /** #21: the model reads a long conversation's latest notes, not its first twenty. */
+  test('a turn is given the newest notes, oldest first', async () => {
+    const { fixture } = await setup()
+    const base = Date.now() - 60 * 60 * 1000
+    await fixture.db.insert(schema.internalNotes).values(
+      Array.from({ length: 25 }, (_, index) => ({
+        id: newId(),
+        workspaceId: fixture.workspaceId,
+        conversationId: fixture.customerA.conversationId,
+        authorType: 'human' as const,
+        body: `note ${index}`,
+        createdAt: new Date(base + index * 1000),
+      })),
+    )
+    const context = await loadTurnContext(
+      fixture.db,
+      fixture.workspaceId,
+      fixture.customerA.conversationId,
+    )
+    const bodies = context?.notes.map((note) => note.body) ?? []
+    expect(bodies).toHaveLength(20)
+    expect(bodies[0]).toBe('note 5')
+    expect(bodies.at(-1)).toBe('note 24')
   })
 })

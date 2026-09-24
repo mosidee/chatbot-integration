@@ -11,7 +11,7 @@ import type {
   WorkspaceStatus,
 } from '@ci/shared'
 import { messageToText } from '@ci/shared'
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { isWorkspaceKey } from './media-serving'
 
 /**
@@ -599,7 +599,9 @@ export async function loadTurnContext(
       .select()
       .from(schema.internalNotes)
       .where(eq(schema.internalNotes.conversationId, conversationId))
-      .orderBy(asc(schema.internalNotes.createdAt))
+      // The newest twenty, not the first: a long conversation's latest notes — a colleague's
+      // instruction on handing back — are the ones that matter. Reversed below into order.
+      .orderBy(desc(schema.internalNotes.createdAt))
       .limit(20),
   ])
 
@@ -615,7 +617,7 @@ export async function loadTurnContext(
     channel,
     // The query is newest-first for the LIMIT; the prompt needs oldest-first.
     recentMessages: messageRows.reverse(),
-    notes: noteRows,
+    notes: noteRows.reverse(),
   }
 }
 
