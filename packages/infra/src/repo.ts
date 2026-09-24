@@ -1,6 +1,12 @@
 import type { ChannelAdapter, InboundEvent } from '@ci/channels'
 import type { Logger } from '@ci/core'
-import { type RedactionOptions, redactDeep, redactMessage, redactText } from '@ci/core'
+import {
+  detectLanguage,
+  type RedactionOptions,
+  redactDeep,
+  redactMessage,
+  redactText,
+} from '@ci/core'
 import { type Database, defaultWorkspaceSettings, type Executor, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import type {
@@ -10,7 +16,7 @@ import type {
   SenderType,
   WorkspaceStatus,
 } from '@ci/shared'
-import { messageToText } from '@ci/shared'
+import { messageToText, typedText } from '@ci/shared'
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { isWorkspaceKey } from './media-serving'
 
@@ -855,4 +861,36 @@ export async function markSuggestionSent(
     )
     .returning({ id: schema.suggestions.id })
   return rows.length > 0
+}
+
+/**
+ * The language a customer is writing in, judged from what they typed.
+ *
+ * The newest customer message with words in it, among their last few: a photo or a sticker
+ * says nothing about language, and its placeholder text (`[image]`) is ours, in English. Null
+ * when nothing typed is conclusive, so the caller falls back to the customer's record and
+ * then the workspace default.
+ */
+export async function customerLanguageEvidence(
+  db: Executor,
+  workspaceId: string,
+  conversationId: string,
+): Promise<Language | null> {
+  const rows = await db
+    .select({ content: schema.messages.content })
+    .from(schema.messages)
+    .where(
+      and(
+        eq(schema.messages.workspaceId, workspaceId),
+        eq(schema.messages.conversationId, conversationId),
+        eq(schema.messages.senderType, 'customer'),
+      ),
+    )
+    .orderBy(desc(schema.messages.createdAt), desc(schema.messages.id))
+    .limit(5)
+  for (const row of rows) {
+    const language = detectLanguage(typedText(row.content))
+    if (language) return language
+  }
+  return null
 }

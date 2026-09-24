@@ -149,6 +149,28 @@ export function messageToText(message: NormalizedMessage): string {
   }
 }
 
+/**
+ * What the sender actually typed, or null.
+ *
+ * `messageToText` renders a photo as `[image]` and a sticker as `[sticker]` for the thread
+ * and the prompt. Those are our words, in English, and treating them as evidence of the
+ * customer's language answered a Thai customer's photo with an English handoff message.
+ */
+export function typedText(message: NormalizedMessage): string | null {
+  switch (message.kind) {
+    case 'text':
+    case 'quick_replies':
+      return message.text
+    case 'image':
+    case 'file':
+    case 'audio':
+    case 'video':
+      return message.text
+    default:
+      return null
+  }
+}
+
 /** True when the message carries at least one image the vision slot could describe. */
 export function hasImages(message: NormalizedMessage): boolean {
   return message.kind === 'image' && message.attachments.length > 0

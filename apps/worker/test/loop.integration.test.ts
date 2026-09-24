@@ -3306,6 +3306,62 @@ describe('the review, phase B', () => {
    * Recommendation #11. A turn that failed every retry reaches a person, the same as every
    * other path out of a turn.
    */
+  /**
+   * A photo's stored text is `[image]`, which the language check read as English: a Thai
+   * customer who sent a photo was told in English that a colleague was coming.
+   */
+  test('a handoff after a photo speaks the language the customer typed in', async () => {
+    const provider = mock([{ kind: 'text', text: 'unused' }])
+    // With a vision model, as production has: without one a photo takes the
+    // unsupported-media handoff, which never asks what language the customer wrote in.
+    const f = await fixture({ providerBaseUrl: provider.url, visionBaseUrl: provider.url })
+    await customerSays(f, 'สวัสดีค่ะ')
+    await drainQueue(f, f.queues.ai_turn)
+
+    const outcome = await ingestInternal(f.runtime, f.runtime.db, {
+      channelId: f.channelId,
+      expectedType: 'test',
+      body: {
+        externalId: 'sim-customer-1',
+        displayName: 'Nok',
+        eventId: `evt-${crypto.randomUUID()}`,
+        message: {
+          kind: 'image',
+          text: null,
+          attachments: [
+            {
+              storageKey: null,
+              sourceUrl: null,
+              mime: 'image/jpeg',
+              sizeBytes: null,
+              fileName: null,
+              width: null,
+              height: null,
+            },
+          ],
+        },
+      },
+    })
+    if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
+    await drainQueue(f, f.queues.inbound)
+    await processInbound(f.runtime, portsFor(f), f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      channelId: f.channelId,
+      inboundEventId: outcome.inboundEventId,
+    })
+    const conversation = await onlyConversation(f)
+    const job = {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      deliver: 'send' as const,
+    }
+
+    await handOffAfterFailure(f.runtime, portsFor(f), f.runtime.logger, job, new Error('down'))
+
+    const told = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'system')
+    expect(told.map((m) => m.text)).toEqual(['รอสักครู่นะคะ'])
+  })
+
   test('a turn that failed for good is handed to a person, once', async () => {
     const provider = mock([{ kind: 'text', text: 'unused' }])
     const f = await fixture({ providerBaseUrl: provider.url })

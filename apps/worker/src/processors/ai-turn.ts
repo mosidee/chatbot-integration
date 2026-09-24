@@ -3,7 +3,6 @@ import {
   aiMaySend,
   applyEffects,
   type ConversationTurn,
-  detectLanguage,
   type EffectPorts,
   type ImageInput,
   type Logger,
@@ -20,6 +19,7 @@ import {
   createEffectPorts,
   createTurnRetrieval,
   createWorkspaceToolSources,
+  customerLanguageEvidence,
   describeWriteFailure,
   isWorkspaceKey,
   loadAiConfig,
@@ -40,7 +40,7 @@ import {
   workspaceProviderFetch,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
-import { and, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, eq, gt, sql } from 'drizzle-orm'
 
 /**
  * Run one AI turn and deliver the outcome.
@@ -716,21 +716,10 @@ async function handOff(
    * that has already given up on answering, so one more query costs nothing that matters.
    * The customer's last message is the best evidence available — better than the language
    * recorded on their record, which is seeded from the workspace default and never
-   * updated — and `detectLanguage` returns null rather than guessing when the message is
-   * a photograph, an emoji or a number.
+   * updated. Only what they typed counts: a photo's stored text is our `[image]`, which read
+   * as English and sent a Thai customer an English handoff message.
    */
-  const lastCustomerMessage = await db
-    .select({ text: schema.messages.text })
-    .from(schema.messages)
-    .where(
-      and(
-        eq(schema.messages.workspaceId, job.workspaceId),
-        eq(schema.messages.conversationId, job.conversationId),
-        eq(schema.messages.senderType, 'customer'),
-      ),
-    )
-    .orderBy(desc(schema.messages.createdAt))
-    .limit(1)
+  const language = await customerLanguageEvidence(db, job.workspaceId, job.conversationId)
 
   /**
    * The instant this handoff happened, the same on every attempt of the job.
@@ -764,7 +753,7 @@ async function handOff(
       at: trigger[0]?.createdAt ?? new Date(),
       reason,
       note,
-      language: detectLanguage(lastCustomerMessage[0]?.text),
+      language,
     },
     { waitingHumanFallbackMinutes: settings.waitingHumanFallbackMinutes },
   )
