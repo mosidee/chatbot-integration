@@ -522,7 +522,8 @@ test('the dashboard reports what the pilot is doing', async ({ page, request }) 
   // text: the panel also carries a hint, and "0" appears inside plenty of larger figures.
   const counted = await page.getByTestId('figure-conversations').locator('div').nth(1).innerText()
   expect(Number(counted.replace(/[^0-9]/g, ''))).toBeGreaterThan(0)
-  await expect(page.getByTestId('channel-breakdown')).toContainText('test', { timeout: 20_000 })
+  // The channel's type reads as its label ("ทดลอง" for the simulator), not the raw key.
+  await expect(page.getByTestId('channel-breakdown')).toContainText('ทดลอง', { timeout: 20_000 })
 
   // And the figures an operator acts on are present rather than blank panels.
   await expect(page.getByTestId('figure-answered')).toBeVisible()

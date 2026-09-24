@@ -75,9 +75,9 @@ Meta retry or disable endpoints that answer slowly.
 the same transaction as the change that made it necessary; the worker's relay moves those
 rows to BullMQ. `Runtime` carries no queues, so this is a rule the types keep rather than one
 a comment asks for. The writer chooses the job id, which is what makes both the relay's retry
-and the consumer's retry safe. See ADR 0006. The one exception is registering the nightly job
-*scheduler* in the worker, which describes when jobs come into being rather than asking for
-one.
+and the consumer's retry safe. See ADR 0006. The one exception is registering the job *schedulers* in
+the worker (nightly retention, quarter-hourly idle resolve), which describe when jobs come
+into being rather than asking for one.
 
 **Effects must be idempotent.** The queue retries jobs and `applyEffects` re-runs the whole
 list when it does.
@@ -132,6 +132,11 @@ without spending money.
   `<think>…</think>answer`, sometimes with the block empty. `stripReasoning` removes it
   from both the answer and the vision description, before storage and before the next
   prompt.
+- **Replies are plain text.** LINE, Messenger and the widget render `**bold**` and `- item`
+  literally, so the customer read asterisks. The prompt's `FORMAT_RULE` asks for plain text
+  and `toPlainText` (after `stripReasoning` in `agent.ts`) converts what arrives anyway. The
+  rule lives in the prompt builder, not the persona, so a tenant cannot edit it away.
+  `bun run backfill:plain-text` converts older stored replies; dry by default.
 - Structured output through an OpenAI-compatible provider is sent as
   `response_format: {type: 'json_object'}` and the schema is dropped. Put the schema in the
   prompt yourself, derived from the Zod schema so it cannot drift. DeepSeek additionally
@@ -288,12 +293,16 @@ without spending money.
   mode, which carries no notifications at all.
 - The `outbox` table is **not tenant-owned** and has no workspace foreign key. A
   workspace-erasure job must outlive the cascade it was queued to perform, and the nightly
-  sweep belongs to no tenant.
+  sweep belongs to no tenant — nor does the idle-resolve planning pass, which fans out one
+  job per active workspace keyed `idle-resolve-<workspace>-<slot>`.
 - **A turn answers once because of `messages.turn_key`,** which is the turn's BullMQ job id,
   which is the customer message that prompted it. The processor reads it before calling the
   model; the unique index behind it catches the race that read cannot. On a collision
   `storeMessage` reports `duplicate` and the id it returns names no row — the AI turn
   re-selects the winner rather than queueing delivery for a message that does not exist.
+  Holding messages use the same column, keyed `ack-<kind>-<conversation>-<at ms>` where `at`
+  travels on the effect, so a replayed effect list sends one acknowledgement per wait; on a
+  collision `findMessageIdByTurnKey` reads the winner back and delivery is queued anyway.
 - **`messages.sent_parts` is the delivery checkpoint.** Long text goes out as several sends;
   without it a failure on part three restarted at part one and the customer read the opening
   twice. Delivery state is monotonic: the early return covers `sent`, `delivered` **and**
@@ -383,6 +392,63 @@ without spending money.
 - `session.activeOrganizationId` is plain text with no foreign key. It survives being
   removed from a workspace and survives that workspace being deleted, so `chooseMembership`
   falls back rather than trusting it.
+- **A handoff always tells the customer.** `ai_handoff` and the unsupported-media branch
+  emit `send_acknowledgement {kind:'handoff'}` before the note and the nudge to agents; the
+  waiting-human timer sends `kind:'still_waiting'`, a separate apology, so the customer never
+  reads the same sentence twice. The language comes from the customer's last message
+  (`detectLanguage`), then their record, then the workspace default. Both texts are editable
+  per language in Settings → General; if both are empty it logs a warning rather than
+  returning in silence.
+- **Postgres keeps microseconds and a JavaScript Date keeps milliseconds.** A `created_at`
+  read into JS and compared back reads as earlier than its own row, so "nothing newer than
+  this" is never true. Compare by message id — ids are time-ordered — as
+  `packages/infra/src/idle-resolve.ts` does, and break `created_at` ties on id.
+- **An agent's reply does not update `conversations.last_message_at`.** Only an inbound
+  message and the AI turn write it; the agent send route and holding messages do not. The
+  inbox's "customer spoke last" ordering therefore treats an agent-answered conversation as
+  unanswered, and retention ages from the last customer or AI message. Where it matters, read
+  the last row of `messages`, as idle-resolve does. Known and not yet fixed.
+- **Resolving does not change `mode`.** "Waiting" means `status = 'open' AND mode =
+  'waiting_human'` everywhere it is counted: the Inbox badge (`/v1/conversations/counts`),
+  the inbox's Waiting tab and the dashboard's `waitingNow`. Filtering on mode alone kept a
+  conversation closed mid-wait counted forever, until red read higher than blue.
+- **Conversations close on their own** after `autoResolveAfterHours` (default 24, null =
+  off) when open, in `ai` mode, our side (AI or colleague — not a system message) spoke last,
+  and the customer has been quiet since. A sweep every 15 minutes, not a timer per
+  conversation; the close repeats the rule in its own UPDATE so a customer writing mid-sweep
+  keeps an open conversation, and it goes through `set_status` so the summary runs. A
+  handed-back conversation qualifies; waiting or colleague-owned ones never do.
+- **A nullable workspace setting needs `'key' in settings`, not `??`, for its read-time
+  default.** Absent means a workspace older than the setting; `null` means somebody switched
+  it off, which `??` silently undoes (`withSettingsDefaults`, `autoResolveAfterHours`).
+- **Summariser facts go to `customers.notes`, never `customers.fields`.** `fields` holds the
+  five identifiers `set_customer_field` accepts, which merge matching compares; the
+  summariser used to merge free-form keys in and filled the panel with invented ones. See
+  ADR 0007. `notes` is named in the survivor-wins block in `merge.ts`.
+- **A running `bun run dev` steals integration-test work.** Queue prefixes are per fixture,
+  but `outbox` is one shared table: the dev worker's relay claims a test's rows and runs them,
+  and the test's `drainQueue` sees nothing — failures look like unrelated bugs ("job locked
+  by another worker", a reply that never arrived). Stop the dev servers before `bun run test`
+  and before `bun run test:e2e`.
+- **Destructive actions use `ConfirmButton`, never `window.confirm`.** A native dialog blocks
+  the page, cannot be styled, is dismissed by reflex, and hangs a browser test with no dialog
+  handler. Where there is no button to arm — a select — confirm inline, as the self-demotion
+  panel in `Admin.tsx` does.
+- **Settings and the inbox keep their tab in the address** (`/settings?tab=general|channels|
+  models|integrations`, `/?tab=open|waiting|review|resolved`). A browser test must go to the
+  tab its control lives on, or the control is not rendered. Integrations is admins only.
+- **Do not call `useSearch({ from })`.** The routes are declared inline and have no id for
+  `from` to resolve, so it throws on first render. Read `useRouterState({ select: s =>
+  s.location.search })` instead.
+- **`display:flex` beats the `hidden` attribute,** which only sets `display:none` in the
+  user-agent stylesheet. An element styled as flex needs `[hidden] { display: none }` — the
+  widget's typing dots showed from page load without it.
+- **The widget's own strings are Thai only** (greeting, offline, send failed, suspended). The
+  line saying who is answering (`stateText`) comes from the API in the visitor's language.
+  Known and not yet fixed.
+- **Internal notes are interleaved with messages in the thread, clamped to the loaded
+  window.** The endpoint windows messages but not notes, so a note older than the oldest
+  loaded message is held back until the window reaches it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
 
@@ -416,7 +482,15 @@ holds anything a person would want to keep. If it does, it goes on the repoint l
 `eraseWorkspace`, because blobs do not cascade.
 
 **A migration:** edit `packages/db/src/schema/app.ts`, run `bun run db:generate`, review the
-generated SQL, then `bun run db:migrate`.
+generated SQL, then `bun run db:migrate`. A migration that moves data should be idempotent
+(a second run finds nothing to move); take a `pg_dump` before deploying it.
+
+**A workspace setting:** it is one jsonb document, so no migration. Add the key to
+`WorkspaceSettings` (`packages/db/src/schema/app.ts`) and `defaultWorkspaceSettings`, give
+it a read-time default in `withSettingsDefaults` (`packages/infra/src/repo.ts`) so older
+workspaces get it, accept it in the PATCH schema in `apps/api/src/routes/settings.ts`, add it
+to the web `WorkspaceSettings` type, and set it in `DEFAULT_SETTINGS` in
+`apps/worker/test/helpers/fixture.ts` if tests depend on it.
 
 ## Pull requests
 

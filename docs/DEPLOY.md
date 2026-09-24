@@ -188,7 +188,24 @@ docker compose exec api bun run backfill:plain-text --write    # applies it
 
 It rewrites only rows the AI wrote. What a customer typed is evidence and is never
 touched, an agent's own words are left as they wrote them, and `content` keeps the
-original in every case. Safe to run twice: a row already converted does not change again.
+original in every case. Safe to run twice: a row already converted does not change again. It can run at any time
+after the deploy, and a fresh installation never needs it.
+
+### Settings that arrive switched on
+
+A deploy can add a workspace setting with a default, and existing workspaces take that
+default without anybody saving it. Two are worth knowing before the first deploy that carries
+them:
+
+- **Closing quiet conversations** (`autoResolveAfterHours`, 24 by default). The first pass,
+  within fifteen minutes of the worker starting, closes every AI conversation that has been
+  quiet for a day since our last message — each with an internal note and a summary job, so
+  a backlog becomes a burst of summarize calls to the model. To avoid it, empty the box in
+  Settings → General before deploying, or accept it: nothing is deleted, and a customer who
+  writes again reopens their conversation.
+- **Holding messages** (`acknowledgementText`, `stillWaitingText`). A handoff now sends the
+  first to the customer at once, and the fallback timer the second. Read both in Settings →
+  General in your own voice; the defaults are polite and generic.
 
 ## Backups
 

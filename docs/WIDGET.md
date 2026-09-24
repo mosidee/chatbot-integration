@@ -69,8 +69,8 @@ they had when the widget started, until the page is loaded again and a fresh tok
 presented. For anything that has to be current at the moment of asking, give the AI a tool
 that reads it rather than putting it in the token.
 
-Whether the token counts as proof is a workspace setting (**Settings → Proving who a
-customer is**). Switching it off leaves identification working — the same person still keeps
+Whether the token counts as proof is a workspace setting (**Settings → Integrations →
+Proving who a customer is**). Switching it off leaves identification working — the same person still keeps
 one history across browsers — while withdrawing every tool bound to it.
 
 This is one of two ways to prove who a customer is, and the only one available inside the
@@ -97,3 +97,51 @@ The widget polls every three seconds. The console holds a socket because an agen
 open all day; a widget is open for a few minutes, and a poll works through every corporate
 proxy without a reconnection story. If a session expires while the widget sits open, it
 starts a new one rather than going quiet.
+
+## What the widget is told
+
+`GET /api/widget/:channel/messages?since=<iso>` with the `x-widget-session` header answers:
+
+```json
+{
+  "conversationId": "…",
+  "state": "ai | waiting | human",
+  "stateText": "Passing you to a colleague. One moment.",
+  "messages": [
+    { "id": "…", "sender": "you | ai | agent | system", "from": "you | support",
+      "text": "…", "attachments": [{ "url": "…", "mime": "…", "fileName": "…" }], "at": "…" }
+  ]
+}
+```
+
+- `state` says who is answering. `ai_supervised` reads as `ai`: a customer does not need to
+  know a colleague approves each reply.
+- `stateText` is null while the AI answers, and otherwise one line composed by the server in
+  the language of the visitor's last message, so the widget carries no copy of its own for it.
+- `sender` says who wrote each message; `system` is the product itself, such as the holding
+  message sent on a handoff. `from` is kept for a loader cached on a host page from before
+  `sender` existed.
+- Without `since`, the newest thirty messages; with it, up to a hundred after that instant,
+  oldest first. Internal events are never returned.
+
+A 401 starts a new session. A 403 with `code: "workspace_suspended"`, or a 404, shuts the
+widget with a message and disables the box; repeated failed polls show an offline line. Those
+few messages are the widget's own and are Thai only for now.
+
+## Talking to the host page
+
+The loader and the iframe speak through `postMessage`, and the loader checks the origin of
+everything it receives.
+
+| Direction | Message | Meaning |
+|---|---|---|
+| iframe → host | `{ type: 'chat-widget:close' }` | The close button or Escape was pressed |
+| iframe → host | `{ type: 'chat-widget:unread', count }` | Replies arrived while the chat was shut; the loader badges the launcher |
+| host → iframe | `{ type: 'chat-widget:open' }` | The chat was opened; reset the unread count and focus the box |
+| host → iframe | `{ type: 'chat-widget:hidden' }` | The chat was shut; count replies as unread |
+
+Whether the chat is open is remembered for the tab in `sessionStorage['chat-widget:open']`,
+so it survives the host moving between its own pages. At 480px wide or less the frame takes
+the whole viewport (`100dvh`, so the box is not under the keyboard) and the launcher hides
+while it is open. The widget follows the visitor's light or dark preference, and the text on
+the brand colour is chosen by its luminance, so a pale `data-colour` stays readable.

@@ -143,6 +143,19 @@ describe('handoff', () => {
     expect(result.effects).toEqual([])
   })
 
+  test('is ignored once the conversation is already waiting', () => {
+    // A retried turn — on the draft path, which no mode check stops — would otherwise hand
+    // off twice: a second note, a second nudge, a second row on the dashboard.
+    const result = transition(state({ mode: 'waiting_human', waitingHumanSince: AT }), {
+      type: 'ai_handoff',
+      at: AT,
+      reason: 'model_error',
+      note: null,
+    })
+    expect(result.patch).toEqual({})
+    expect(result.effects).toEqual([])
+  })
+
   test('uses the AI-supplied note when present', () => {
     const { effects } = transition(state({ mode: 'ai' }), {
       type: 'ai_handoff',

@@ -134,7 +134,11 @@ export type WorkspaceSettings = {
   }
   retentionDays: number
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
-  /** Minutes a conversation may sit in `waiting_human` before the AI offers a fallback reply. */
+  /**
+   * Minutes a conversation may sit in `waiting_human` before the customer is sent
+   * `stillWaitingText` and agents are nudged again. Null switches it off. It never hands
+   * the conversation back to the AI.
+   */
   waitingHumanFallbackMinutes: number | null
   /**
    * Hours of silence from the customer after our side's last reply before an AI-owned

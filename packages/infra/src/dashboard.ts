@@ -39,7 +39,13 @@ export type DashboardSummary = {
   /** Seconds from a customer's first message to the first reply. Null with no data yet. */
   firstResponse: { medianSeconds: number | null; conversations: number }
   /** Median wait from a handoff to the first thing a colleague said, per handoff event. */
-  handoffWait: { medianSeconds: number | null; events: number }
+  handoffWait: {
+    medianSeconds: number | null
+    /** Handoffs a colleague has answered, which the median is over. */
+    events: number
+    /** Handoffs in the window nobody has replied to yet. */
+    unanswered: number
+  }
   handoffReasons: { reason: string; conversations: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number
@@ -151,13 +157,14 @@ export async function loadDashboard(
      * needs — `occurred_at` comes from the application clock and `created_at` from the
      * database's, so a handoff and the reply to it can cross by milliseconds.
      */
-    db.execute<{ median: number | null; events: number }>(sql`
+    db.execute<{ median: number | null; events: number; unanswered: number }>(sql`
         WITH waits AS (
           SELECT h.id,
                  extract(epoch FROM (
                    (SELECT min(m.created_at)
                     FROM ${schema.messages} m
-                    WHERE m.conversation_id = h.conversation_id
+                    WHERE m.workspace_id = ${workspaceId}
+                      AND m.conversation_id = h.conversation_id
                       AND m.sender_type = 'human'
                       AND m.created_at >= h.occurred_at)
                    - h.occurred_at
@@ -165,10 +172,14 @@ export async function loadDashboard(
           FROM ${schema.handoffEvents} h
           WHERE h.workspace_id = ${workspaceId} AND h.occurred_at >= ${sinceIso}::timestamptz
         )
-        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS median,
-               count(*)::int AS events
+        -- The median is over answered waits only, and the unanswered ones are counted beside
+        -- it rather than dropped. Leaving them out silently made the figure look best exactly
+        -- when the longest waits were still going on.
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds)
+                 FILTER (WHERE seconds IS NOT NULL AND seconds >= 0) AS median,
+               (count(*) FILTER (WHERE seconds IS NOT NULL AND seconds >= 0))::int AS events,
+               (count(*) FILTER (WHERE seconds IS NULL))::int AS unanswered
         FROM waits
-        WHERE seconds IS NOT NULL AND seconds >= 0
       `),
     db.execute<{ day: string; count: number }>(sql`
         SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day, count(*)::int AS count
@@ -278,6 +289,7 @@ export async function loadDashboard(
     handoffWait: {
       medianSeconds: [...handoffWait][0]?.median ?? null,
       events: [...handoffWait][0]?.events ?? 0,
+      unanswered: [...handoffWait][0]?.unanswered ?? 0,
     },
     firstResponse: {
       medianSeconds: [...firstResponse][0]?.median ?? null,

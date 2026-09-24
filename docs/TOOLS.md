@@ -4,7 +4,7 @@ Out of the box the AI answers from your knowledge base and from what it remember
 customer. A tool lets it call an API of yours during the conversation, so it can answer
 about the customer's own account instead of only about the documentation.
 
-You describe the tool in **Settings → Your tools**. It is configuration, not code: nothing
+You describe the tool in **Settings → Integrations → Your tools**. It is configuration, not code: nothing
 is deployed and we ship nothing on your behalf.
 
 ## What the AI is told
