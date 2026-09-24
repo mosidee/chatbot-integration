@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, EmptyState, Input, Label, Spinner } from '../components/ui'
+import { Button, Card, EmptyState, ErrorNote, Input, Label, Spinner } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 
 /**
@@ -34,6 +34,25 @@ export function Invite({ token }: { token: string }) {
     return (
       <div className="flex h-full items-center justify-center p-6">
         <Spinner label={t('common.loading')} />
+      </div>
+    )
+  }
+
+  /**
+   * A link that is gone and a service that did not answer are different news. Both used to
+   * read "this link is not valid", so somebody on a flaky connection threw away a good one.
+   */
+  const unreachable =
+    invitation.isError && !(invitation.error instanceof ApiError && invitation.error.status === 404)
+  if (unreachable) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <Card className="max-w-md space-y-3" testId="invite-unreachable">
+          <ErrorNote message={t('invite.unreachable')} />
+          <Button size="sm" onClick={() => void invitation.refetch()}>
+            {t('common.retry')}
+          </Button>
+        </Card>
       </div>
     )
   }

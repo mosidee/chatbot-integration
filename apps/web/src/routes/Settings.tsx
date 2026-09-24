@@ -9,7 +9,7 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ModelField,
@@ -86,10 +86,25 @@ export function Settings() {
     queryKey: ['workspace-settings'],
     queryFn: () => api.settings.workspace(),
   })
-  const providers = useQuery({ queryKey: ['providers'], queryFn: () => api.settings.providers() })
-  const slots = useQuery({ queryKey: ['task-slots'], queryFn: () => api.settings.taskSlots() })
-  const channels = useQuery({ queryKey: ['channels'], queryFn: () => api.settings.channels() })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
+  // Providers, slots and channels answer admins only. They used to be asked for by every
+  // role, which filled a viewer's console with refusals nobody could act on.
+  const isAdmin = me.data?.role === 'admin'
+  const providers = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => api.settings.providers(),
+    enabled: isAdmin,
+  })
+  const slots = useQuery({
+    queryKey: ['task-slots'],
+    queryFn: () => api.settings.taskSlots(),
+    enabled: isAdmin,
+  })
+  const channels = useQuery({
+    queryKey: ['channels'],
+    queryFn: () => api.settings.channels(),
+    enabled: isAdmin,
+  })
 
   const workspaceSave = useSaveState()
 
@@ -97,9 +112,9 @@ export function Settings() {
     mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) =>
       api.settings.updateWorkspace(patch),
     ...workspaceSave.handlers,
-    onSuccess: () => {
+    onSuccess: (data, variables, context) => {
       void queryClient.invalidateQueries({ queryKey: ['workspace-settings'] })
-      workspaceSave.handlers.onSuccess()
+      workspaceSave.handlers.onSuccess(data, variables, context)
     },
   })
 
@@ -112,12 +127,21 @@ export function Settings() {
   }
 
   const settings = workspace.data?.settings
-  if (!settings) return <ErrorNote message={t('common.error')} />
+  if (!settings) {
+    return (
+      <div className="space-y-2 p-6">
+        <ErrorNote message={t('settings.loadFailed')} />
+        <Button size="sm" onClick={() => void workspace.refetch()}>
+          {t('common.retry')}
+        </Button>
+      </div>
+    )
+  }
 
-  // The routes behind Integrations answer admins only, and offering somebody a tab that
-  // will refuse them is its own kind of rude.
-  const isAdmin = me.data?.role === 'admin'
-  const tabs = SETTINGS_TABS.filter((key) => key !== 'integrations' || isAdmin)
+  // Everything past General answers admins only, and offering somebody a tab that will
+  // refuse them is its own kind of rude. General is shown to everyone, read-only unless
+  // they are an admin.
+  const tabs = isAdmin ? [...SETTINGS_TABS] : (['general'] as SettingsTab[])
   const active = tab && tabs.includes(tab) ? tab : 'general'
 
   return (
@@ -144,8 +168,14 @@ export function Settings() {
         ))}
       </div>
 
+      {!isAdmin ? (
+        <p className="text-[13px] text-[var(--text-muted)]" data-testid="settings-read-only">
+          {t('settings.readOnly')}
+        </p>
+      ) : null}
+
       {active === 'general' ? (
-        <>
+        <fieldset disabled={!isAdmin} className="contents">
           <Card className="space-y-3">
             <div className="flex items-baseline gap-3">
               <h2 className="text-sm font-semibold">{t('settings.workspace')}</h2>
@@ -232,10 +262,11 @@ export function Settings() {
               </div>
             </fieldset>
           </Card>
-
-          <CannedResponsesCard />
-        </>
+        </fieldset>
       ) : null}
+
+      {/* Saved replies are an agent's own tool, so outside the admins-only fieldset. */}
+      {active === 'general' && me.data?.role !== 'viewer' ? <CannedResponsesCard /> : null}
 
       {active === 'channels' ? (
         <ChannelsCard
@@ -890,6 +921,8 @@ function ChannelsCard({ channels, onChange }: { channels: Channel[]; onChange: (
 
 function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => void }) {
   const { t } = useTranslation()
+  /** Ties each label to its field, for screen readers and for clicking the label. */
+  const fieldId = useId()
   const [values, setValues] = useState<Record<string, string>>({})
   const [check, setCheck] = useState<CredentialCheck | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -966,8 +999,11 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
       {expanded ? (
         <div className="mt-2 space-y-2 border-t border-[var(--border)] pt-2">
           <div>
-            <Label>{t('settings.webhookUrl')}</Label>
-            <code className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]">
+            <Label htmlFor={`${fieldId}-webhookUrl`}>{t('settings.webhookUrl')}</Label>
+            <code
+              id={`${fieldId}-webhookUrl`}
+              className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]"
+            >
               {channel.webhookUrl}
             </code>
             <p className="mt-1 text-[11px] text-[var(--text-muted)]">{t('settings.webhookHint')}</p>
@@ -975,8 +1011,11 @@ function ChannelRow({ channel, onChange }: { channel: Channel; onChange: () => v
 
           {channel.verifyToken ? (
             <div>
-              <Label>{t('settings.verifyToken')}</Label>
-              <code className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]">
+              <Label htmlFor={`${fieldId}-verifyToken`}>{t('settings.verifyToken')}</Label>
+              <code
+                id={`${fieldId}-verifyToken`}
+                className="block break-all rounded bg-[var(--surface-muted)] px-2 py-1 text-[11px]"
+              >
                 {channel.verifyToken}
               </code>
             </div>
@@ -1230,6 +1269,8 @@ function ToolEditor({
   onCancel: () => void
 }) {
   const { t } = useTranslation()
+  /** Ties each label to its field, for screen readers and for clicking the label. */
+  const fieldId = useId()
   const [name, setName] = useState(tool?.name ?? '')
   const [description, setDescription] = useState(tool?.description ?? '')
   const [config, setConfig] = useState<HttpToolConfig>(tool?.config ?? emptyConfig())
@@ -1302,8 +1343,9 @@ function ToolEditor({
     <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label>{t('settings.toolName')}</Label>
+          <Label htmlFor={`${fieldId}-toolName`}>{t('settings.toolName')}</Label>
           <Input
+            id={`${fieldId}-toolName`}
             data-testid="tool-name"
             placeholder="check_plan"
             value={name}
@@ -1312,8 +1354,9 @@ function ToolEditor({
           <p className="text-[11px] text-[var(--text-muted)]">{t('settings.toolNameHint')}</p>
         </div>
         <div className="space-y-1">
-          <Label>{t('settings.toolDescription')}</Label>
+          <Label htmlFor={`${fieldId}-toolDescription`}>{t('settings.toolDescription')}</Label>
           <Input
+            id={`${fieldId}-toolDescription`}
             data-testid="tool-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -1323,8 +1366,9 @@ function ToolEditor({
 
       <div className="grid gap-2 sm:grid-cols-[100px_1fr]">
         <div className="space-y-1">
-          <Label>{t('settings.toolMethod')}</Label>
+          <Label htmlFor={`${fieldId}-toolMethod`}>{t('settings.toolMethod')}</Label>
           <select
+            id={`${fieldId}-toolMethod`}
             data-testid="tool-method"
             className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
             value={config.method}
@@ -1335,8 +1379,9 @@ function ToolEditor({
           </select>
         </div>
         <div className="space-y-1">
-          <Label>{t('settings.toolUrl')}</Label>
+          <Label htmlFor={`${fieldId}-toolUrl`}>{t('settings.toolUrl')}</Label>
           <Input
+            id={`${fieldId}-toolUrl`}
             data-testid="tool-url"
             placeholder="https://api.example.com/accounts/{{account_id}}/plan"
             value={config.url}
@@ -1350,8 +1395,9 @@ function ToolEditor({
 
       <div className="grid gap-2 sm:grid-cols-3">
         <div className="space-y-1">
-          <Label>{t('settings.toolEffect')}</Label>
+          <Label htmlFor={`${fieldId}-toolEffect`}>{t('settings.toolEffect')}</Label>
           <select
+            id={`${fieldId}-toolEffect`}
             data-testid="tool-effect"
             className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
             value={config.effect}
@@ -1362,8 +1408,9 @@ function ToolEditor({
           </select>
         </div>
         <div className="space-y-1">
-          <Label>{t('settings.toolAuth')}</Label>
+          <Label htmlFor={`${fieldId}-toolAuth`}>{t('settings.toolAuth')}</Label>
           <select
+            id={`${fieldId}-toolAuth`}
             data-testid="tool-auth"
             className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
             value={config.auth}
@@ -1375,8 +1422,9 @@ function ToolEditor({
           </select>
         </div>
         <div className="space-y-1">
-          <Label>{t('settings.toolTimeout')}</Label>
+          <Label htmlFor={`${fieldId}-toolTimeout`}>{t('settings.toolTimeout')}</Label>
           <Input
+            id={`${fieldId}-toolTimeout`}
             type="number"
             value={config.timeoutMs}
             onChange={(e) => patchConfig({ timeoutMs: Number(e.target.value) })}
@@ -1389,8 +1437,11 @@ function ToolEditor({
         <div className="grid gap-2 sm:grid-cols-2">
           {config.auth === 'header' ? (
             <div className="space-y-1">
-              <Label>{t('settings.toolAuthHeaderName')}</Label>
+              <Label htmlFor={`${fieldId}-toolAuthHeaderName`}>
+                {t('settings.toolAuthHeaderName')}
+              </Label>
               <Input
+                id={`${fieldId}-toolAuthHeaderName`}
                 placeholder="X-Api-Key"
                 value={config.authHeaderName ?? ''}
                 onChange={(e) => patchConfig({ authHeaderName: e.target.value })}
@@ -1398,8 +1449,9 @@ function ToolEditor({
             </div>
           ) : null}
           <div className="space-y-1">
-            <Label>{t('settings.toolCredential')}</Label>
+            <Label htmlFor={`${fieldId}-toolCredential`}>{t('settings.toolCredential')}</Label>
             <Input
+              id={`${fieldId}-toolCredential`}
               type="password"
               data-testid="tool-credential"
               placeholder={tool?.hasCredential ? '••••••••' : ''}
@@ -1612,6 +1664,8 @@ function IdentityCard({
   onSave: (patch: { identity: Record<string, unknown> }) => void
 }) {
   const { t } = useTranslation()
+  /** Ties each label to its field, for screen readers and for clicking the label. */
+  const fieldId = useId()
   const [url, setUrl] = useState(settings.identity.verificationLink.url ?? '')
   const [secret, setSecret] = useState('')
   const [ttl, setTtl] = useState(settings.identity.verificationLink.ttlMinutes)
@@ -1657,8 +1711,9 @@ function IdentityCard({
 
       <div className="grid gap-2 sm:grid-cols-[2fr_1fr_100px]">
         <div className="space-y-1">
-          <Label>{t('settings.identityLinkUrl')}</Label>
+          <Label htmlFor={`${fieldId}-identityLinkUrl`}>{t('settings.identityLinkUrl')}</Label>
           <Input
+            id={`${fieldId}-identityLinkUrl`}
             data-testid="identity-link-url"
             placeholder="https://salon.example.com/verify"
             value={url}
@@ -1667,8 +1722,11 @@ function IdentityCard({
           />
         </div>
         <div className="space-y-1">
-          <Label>{t('settings.identityLinkSecret')}</Label>
+          <Label htmlFor={`${fieldId}-identityLinkSecret`}>
+            {t('settings.identityLinkSecret')}
+          </Label>
           <Input
+            id={`${fieldId}-identityLinkSecret`}
             type="password"
             data-testid="identity-link-secret"
             placeholder={settings.identity.verificationLink.hasSecret ? '••••••••' : ''}
@@ -1682,8 +1740,9 @@ function IdentityCard({
           />
         </div>
         <div className="space-y-1">
-          <Label>{t('settings.identityLinkTtl')}</Label>
+          <Label htmlFor={`${fieldId}-identityLinkTtl`}>{t('settings.identityLinkTtl')}</Label>
           <Input
+            id={`${fieldId}-identityLinkTtl`}
             type="number"
             value={ttl}
             onChange={(e) => setTtl(Number(e.target.value))}

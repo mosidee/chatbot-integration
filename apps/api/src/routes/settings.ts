@@ -169,73 +169,83 @@ export function settingsRoutes(ctx: ApiContext) {
 
       .patch(
         '/workspace',
-        async ({ workspaceId, body, status }) => {
-          const rows = await db
-            .select()
-            .from(schema.workspaces)
-            .where(eq(schema.workspaces.id, workspaceId))
-            .limit(1)
-          const workspace = rows[0]
-          if (!workspace) return status(404, { error: 'Workspace not found' })
+        async ({ workspaceId, body, status }) =>
+          /**
+           * Read, merge and write under a lock on the row.
+           *
+           * Settings are one document. Two saves at once — two admins, or one person
+           * editing two cards quickly — each read the old document and the second write
+           * dropped the first one's change. The lock makes the second wait and merge into
+           * what the first wrote.
+           */
+          db.transaction(async (tx) => {
+            const rows = await tx
+              .select()
+              .from(schema.workspaces)
+              .where(eq(schema.workspaces.id, workspaceId))
+              .for('update')
+              .limit(1)
+            const workspace = rows[0]
+            if (!workspace) return status(404, { error: 'Workspace not found' })
 
-          const {
-            externalRetrieval: incomingExternal,
-            identity: incomingIdentity,
-            ...plainBody
-          } = body
-          const current = withSettingsDefaults(workspace.settings)
-          const merged: typeof workspace.settings = { ...current, ...plainBody }
+            const {
+              externalRetrieval: incomingExternal,
+              identity: incomingIdentity,
+              ...plainBody
+            } = body
+            const current = withSettingsDefaults(workspace.settings)
+            const merged: typeof workspace.settings = { ...current, ...plainBody }
 
-          if (incomingIdentity !== undefined) {
-            const link = incomingIdentity.verificationLink
-            merged.identity = {
-              widgetToken: {
-                enabled:
-                  incomingIdentity.widgetToken?.enabled ?? current.identity.widgetToken.enabled,
-              },
-              verificationLink: {
-                enabled: link?.enabled ?? current.identity.verificationLink.enabled,
-                url: link?.url === undefined ? current.identity.verificationLink.url : link.url,
-                ttlMinutes: link?.ttlMinutes ?? current.identity.verificationLink.ttlMinutes,
-                // An omitted secret keeps what is stored; an empty string clears it.
-                secretEncrypted:
-                  link?.secret === undefined
-                    ? current.identity.verificationLink.secretEncrypted
-                    : link.secret
-                      ? await encryptSecret(link.secret, env.APP_SECRET_KEY)
-                      : null,
-              },
-            }
-          }
-
-          if (incomingExternal !== undefined) {
-            merged.externalRetrieval = incomingExternal
-              ? {
-                  kind: incomingExternal.kind,
-                  baseUrl: incomingExternal.baseUrl,
-                  datasetId: incomingExternal.datasetId ?? null,
-                  ...(incomingExternal.topK !== undefined ? { topK: incomingExternal.topK } : {}),
-                  ...(incomingExternal.scoreThreshold !== undefined
-                    ? { scoreThreshold: incomingExternal.scoreThreshold }
-                    : {}),
-                  // An omitted key keeps whatever was stored; an empty string clears it.
-                  apiKeyEncrypted:
-                    incomingExternal.apiKey === undefined
-                      ? (workspace.settings.externalRetrieval?.apiKeyEncrypted ?? null)
-                      : incomingExternal.apiKey
-                        ? await encryptSecret(incomingExternal.apiKey, env.APP_SECRET_KEY)
+            if (incomingIdentity !== undefined) {
+              const link = incomingIdentity.verificationLink
+              merged.identity = {
+                widgetToken: {
+                  enabled:
+                    incomingIdentity.widgetToken?.enabled ?? current.identity.widgetToken.enabled,
+                },
+                verificationLink: {
+                  enabled: link?.enabled ?? current.identity.verificationLink.enabled,
+                  url: link?.url === undefined ? current.identity.verificationLink.url : link.url,
+                  ttlMinutes: link?.ttlMinutes ?? current.identity.verificationLink.ttlMinutes,
+                  // An omitted secret keeps what is stored; an empty string clears it.
+                  secretEncrypted:
+                    link?.secret === undefined
+                      ? current.identity.verificationLink.secretEncrypted
+                      : link.secret
+                        ? await encryptSecret(link.secret, env.APP_SECRET_KEY)
                         : null,
-                }
-              : null
-          }
-          await db
-            .update(schema.workspaces)
-            .set({ settings: merged, updatedAt: new Date() })
-            .where(eq(schema.workspaces.id, workspaceId))
-          // Through the same projection the GET uses. Returning `merged` directly handed
-          // the stored ciphertext of both credentials straight back to the browser.
-          return { settings: publicSettings(merged) }
-        },
+                },
+              }
+            }
+
+            if (incomingExternal !== undefined) {
+              merged.externalRetrieval = incomingExternal
+                ? {
+                    kind: incomingExternal.kind,
+                    baseUrl: incomingExternal.baseUrl,
+                    datasetId: incomingExternal.datasetId ?? null,
+                    ...(incomingExternal.topK !== undefined ? { topK: incomingExternal.topK } : {}),
+                    ...(incomingExternal.scoreThreshold !== undefined
+                      ? { scoreThreshold: incomingExternal.scoreThreshold }
+                      : {}),
+                    // An omitted key keeps whatever was stored; an empty string clears it.
+                    apiKeyEncrypted:
+                      incomingExternal.apiKey === undefined
+                        ? (workspace.settings.externalRetrieval?.apiKeyEncrypted ?? null)
+                        : incomingExternal.apiKey
+                          ? await encryptSecret(incomingExternal.apiKey, env.APP_SECRET_KEY)
+                          : null,
+                  }
+                : null
+            }
+            await tx
+              .update(schema.workspaces)
+              .set({ settings: merged, updatedAt: new Date() })
+              .where(eq(schema.workspaces.id, workspaceId))
+            // Through the same projection the GET uses. Returning `merged` directly handed
+            // the stored ciphertext of both credentials straight back to the browser.
+            return { settings: publicSettings(merged) }
+          }),
         {
           auth: 'admin',
           body: z.object({

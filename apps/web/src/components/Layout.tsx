@@ -3,8 +3,10 @@ import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type Me } from '../lib/api'
+import { can } from '../lib/capabilities'
 import { setLanguage } from '../lib/i18n'
-import { Button, Card, cn } from './ui'
+import { RealtimeProvider, useRealtimeStatus } from '../lib/ws'
+import { Button, Card, cn, Dialog } from './ui'
 
 /**
  * The application shell.
@@ -59,7 +61,8 @@ export function Layout() {
     },
     { to: '/dashboard', label: t('nav.dashboard') },
     { to: '/knowledge', label: t('nav.knowledge') },
-    { to: '/simulator', label: t('nav.simulator') },
+    // The simulator sends as a customer, which a viewer's role does not allow.
+    ...(can(me.data, 'simulate') ? [{ to: '/simulator', label: t('nav.simulator') }] : []),
     { to: '/settings', label: t('nav.settings') },
     ...(me.data?.role === 'admin' ? [{ to: '/admin', label: t('nav.admin') }] : []),
     ...(me.data?.platformAdmin ? [{ to: '/platform', label: t('nav.platform') }] : []),
@@ -78,68 +81,94 @@ export function Layout() {
   const showLock = locked && !pathname.startsWith('/platform')
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-4">
-        <span className="font-semibold tracking-tight">{t('app.name')}</span>
+    <RealtimeProvider>
+      <div className="flex h-full flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-4">
+          <span className="font-semibold tracking-tight">{t('app.name')}</span>
 
-        <nav className="hidden gap-1 sm:flex">
-          {items.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
-                isActive(item.to)
-                  ? 'bg-[var(--surface-muted)] font-medium text-[var(--text)]'
-                  : 'text-[var(--text-muted)] hover:text-[var(--text)]',
-              )}
-            >
-              {item.label}
-              <NavBadges badges={item.badges} />
-            </Link>
-          ))}
-        </nav>
-
-        <div className="ml-auto flex items-center gap-2">
-          <WorkspaceSwitcher me={me.data} />
-
-          <div className="flex rounded-lg border border-[var(--border)] p-0.5">
-            {(['th', 'en'] as const).map((code) => (
-              <button
-                key={code}
-                type="button"
-                onClick={() => setLanguage(code)}
+          {/* From md: seven destinations and the controls beside them do not fit at 640px. */}
+          <nav className="hidden gap-1 md:flex">
+            {items.map((item) => (
+              <Link
+                key={item.to}
+                to={item.to}
                 className={cn(
-                  'rounded px-2 py-0.5 text-xs font-medium uppercase transition-colors',
-                  i18n.language === code
-                    ? 'bg-[var(--surface-muted)] text-[var(--text)]'
-                    : 'text-[var(--text-muted)]',
+                  'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
+                  isActive(item.to)
+                    ? 'bg-[var(--surface-muted)] font-medium text-[var(--text)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text)]',
                 )}
               >
-                {code}
-              </button>
+                {item.label}
+                <NavBadges badges={item.badges} />
+              </Link>
             ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-2">
+            <ConnectionStatus />
+            <WorkspaceSwitcher me={me.data} />
+
+            <div className="flex rounded-lg border border-[var(--border)] p-0.5">
+              {(['th', 'en'] as const).map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  aria-pressed={i18n.language === code}
+                  onClick={() => setLanguage(code)}
+                  className={cn(
+                    'rounded px-2 py-0.5 text-xs font-medium uppercase transition-colors',
+                    i18n.language === code
+                      ? 'bg-[var(--surface-muted)] text-[var(--text)]'
+                      : 'text-[var(--text-muted)]',
+                  )}
+                >
+                  {code}
+                </button>
+              ))}
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                await api.auth.signOut()
+                queryClient.clear()
+                location.href = '/login'
+              }}
+            >
+              {t('app.signOut')}
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              await api.auth.signOut()
-              queryClient.clear()
-              location.href = '/login'
-            }}
-          >
-            {t('app.signOut')}
-          </Button>
-        </div>
-      </header>
+        </header>
 
-      <main className="min-h-0 flex-1">
-        {showLock && me.data ? <WorkspaceLocked me={me.data} /> : <Outlet />}
-      </main>
+        <main className="min-h-0 flex-1">
+          {showLock && me.data ? <WorkspaceLocked me={me.data} /> : <Outlet />}
+        </main>
 
-      <BottomNav items={items} isActive={isActive} />
-    </div>
+        <BottomNav items={items} isActive={isActive} />
+      </div>
+    </RealtimeProvider>
+  )
+}
+
+/**
+ * Whether the live feed is up. Nothing is shown while it is: a green dot on every page is
+ * noise. When it drops, an agent is told the page may be behind, rather than trusting a
+ * thread that stopped updating.
+ */
+function ConnectionStatus() {
+  const { t } = useTranslation()
+  const status = useRealtimeStatus()
+  if (status === 'open' || status === 'connecting') return null
+  return (
+    <span
+      role="status"
+      data-testid="connection-status"
+      className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+      {status === 'reconnecting' ? t('app.reconnecting') : t('app.disconnected')}
+    </span>
   )
 }
 
@@ -215,7 +244,9 @@ function BottomNav({ items, isActive }: { items: NavItem[]; isActive: (to: strin
   return (
     <>
       {showMore ? (
-        <div className="fixed inset-0 z-40 sm:hidden">
+        // A dialog: focus moves into the sheet, Escape closes it, and the page behind is
+        // inert until it does.
+        <Dialog label={t('nav.more')} onClose={() => setShowMore(false)} className="md:hidden">
           {/* A real button rather than a div that listens for clicks: it is dismissible by
               keyboard and announced as something you can press. */}
           <button
@@ -244,10 +275,10 @@ function BottomNav({ items, isActive }: { items: NavItem[]; isActive: (to: strin
               </Link>
             ))}
           </nav>
-        </div>
+        </Dialog>
       ) : null}
 
-      <nav className="flex shrink-0 border-t border-[var(--border)] bg-[var(--surface)] pb-[env(safe-area-inset-bottom)] sm:hidden">
+      <nav className="flex shrink-0 border-t border-[var(--border)] bg-[var(--surface)] pb-[env(safe-area-inset-bottom)] md:hidden">
         {shown.map((item) => (
           <Link
             key={item.to}

@@ -120,13 +120,18 @@ export function Simulator() {
           <Textarea
             rows={3}
             value={text}
+            aria-label={t('conversation.placeholder')}
             placeholder={t('conversation.placeholder')}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && text.trim()) {
-                e.preventDefault()
-                send.mutate(text.trim())
-              }
+              if (e.key !== 'Enter' || e.shiftKey || !text.trim()) return
+              // An input method confirming a Thai candidate is not a send.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              e.preventDefault()
+              // The same guard the button has: Enter used to send again while a send, or
+              // an upload, was still in flight.
+              if (send.isPending || upload.isPending) return
+              send.mutate(text.trim())
             }}
           />
         </div>

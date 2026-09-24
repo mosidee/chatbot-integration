@@ -251,3 +251,16 @@ export async function clearInbox(request: APIRequestContext): Promise<void> {
     }
   }
 }
+
+/**
+ * Arm a two-click confirmation, then confirm it the way a person does.
+ *
+ * `ConfirmButton` ignores a second click within 400 ms of arming, because that is a
+ * double-click rather than a decision. A test clicking twice back to back is exactly such a
+ * double-click, so it waits as somebody reading the armed label would.
+ */
+export async function confirmTwice(control: import('@playwright/test').Locator): Promise<void> {
+  await control.click()
+  await control.page().waitForTimeout(450)
+  await control.click()
+}

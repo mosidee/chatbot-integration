@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type Channel } from '../lib/api'
-import { Button, Input, Label } from './ui'
+import { Button, ErrorNote, Input, Label } from './ui'
 
 /**
  * Everything needed to put the widget on a website, in the place an operator configures it.
@@ -51,6 +51,11 @@ export function WidgetPanel({ channel, onChange }: { channel: Channel; onChange:
       onChange()
     },
   })
+  const saveError = save.error
+    ? save.error instanceof Error
+      ? save.error.message
+      : String(save.error)
+    : null
 
   const copy = async () => {
     try {
@@ -66,12 +71,13 @@ export function WidgetPanel({ channel, onChange }: { channel: Channel; onChange:
     <div className="mt-2 space-y-2 border-t border-[var(--border)] pt-2">
       <div>
         <div className="flex items-center justify-between gap-2">
-          <Label>{t('settings.embedSnippet')}</Label>
+          <Label htmlFor={`${channel.id}-snippet`}>{t('settings.embedSnippet')}</Label>
           <Button size="sm" variant="ghost" data-testid="copy-snippet" onClick={() => void copy()}>
             {copied ? t('settings.copied') : t('settings.copy')}
           </Button>
         </div>
         <pre
+          id={`${channel.id}-snippet`}
           data-testid="widget-snippet"
           className="overflow-x-auto rounded-lg bg-[var(--surface-muted)] px-2 py-1.5 text-[11px] leading-relaxed"
         >
@@ -105,6 +111,11 @@ export function WidgetPanel({ channel, onChange }: { channel: Channel; onChange:
           >
             {t('settings.save')}
           </Button>
+        ) : null}
+        {saveError ? (
+          <div className="mt-1.5" data-testid="origins-error">
+            <ErrorNote message={`${t('settings.saveFailed')}: ${saveError}`} />
+          </div>
         ) : null}
       </div>
 

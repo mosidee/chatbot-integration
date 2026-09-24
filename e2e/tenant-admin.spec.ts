@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ADMIN_EMAIL, API_URL, apiSignIn, signIn, uniqueToken } from './helpers'
+import { ADMIN_EMAIL, API_URL, apiSignIn, confirmTwice, signIn, uniqueToken } from './helpers'
 
 /**
  * Adding a colleague, from the console, without touching the database.
@@ -70,8 +70,7 @@ test.describe('inviting a colleague', () => {
 
     // And remove them: two clicks, because it is destructive.
     const remove = page.getByTestId(`member-remove-${email}`)
-    await remove.click()
-    await remove.click()
+    await confirmTwice(remove)
     await expect(page.getByTestId(`member-row-${email}`)).toHaveCount(0, { timeout: 15_000 })
 
     // The account itself survives: removing somebody from a workspace is not deleting them.

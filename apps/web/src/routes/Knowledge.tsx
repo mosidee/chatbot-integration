@@ -1,6 +1,6 @@
 import type { Language } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Button,
@@ -17,6 +17,7 @@ import {
   useSaveState,
 } from '../components/ui'
 import { api, type KnowledgeSource, type SearchHit, type SearchResult } from '../lib/api'
+import { useCan } from '../lib/capabilities'
 
 /**
  * Knowledge management.
@@ -41,23 +42,42 @@ export function Knowledge() {
   })
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['knowledge-sources'] })
+  // Adding, editing, reindexing, removing and the test search are an agent's. A viewer
+  // reads the knowledge base and is told so, rather than shown editors that will refuse.
+  const canEdit = useCan('editKnowledge')
 
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-4 pb-12">
       <h1 className="text-lg font-semibold">{t('knowledge.title')}</h1>
 
-      <AddKnowledge onDone={refresh} />
-      <TestSearch />
+      {canEdit ? (
+        <>
+          <AddKnowledge onDone={refresh} />
+          <TestSearch />
+        </>
+      ) : (
+        <p className="text-[13px] text-[var(--text-muted)]" data-testid="knowledge-read-only">
+          {t('knowledge.readOnly')}
+        </p>
+      )}
 
       <Card className="space-y-2">
         <h2 className="text-sm font-semibold">{t('knowledge.sources')}</h2>
         {sources.isLoading ? (
           <Spinner label={t('common.loading')} />
+        ) : sources.isError ? (
+          // A failed load is not an empty knowledge base.
+          <div className="space-y-2">
+            <ErrorNote message={t('knowledge.loadFailed')} />
+            <Button size="sm" onClick={() => void sources.refetch()}>
+              {t('common.retry')}
+            </Button>
+          </div>
         ) : (sources.data?.sources.length ?? 0) === 0 ? (
           <EmptyState title={t('knowledge.empty')} hint={t('knowledge.emptyHint')} />
         ) : (
           sources.data?.sources.map((source) => (
-            <SourceRow key={source.id} source={source} onChange={refresh} />
+            <SourceRow key={source.id} source={source} onChange={refresh} canEdit={canEdit} />
           ))
         )}
       </Card>
@@ -72,8 +92,17 @@ const STATUS_STYLES: Record<string, string> = {
   failed: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200',
 }
 
-function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: () => void }) {
+function SourceRow({
+  source,
+  onChange,
+  canEdit,
+}: {
+  source: KnowledgeSource
+  onChange: () => void
+  canEdit: boolean
+}) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const save = useSaveState()
 
@@ -127,15 +156,19 @@ function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: ()
         <span className="text-[11px] text-[var(--text-muted)]">
           {source.chunkCount} {t('knowledge.chunks')}
         </span>
-        <Button size="sm" variant="ghost" onClick={() => reindex.mutate()}>
-          {t('knowledge.reindex')}
-        </Button>
-        <ConfirmButton
-          testId={`knowledge-remove-${source.id}`}
-          label={t('common.remove')}
-          armedLabel={t('common.removeConfirm')}
-          onConfirm={() => remove.mutate()}
-        />
+        {canEdit ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => reindex.mutate()}>
+              {t('knowledge.reindex')}
+            </Button>
+            <ConfirmButton
+              testId={`knowledge-remove-${source.id}`}
+              label={t('common.remove')}
+              armedLabel={t('common.removeConfirm')}
+              onConfirm={() => remove.mutate()}
+            />
+          </>
+        ) : null}
       </div>
 
       <SaveStatus state={save.state} className="mt-1" />
@@ -150,10 +183,35 @@ function SourceRow({ source, onChange }: { source: KnowledgeSource; onChange: ()
         <div className="mt-2 space-y-2 border-t border-[var(--border)] pt-2">
           {entries.isLoading ? (
             <Spinner label={t('common.loading')} />
+          ) : entries.isError ? (
+            <div className="space-y-2">
+              <ErrorNote message={t('knowledge.loadFailed')} />
+              <Button size="sm" onClick={() => void entries.refetch()}>
+                {t('common.retry')}
+              </Button>
+            </div>
           ) : (
-            entries.data?.entries.map((entry) => (
-              <EntryEditor key={entry.id} entry={entry} onChange={onChange} />
-            ))
+            entries.data?.entries.map((entry) =>
+              canEdit ? (
+                <EntryEditor
+                  key={entry.id}
+                  entry={entry}
+                  onChange={() => {
+                    // The entry itself, which is what the editor shows, and the source row,
+                    // whose status and chunk count the save changes.
+                    void queryClient.invalidateQueries({
+                      queryKey: ['knowledge-entries', source.id],
+                    })
+                    onChange()
+                  }}
+                />
+              ) : (
+                <div key={entry.id} className="space-y-1 text-[13px]">
+                  {entry.question ? <p className="font-medium">{entry.question}</p> : null}
+                  <p className="whitespace-pre-wrap">{entry.body}</p>
+                </div>
+              ),
+            )
           )}
         </div>
       ) : null}
@@ -170,12 +228,24 @@ function EntryEditor({
 }) {
   const { t } = useTranslation()
   const status = useSaveState()
+  /**
+   * Controlled, and brought up to date whenever the saved entry changes and the field is
+   * not being edited. With `defaultValue` a failed save left the box showing text the server
+   * never took, and a change from elsewhere never appeared at all.
+   */
+  const [question, setQuestion] = useState(entry.question ?? '')
+  const [body, setBody] = useState(entry.body)
+  const [editing, setEditing] = useState<'question' | 'body' | null>(null)
+  useEffect(() => {
+    if (editing !== 'question') setQuestion(entry.question ?? '')
+    if (editing !== 'body') setBody(entry.body)
+  }, [entry.question, entry.body, editing])
 
   const save = useMutation({
     mutationFn: (patch: Record<string, unknown>) => api.knowledge.updateEntry(entry.id, patch),
     ...status.handlers,
-    onSuccess: () => {
-      status.handlers.onSuccess()
+    onSuccess: (data, variables, context) => {
+      status.handlers.onSuccess(data, variables, context)
       onChange()
     },
   })
@@ -184,18 +254,26 @@ function EntryEditor({
     <div className="space-y-1.5">
       {entry.question !== null ? (
         <Input
-          defaultValue={entry.question}
+          aria-label={t('knowledge.question')}
+          value={question}
           placeholder={t('knowledge.question')}
-          onBlur={(e) => {
-            if (e.target.value !== entry.question) save.mutate({ question: e.target.value })
+          onFocus={() => setEditing('question')}
+          onChange={(e) => setQuestion(e.target.value)}
+          onBlur={() => {
+            setEditing(null)
+            if (question !== entry.question) save.mutate({ question })
           }}
         />
       ) : null}
       <Textarea
+        aria-label={t('knowledge.answer')}
         rows={entry.question === null ? 8 : 4}
-        defaultValue={entry.body}
-        onBlur={(e) => {
-          if (e.target.value !== entry.body) save.mutate({ body: e.target.value })
+        value={body}
+        onFocus={() => setEditing('body')}
+        onChange={(e) => setBody(e.target.value)}
+        onBlur={() => {
+          setEditing(null)
+          if (body !== entry.body) save.mutate({ body })
         }}
       />
       <div className="flex items-center gap-3">
@@ -314,11 +392,19 @@ function AddKnowledge({ onDone }: { onDone: () => void }) {
 function TestSearch() {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
-  const [result, setResult] = useState<SearchResult | null>(null)
+  const [result, setResult] = useState<{ query: string; result: SearchResult } | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const search = useMutation({
-    mutationFn: () => api.knowledge.search({ query }),
-    onSuccess: setResult,
+    mutationFn: (asked: string) => api.knowledge.search({ query: asked }),
+    // The previous answer goes as the new question is asked: left up, it read as the answer
+    // to a search that had in fact failed.
+    onMutate: () => {
+      setResult(null)
+      setError(null)
+    },
+    onSuccess: (found, asked) => setResult({ query: asked, result: found }),
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   })
 
   return (
@@ -330,30 +416,47 @@ function TestSearch() {
           placeholder={t('knowledge.testSearchPlaceholder')}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && query.trim()) search.mutate()
+            if (e.key === 'Enter' && query.trim() && !search.isPending) search.mutate(query.trim())
           }}
         />
         <Button
           variant="primary"
           disabled={!query.trim() || search.isPending}
-          onClick={() => search.mutate()}
+          onClick={() => search.mutate(query.trim())}
         >
           {t('knowledge.search')}
         </Button>
       </div>
 
+      {error ? <ErrorNote message={`${t('knowledge.searchFailed')}: ${error}`} /> : null}
+
       {result ? (
-        <div className="space-y-3">
+        <div className="space-y-3" data-testid="test-search-result">
           <p className="text-[11px] text-[var(--text-muted)]">
-            {result.embeddingModel
-              ? `${t('knowledge.embeddingModel')}: ${result.embeddingModel}`
-              : t('knowledge.noEmbeddingModel')}
+            {t('knowledge.resultsFor', { query: result.query })}
           </p>
-          <HitList title={t('knowledge.fused')} hits={result.chunks} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <HitList title={t('knowledge.denseHalf')} hits={result.dense} compact />
-            <HitList title={t('knowledge.keywordHalf')} hits={result.keyword} compact />
-          </div>
+          {/* What the AI would be given, first. How each half scored is for somebody
+              chasing a miss, so it is one click further. */}
+          <HitList title={t('knowledge.fused')} hits={result.result.chunks} />
+          <details className="rounded-lg border border-[var(--border)] p-2">
+            <summary className="cursor-pointer text-[12px] text-[var(--text-muted)]">
+              {t('knowledge.howItScored')}
+            </summary>
+            <p className="mt-2 text-[11px] text-[var(--text-muted)]">
+              {result.result.embeddingModel
+                ? `${t('knowledge.embeddingModel')}: ${result.result.embeddingModel}`
+                : t('knowledge.noEmbeddingModel')}
+            </p>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              <HitList title={t('knowledge.denseHalf')} hits={result.result.dense} compact scores />
+              <HitList
+                title={t('knowledge.keywordHalf')}
+                hits={result.result.keyword}
+                compact
+                scores
+              />
+            </div>
+          </details>
         </div>
       ) : null}
     </Card>
@@ -364,10 +467,13 @@ function HitList({
   title,
   hits,
   compact,
+  scores,
 }: {
   title: string
   hits: SearchHit[]
   compact?: boolean
+  /** Scores only where somebody is diagnosing a search, not beside the answer itself. */
+  scores?: boolean
 }) {
   const { t } = useTranslation()
   return (
@@ -383,10 +489,12 @@ function HitList({
             <li key={hit.id} className="rounded-lg border border-[var(--border)] p-2">
               <div className="flex items-baseline gap-2">
                 <span className="truncate text-[12px] font-medium">{hit.sourceTitle}</span>
-                <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--text-muted)]">
-                  {hit.denseScore !== null ? `d ${hit.denseScore.toFixed(3)}` : ''}
-                  {hit.keywordScore !== null ? ` k ${hit.keywordScore.toFixed(3)}` : ''}
-                </span>
+                {scores ? (
+                  <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--text-muted)]">
+                    {hit.denseScore !== null ? `d ${hit.denseScore.toFixed(3)}` : ''}
+                    {hit.keywordScore !== null ? ` k ${hit.keywordScore.toFixed(3)}` : ''}
+                  </span>
+                ) : null}
               </div>
               <p className={cn('text-[13px]', compact ? 'line-clamp-2' : 'line-clamp-4')}>
                 {hit.text}

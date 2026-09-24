@@ -10,7 +10,7 @@ import {
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useTranslation } from 'react-i18next'
-import { api } from './lib/api'
+import { ApiError, api } from './lib/api'
 import './lib/i18n'
 import './styles.css'
 import { Layout } from './components/Layout'
@@ -32,6 +32,9 @@ const queryClient = new QueryClient({
       retry: (failureCount, error) => {
         // Never retry an auth failure: it will not succeed and it delays the redirect.
         if (error instanceof Error && error.message.includes('Not signed in')) return false
+        // A refusal — forbidden, not found, invalid — will be refused again. Retrying only
+        // delayed the error an agent needed to see by several seconds.
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false
         return failureCount < 2
       },
     },
@@ -136,8 +139,12 @@ const routeTree = rootRoute.addChildren([
       path: '/',
       component: Inbox,
       // Which queue is showing, so the dashboard can link straight into one.
-      validateSearch: (search: Record<string, unknown>): { tab: InboxTab } => ({
+      validateSearch: (search: Record<string, unknown>): { tab: InboxTab; c?: string } => ({
         tab: INBOX_TABS.includes(search.tab as InboxTab) ? (search.tab as InboxTab) : 'open',
+        // The open conversation, so a link, a reload or Back lands on the same thread.
+        ...(typeof search.c === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(search.c)
+          ? { c: search.c }
+          : {}),
       }),
     }),
     createRoute({ getParentRoute: () => appRoute, path: '/dashboard', component: Dashboard }),

@@ -329,15 +329,17 @@ test('an admin erases a customer, and it takes two clicks', async ({ page, reque
   const erase = page.getByTestId('erase-customer')
   await expect(erase).toBeVisible({ timeout: 20_000 })
 
-  // One click arms it and deletes nothing. Irreversible work does not happen on a stray
-  // click, and no browser dialog is used, which nobody reads anyway.
-  await erase.click()
-  await expect(erase).toContainText('ยืนยัน')
+  // A double-click on it deletes nothing: it only opens a step that names the customer.
+  // Irreversible work does not happen on a reflex, and no browser dialog is used.
+  await erase.dblclick()
+  const confirm = page.getByTestId('erase-customer-confirm')
+  await expect(confirm).toContainText('ยืนยัน')
+  await expect(page.getByTestId('erase-customer-panel')).toContainText(customer)
   await expect(page.getByTestId('conversation-row').filter({ hasText: customer })).toBeVisible()
 
-  // The second click queues it. The work itself happens in the worker, because it deletes
-  // stored images as well as rows.
-  await erase.click()
+  // Confirming queues it. The work itself happens in the worker, because it deletes stored
+  // images as well as rows.
+  await confirm.click()
   await expect(page.getByText('ส่งคำสั่งลบแล้ว', { exact: false })).toBeVisible({
     timeout: 20_000,
   })
