@@ -25,7 +25,7 @@ import {
   feedbackTargetTypeSchema,
   normalizedMessageSchema,
 } from '@ci/shared'
-import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
+import { and, desc, eq, lt, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import { authPlugin } from '../auth-plugin'
@@ -125,6 +125,8 @@ export function conversationRoutes(ctx: ApiContext) {
           if (query.review) filters.push(inReviewQueue())
           if (query.before)
             filters.push(lt(schema.conversations.lastMessageAt, new Date(query.before)))
+          const limit = query.limit ?? 50
+          const offset = query.offset ?? 0
 
           /** Your people first, then unclaimed people, then everybody else's. */
           const ownership = sql`case
@@ -186,29 +188,59 @@ export function conversationRoutes(ctx: ApiContext) {
               ownership,
               sql`${waitingSince} asc nulls last`,
               sql`${schema.conversations.lastMessageAt} desc nulls last`,
+              // A total order: two conversations tied on everything above used to swap
+              // between requests, so paging could show one twice and never the other.
+              desc(schema.conversations.id),
             )
-            .limit(query.limit ?? 50)
+            // One more than a page, which is how the caller learns there is another.
+            .limit(limit + 1)
+            .offset(offset)
 
-          if (rows.length === 0) return { conversations: [] }
+          const page = rows.slice(0, limit)
+          const nextOffset = rows.length > limit ? offset + limit : null
+          if (page.length === 0) return { conversations: [], nextOffset: null }
 
-          // One extra query for previews rather than one per row.
-          const conversationIds = rows.map((r) => r.id)
-          const lastMessages = await db
-            .select({
-              conversationId: schema.messages.conversationId,
-              text: schema.messages.text,
-              createdAt: schema.messages.createdAt,
-              senderType: schema.messages.senderType,
+          /**
+           * The newest message of each conversation on the page, one row each.
+           *
+           * The previous query fetched every message of every listed conversation and kept
+           * the first per thread in JavaScript: fifty long threads were fifty transcripts.
+           */
+          const conversationIds = page.map((r) => r.id)
+          const lastMessages = await db.execute<{
+            conversation_id: string
+            text: string
+            created_at: string
+            sender_type: 'customer' | 'ai' | 'human' | 'system'
+          }>(sql`
+            SELECT c.id AS conversation_id, lm.text, lm.created_at, lm.sender_type
+            FROM conversations c
+            CROSS JOIN LATERAL (
+              SELECT m.text, m.created_at, m.sender_type
+              FROM messages m
+              WHERE m.conversation_id = c.id AND m.workspace_id = c.workspace_id
+              ORDER BY m.created_at DESC, m.id DESC
+              LIMIT 1
+            ) lm
+            WHERE c.workspace_id = ${workspaceId}
+              AND c.id IN (${sql.join(
+                conversationIds.map((id) => sql`${id}`),
+                sql`, `,
+              )})
+          `)
+          const preview = new Map<string, { text: string; senderType: string; createdAt: Date }>()
+          for (const m of lastMessages) {
+            preview.set(m.conversation_id, {
+              text: m.text,
+              senderType: m.sender_type,
+              createdAt: new Date(m.created_at),
             })
-            .from(schema.messages)
-            .where(inArray(schema.messages.conversationId, conversationIds))
-            .orderBy(desc(schema.messages.createdAt))
-          const preview = new Map<string, (typeof lastMessages)[number]>()
-          for (const m of lastMessages)
-            if (!preview.has(m.conversationId)) preview.set(m.conversationId, m)
+          }
 
           return {
-            conversations: rows.map((row) => ({
+            /** Where the next page starts, or null on the last page. */
+            nextOffset,
+            conversations: page.map((row) => ({
               id: row.id,
               mode: row.mode,
               status: row.status,
@@ -257,6 +289,11 @@ export function conversationRoutes(ctx: ApiContext) {
              */
             before: z.string().optional(),
             limit: z.coerce.number().int().min(1).max(100).optional(),
+            /**
+             * Where to start, from `nextOffset`. The order is total (id breaks every tie),
+             * so paging a queue that is not changing reaches every row exactly once.
+             */
+            offset: z.coerce.number().int().min(0).max(100_000).optional(),
           }),
         },
       )
@@ -337,7 +374,14 @@ export function conversationRoutes(ctx: ApiContext) {
             db
               .select()
               .from(schema.messages)
-              .where(eq(schema.messages.conversationId, params.id))
+              .where(
+                and(
+                  eq(schema.messages.conversationId, params.id),
+                  // A page above one already loaded, by id: ids are time-ordered, so this
+                  // walks backwards without ever reaching a cap.
+                  ...(query.before ? [lt(schema.messages.id, query.before)] : []),
+                ),
+              )
               .orderBy(desc(schema.messages.createdAt), desc(schema.messages.id))
               .limit(messageLimit + 1),
             db
@@ -426,7 +470,17 @@ export function conversationRoutes(ctx: ApiContext) {
             messages: messages.slice(0, messageLimit).reverse(),
             /** True when older messages exist above the window the caller was given. */
             hasMoreMessages: messages.length > messageLimit,
-            notes,
+            /**
+             * Only the notes inside the loaded window. The thread interleaves them with
+             * messages, and one older than everything loaded has nowhere to go yet.
+             */
+            notes:
+              messages.length > messageLimit
+                ? notes.filter((note) => {
+                    const oldest = messages[messageLimit - 1]?.createdAt
+                    return !oldest || note.createdAt >= oldest
+                  })
+                : notes,
             suggestions,
             feedback,
             inReviewQueue: needsReview,
@@ -443,6 +497,8 @@ export function conversationRoutes(ctx: ApiContext) {
              * different feature rather than a bigger number.
              */
             messages: z.coerce.number().int().min(1).max(500).optional(),
+            /** Only messages older than this id: the next page up. */
+            before: z.string().optional(),
           }),
         },
       )
