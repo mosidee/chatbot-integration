@@ -75,10 +75,8 @@ S3_PUBLIC_URL=/api/v1/uploads
 
 The bucket needs no public access: media leaves through the API's signed links.
 
-A host that still holds the MinIO images can keep media on its own disk instead: add
-`COMPOSE_PROFILES=minio` and `S3_ENDPOINT=http://minio:9000` to `.env`. MinIO is no longer
-published, so a new server cannot take this route. **The pilot VPS ran this way until its
-switch to R2; until that switch, its `.env` must carry `COMPOSE_PROFILES=minio`.**
+Any other S3-compatible store works the same way. The bundled MinIO was removed on
+2026-09-24 after MinIO stopped publishing its images (ADR 0008).
 
 Then:
 
@@ -153,7 +151,7 @@ the settings screen shows per channel.
 Leave `TOOL_EGRESS_ALLOW_PRIVATE` unset or `false` in production. It exists so a tool
 endpoint can run on localhost during development, and the API and worker **refuse to
 start** with it set while `NODE_ENV=production`: the worker shares a Docker network with
-Postgres, Redis and MinIO, so a tenant admin who could aim a tool inward would have the
+Postgres and Redis, so a tenant admin who could aim a tool inward would have the
 product fetch an internal service and read the answer out to a customer. See
 [docs/adr/0004-restricted-egress-for-tenant-tools.md](adr/0004-restricted-egress-for-tenant-tools.md).
 

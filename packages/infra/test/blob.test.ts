@@ -5,9 +5,10 @@ import { createBlobStore } from '../src/blob'
 import { createFilesystemBlobStore } from '../src/blob-fs'
 
 /**
- * Storage is exercised through whichever implementation the environment selects, so CI
- * proves the S3 path against MinIO while a macOS developer proves the filesystem one.
- * The filesystem store is always tested, because its behaviour must match the port.
+ * Storage is exercised through whichever implementation the environment selects. The
+ * filesystem store is always tested, because its behaviour must match the port; the S3 path
+ * runs when S3_ENDPOINT is an http(s) URL — point it at the R2 bucket after changing the
+ * client or the SDK (ADR 0008). CI holds no R2 keys, so it proves the filesystem store only.
  */
 
 const env = loadEnv()

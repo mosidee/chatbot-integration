@@ -11,7 +11,7 @@ import { pinnedRequest } from './pinned-transport'
  * Tools, model providers and external retrieval all qualify: since tenants have their own
  * admins, none of them is operator-controlled any more. A tenant who can type a URL has a
  * request origin inside our network. The worker shares a
- * Docker network with Postgres, Redis and MinIO, and the model gateway answers on a private
+ * Docker network with Postgres and Redis, and the model gateway answers on a private
  * address, so a tool aimed at an internal host would be fetched and its answer read out to
  * a customer. See decision 20 in docs/REQUIREMENTS.md and ADR 0004.
  *
