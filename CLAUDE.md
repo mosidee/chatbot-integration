@@ -572,3 +572,9 @@ End commit messages with:
 ```
 Co-Authored-By: Claude <model> <noreply@anthropic.com>
 ```
+- **One turn per customer message, but a superseded one steps aside.** An AI turn that finds
+  a newer customer message with its own `ai-turn-<id>` row in the outbox drops itself: before
+  the model call, after it, and under the commit lock — the last only if none of its tenant
+  writes fired, since then its reply is the customer's only account of them. A newer message
+  with no turn owed (it arrived while a colleague held the conversation) never silences the
+  older turn. `outbox_job_id_idx` (migration 0015) keeps the lookup cheap.

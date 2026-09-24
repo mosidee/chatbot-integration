@@ -71,5 +71,10 @@ export const outbox = pgTable(
      * the only index the relay's hot query needs.
      */
     index('outbox_pending_idx').on(table.id).where(sql`${table.relayedAt} is null`),
+    /**
+     * An AI turn asks whether a newer customer message has a turn of its own owed, which is
+     * a lookup by job id. Relayed rows are kept for a day, so without this it is a scan.
+     */
+    index('outbox_job_id_idx').on(table.jobId),
   ],
 )

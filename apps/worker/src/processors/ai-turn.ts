@@ -10,7 +10,7 @@ import {
   runAgentTurn,
   transition,
 } from '@ci/core'
-import { newId, schema } from '@ci/db'
+import { type Executor, newId, schema } from '@ci/db'
 import type { AiTurnJob, JobMeta, Runtime } from '@ci/infra'
 import {
   addConversationTags,
@@ -38,7 +38,7 @@ import {
   workspaceProviderFetch,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, gt, sql } from 'drizzle-orm'
 
 /**
  * Run one AI turn and deliver the outcome.
@@ -137,6 +137,21 @@ export async function processAiTurn(
       })
       return
     }
+  }
+
+  /**
+   * Has the customer written again since, with a turn of its own owed for it?
+   *
+   * Every customer message queues its own turn, so two lines typed in quick succession ran
+   * two turns at once and the customer read two answers, often the second contradicting the
+   * first. The newer turn sees both messages, so it is the one that answers; this one steps
+   * aside. Asked before the model is paid for, after it answered, and under the lock.
+   */
+  if (await newerTurnOwed(db, job)) {
+    logger.info('AI turn superseded before it ran: the customer wrote again', {
+      conversationId: job.conversationId,
+    })
+    return
   }
 
   /** Is the AI still the one answering? Asked again where it matters. */
@@ -286,6 +301,13 @@ export async function processAiTurn(
     return
   }
 
+  if (await newerTurnOwed(db, job)) {
+    logger.info('AI turn superseded while the model was answering: the customer wrote again', {
+      conversationId: job.conversationId,
+    })
+    return
+  }
+
   const changedFields = await mergeCustomerFields(
     db,
     job.workspaceId,
@@ -382,6 +404,9 @@ export async function processAiTurn(
   }
 
   if (job.deliver === 'draft') {
+    // A draft for a message the customer has already followed up is one a person would
+    // have to read and throw away; the newer turn drafts for both.
+    if (await newerTurnOwed(db, job)) return
     const suggestionId = newId()
     await db.insert(schema.suggestions).values({
       id: suggestionId,
@@ -447,7 +472,16 @@ export async function processAiTurn(
           ),
         )
         .for('update')
-      if (!locked || !aiMaySend(locked.mode)) return false
+      if (!locked || !aiMaySend(locked.mode)) return 'taken_over'
+
+      /**
+       * Stepping aside is only safe while this turn has changed nothing. Once its writes
+       * have reached the tenant's system, this reply is the customer's only account of
+       * them: the newer turn does not know they happened.
+       */
+      if (result.pendingWrites.length === 0 && (await newerTurnOwed(tx, job))) {
+        return 'superseded'
+      }
     }
 
     const message = await storeMessage(tx, {
@@ -498,10 +532,17 @@ export async function processAiTurn(
       },
       jobId: `outbound-${messageId}`,
     })
-    return true
+    return 'stored'
   })
 
-  if (!committed) {
+  if (committed === 'superseded') {
+    logger.info('AI turn superseded as its reply was being stored: the customer wrote again', {
+      conversationId: job.conversationId,
+    })
+    return
+  }
+
+  if (committed === 'taken_over') {
     logger.info('a human took over as the reply was being stored; it was not sent', {
       conversationId: job.conversationId,
     })
@@ -549,6 +590,43 @@ export async function processAiTurn(
       )
     }
   }
+}
+
+/**
+ * Is a turn owed for a customer message newer than the one this turn answers?
+ *
+ * Both halves matter. A newer message alone is not enough: one that arrived while a colleague
+ * owned the conversation queued no turn, and if the conversation has since gone back to the
+ * AI, this turn is the only one that will ever answer it. The outbox row is the evidence that
+ * the newer turn exists, and it is written in the same transaction as the message.
+ *
+ * Ids are time-ordered, so "newer" is a comparison of ids rather than of timestamps, which
+ * lose microseconds on their way through JavaScript. A turn with no triggering message — the
+ * one a completed verification asks for — is never superseded.
+ */
+async function newerTurnOwed(executor: Executor, job: AiTurnJob): Promise<boolean> {
+  if (!job.triggerMessageId) return false
+  const rows = await executor
+    .select({ id: schema.messages.id })
+    .from(schema.messages)
+    .innerJoin(
+      schema.outbox,
+      and(
+        eq(schema.outbox.queue, 'ai_turn'),
+        eq(schema.outbox.jobId, sql`'ai-turn-' || ${schema.messages.id}`),
+        sql`${schema.outbox.lastError} is distinct from 'cancelled before relay'`,
+      ),
+    )
+    .where(
+      and(
+        eq(schema.messages.workspaceId, job.workspaceId),
+        eq(schema.messages.conversationId, job.conversationId),
+        eq(schema.messages.senderType, 'customer'),
+        gt(schema.messages.id, job.triggerMessageId),
+      ),
+    )
+    .limit(1)
+  return rows.length > 0
 }
 
 /**
