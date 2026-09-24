@@ -26,9 +26,12 @@ an API token scoped to Object Read & Write on that bucket only. The bucket has n
 URL: customers, LINE and Messenger fetch media through the API's signed `/api/media` links,
 as before (ADR 0001 still holds).
 
-CI and local development use the filesystem store (ADR 0002). MinIO stays in both compose
-files behind a `minio` profile, for an installation that holds the images and wants media on
-its own server.
+CI and local development use the filesystem store (ADR 0002). MinIO is removed from both
+compose files.
+
+Carried out the same day: 20 objects (4.4 MB) copied and verified byte for byte, the
+production `.env` repointed, the MinIO container, volume and images removed. An archive of
+its volume, `~/miniodata-pre-r2-20260924T1437.tgz`, stays on the VPS.
 
 ## Consequences
 

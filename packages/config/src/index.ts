@@ -46,8 +46,8 @@ export const envSchema = z.object({
   /**
    * Let tenant-defined tools reach loopback and private addresses.
    *
-   * Off everywhere real. The worker shares a Docker network with Postgres, Redis and
-   * MinIO, and the model gateway answers on a private address, so a tenant who could aim a
+   * Off everywhere real. The worker shares a Docker network with Postgres and Redis,
+   * and the model gateway answers on a private address, so a tenant who could aim a
    * tool inward would have us fetch it and read the answer out to a customer. Tests and
    * local development need a tool endpoint on localhost, which is the only reason this
    * exists; `createRuntime` refuses to start with it on in production.

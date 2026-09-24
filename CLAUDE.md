@@ -120,10 +120,9 @@ without spending money.
   stopped tracking releases at 1.4.21. Keep its version equal to `better-auth`.
 - Better Auth's routes must be mounted at the **root** of the app. Mounting them inside a
   prefixed group buries `/api/auth` and sign-in returns 404.
-- **MinIO is no longer published** (Docker Hub from 2026-09-11, quay.io from 2026-09-24), so
-  nothing may depend on pulling it. Production media is in Cloudflare R2, CI and local
-  development use the filesystem store, and MinIO survives only behind the `minio` compose
-  profile for a host that already holds the images. See ADR 0008.
+- **MinIO is gone** (unpublished from Docker Hub on 2026-09-11 and quay.io on 2026-09-24).
+  Production media is in Cloudflare R2; CI and local development use the filesystem store.
+  Nothing may depend on pulling a MinIO image. See ADR 0008.
 - The AI SDK refuses to download images from loopback and private hosts. Vision receives
   **bytes**, not URLs; see ADR 0001.
 - The AI SDK's `image` content part is deprecated in v7. Use a `file` part with `mediaType`.
@@ -231,8 +230,8 @@ without spending money.
   forever and the harness gives up.
 - `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool — and a provider or external
   retrieval URL — reach loopback and private addresses. Tests and local development need it; `createRuntime` **throws at startup** if
-  it is set with `NODE_ENV=production`, because the worker shares a network with Postgres,
-  Redis and MinIO. `playwright.config.ts` sets it for the servers it starts, which does not
+  it is set with `NODE_ENV=production`, because the worker shares a network with Postgres and
+  Redis. `playwright.config.ts` sets it for the servers it starts, which does not
   cover a dev server Playwright reuses: restart that one with the flag, or the tools spec
   fails with an egress refusal that reads like a product bug.
 - A writing tool is never offered while the AI is drafting for a human (`mode: 'suggest'`).

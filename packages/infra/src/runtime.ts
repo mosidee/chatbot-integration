@@ -72,7 +72,7 @@ export function createRuntime(
     // The same refusal `db:reset` makes, for the same reason: this is a switch that is
     // harmless locally and hands the internal network to any tenant admin in production.
     throw new Error(
-      'TOOL_EGRESS_ALLOW_PRIVATE must not be set in production: it would let any URL a tenant types — a tool, a provider, a retrieval endpoint — reach Postgres, Redis, MinIO and the model gateway. Approve a private gateway for one tenant from the Platform page instead.',
+      'TOOL_EGRESS_ALLOW_PRIVATE must not be set in production: it would let any URL a tenant types — a tool, a provider, a retrieval endpoint — reach Postgres, Redis and the model gateway. Approve a private gateway for one tenant from the Platform page instead.',
     )
   }
 

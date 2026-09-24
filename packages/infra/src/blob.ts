@@ -11,8 +11,8 @@ import type { BlobStore } from '@ci/core'
 /**
  * S3-compatible object storage.
  *
- * MinIO in development, R2 or S3 in production: the same client code, differing only by
- * endpoint and path-style addressing. Media is read back as bytes for the vision model
+ * Cloudflare R2 in production (ADR 0008), or any S3-compatible store: the same client code,
+ * differing only by endpoint and path-style addressing. Media is read back as bytes for the vision model
  * rather than exposed by URL, so the bucket can stay private (see ADR 0001).
  */
 
