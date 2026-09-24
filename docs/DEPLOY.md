@@ -283,6 +283,14 @@ that blocks writes to the table meanwhile; at the pilot's size it is instant.
 A message now reads `failed` only after the outbound job's last attempt. Rows that failed
 before the deploy keep that status and can be resent from the console.
 
+### Migration 0017 (agent replies count as answers)
+
+It moves each conversation's `last_message_at` forward to its newest agent reply, where that
+is later, so the inbox stops listing conversations an agent already answered as waiting. It
+writes data, so take a `pg_dump` first; a second run changes nothing. The LINE media Worker
+also changed with it (it marks LINE's own answers): redeploy it with `bunx wrangler deploy`
+from `workers/line-media`.
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that

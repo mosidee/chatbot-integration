@@ -28,7 +28,7 @@ packages/infra     Runtime wiring: Redis, queues, storage, repository, effect po
 packages/shared    Zod schemas and types shared with the browser.
 packages/config    Environment parsing.
 workers/line-media Cloudflare Worker that fetches LINE media (ADR 0009). Outside the Bun
-                   workspaces: not covered by `bun run typecheck` or `bun run test`.
+                   workspaces: `bun run test` covers it, `bun run typecheck` does not.
 e2e/               Playwright browser tests.
 scripts/           Smoke test, local mock provider.
 ```
@@ -417,8 +417,10 @@ without spending money.
   `LINE_MEDIA_PROXY_URL` and `LINE_MEDIA_PROXY_SECRET` are set (`withLineMediaProxy`): the
   VPS's route to LINE's Tokyo content server runs at ~14 KB/s (65 s for one photo; 1.2 s
   through the Worker). The Worker builds LINE's content URL from a numeric id only and holds
-  no R2 binding. The proxy call has 30 s (`PROXY_TIMEOUT_MS`), then the app falls back to the
-  direct fetch, which has **no deadline on purpose** — the endpoint is slow, not stalled, and
+  no R2 binding; it marks what LINE answered with `x-upstream: line`, and a LINE 4xx is a
+  `PermanentMediaError` — not fetched directly and not retried. Otherwise the proxy call has
+  30 s (`PROXY_TIMEOUT_MS`), then the app falls back to the direct fetch, which has **no
+  deadline on purpose** — the endpoint is slow, not stalled, and
   a 15-second limit failed every photo over ~200 KB. The Worker's secret lives in two places
   (the Worker's `PROXY_SECRET` and the server's `.env`); change both together.
 
@@ -445,6 +447,8 @@ without spending money.
 - **Delete rows that name stored files and queue the files in one transaction**
   (`queueBlobDeletions`), then `drainBlobDeletions`. A failed removal stays queued; the
   nightly retention job retries it and queues agent uploads never sent after a day.
+- **Knowledge indexing is scoped by workspace** (`indexEntry(db, workspaceId, entryId, …)`,
+  `indexSource(db, workspaceId, sourceId, …)`); an id from another workspace is skipped.
 - `eraseWorkspace` refuses to delete anything unless a `workspace_erasures` row says the
   deletion was asked for, and saves the media keys onto that row **before** the rows go.
   After the cascade there is nothing left to read them from, so a retry would otherwise
@@ -528,12 +532,12 @@ without spending money.
   can never be the source for reporting: the dashboard list of what the AI could not handle
   emptied itself as agents worked their queue. `handoff_events` is the history; the column
   stays for the inbox badge. Both exist on purpose.
-- **An agent's reply does not update `conversations.last_message_at`.** Only an inbound
-  message and the AI turn write it; the agent send route and holding messages do not. The
-  inbox's waiting order compares `last_customer_message_at >= last_message_at`, so it treats
-  an agent-answered conversation as unanswered, and retention ages from the last customer or
-  AI message. Where it matters, read the last row of `messages`, as idle-resolve does.
-  **Known and not yet fixed.**
+- **`conversations.last_message_at` is moved by the customer, the AI and an agent** — not by
+  holding messages, which are not answers. The inbox's waiting order compares
+  `last_customer_message_at >= last_message_at`, and the agent send route used to leave it
+  alone, so an answered conversation stayed near the top as if nobody had replied (migration
+  0017 brought old rows forward). Who spoke last in detail — AI or colleague, not a system
+  message — is still read from `messages`, as idle-resolve does.
 - **Resolving does not change `mode`.** "Waiting" means `status = 'open' AND mode =
   'waiting_human'` everywhere it is counted: the Inbox badge
   (`/api/v1/conversations/counts`), the inbox's Waiting tab and the dashboard's `waitingNow`.
@@ -549,12 +553,14 @@ without spending money.
   default.** Absent means a workspace older than the setting; `null` means somebody switched
   it off, which `??` silently undoes (`withSettingsDefaults`, `autoResolveAfterHours`).
 - **Settings and knowledge entries carry a revision** (`revision` from `GET /settings/
-  workspace`, an entry's `updatedAt`). A save sends the one it started from and a mismatch
-  is a 409, so nobody overwrites a value they never saw. **Never take that revision from the
-  query cache at save time**: the socket's reconnect refetches every query, which moves the
-  cache on while the fields still show the old text. Settings keep it in a ref (first load,
-  own saves, a conflict); the entry editor takes it at focus and follows its own chain of
-  saves through a map. Saves go one at a time. Omitting `revision` still overwrites.
+  workspace`, an entry's `updatedAt`), so nobody overwrites a value they never saw; a mismatch
+  is a 409. The console's settings saves send `expected` instead — the shown value of each
+  setting being changed — and are refused only when one of *those* changed (the 409 names
+  them in `fields`), so a colleague on another card or a platform action is not a conflict.
+  The page's `shown` ref moves only for settings it saved itself; the settings query never
+  refetches in the background, and the socket's reconnect skips it. The entry editor takes
+  its revision at focus and follows its own chain of saves through a map. Saves go one at a
+  time. Omitting both still overwrites.
 
 ### Console
 

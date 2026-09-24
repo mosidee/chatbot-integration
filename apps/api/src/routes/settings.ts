@@ -50,6 +50,17 @@ const REQUIRED_FIELDS: Record<string, { key: string; label: string; secret: bool
  * secret they just wrote. One function rather than two, because the two drifted apart once
  * already and the reply to a write is the easier of the pair to forget.
  */
+/** JSON with object keys sorted, so two readings of the same value compare equal. */
+function stableJson(value: unknown): string {
+  if (value === undefined) return 'null'
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  )
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`
+}
+
 function publicSettings(raw: WorkspaceSettings) {
   const { externalRetrieval, identity, ...rest } = withSettingsDefaults(raw)
   return {
@@ -195,8 +206,29 @@ export function settingsRoutes(ctx: ApiContext) {
               externalRetrieval: incomingExternal,
               identity: incomingIdentity,
               revision,
+              expected,
               ...plainBody
             } = body
+
+            /**
+             * What the caller's page showed for each setting it is changing. A save is refused
+             * only when one of *those* has changed since — a colleague editing another card,
+             * or a platform admin suspending and restoring the tenant, is not a conflict. This
+             * is what the console sends; `revision`, below, is the coarser check for scripts.
+             */
+            if (expected !== undefined) {
+              const shown = publicSettings(workspace.settings) as Record<string, unknown>
+              const changed = Object.keys(expected).filter(
+                (key) => stableJson(shown[key]) !== stableJson(expected[key]),
+              )
+              if (changed.length > 0) {
+                return status(409, {
+                  error: 'These settings were changed by somebody else since the page was loaded.',
+                  code: 'settings_conflict',
+                  fields: changed,
+                })
+              }
+            }
 
             /**
              * The version the caller's page showed. The lock stops two saves losing each
@@ -269,6 +301,11 @@ export function settingsRoutes(ctx: ApiContext) {
           body: z.object({
             /** The `revision` the caller last read; a mismatch is refused with 409. */
             revision: z.string().datetime().optional(),
+            /**
+             * The values, as `GET` returned them, of the settings this save changes. Any that
+             * no longer match is refused with 409 and named in `fields`.
+             */
+            expected: z.record(z.string(), z.unknown()).optional(),
             defaultLanguage: languageSchema.optional(),
             defaultMode: conversationModeSchema.optional(),
             persona: z.string().max(8000).optional(),

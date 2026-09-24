@@ -423,8 +423,8 @@ Cloudflare Worker, because the pilot server's route to LINE's content servers ra
 
 What remains is listed in the status table of `recommendation.md` and `UX-AUDIT.md`: a
 separate media origin, a restore rehearsal, a manual screen-reader pass, Messenger
-idempotency, stable write keys when a retried model changes its arguments, an "indexed and
-ready" state for knowledge, and agent replies updating `last_message_at`.
+idempotency, stable write keys when a retried model changes its arguments, and an "indexed and
+ready" state for knowledge. (Agent replies now update `last_message_at`: migration 0017.)
 
 ## 3.10 M5 design intent
 

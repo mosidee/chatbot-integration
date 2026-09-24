@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { Logger } from '@ci/core'
+import type { BlobStore, Logger } from '@ci/core'
 import { withLineMediaProxy } from '../src/line-media-proxy'
+import { resolveInboundMedia } from '../src/media'
 
 /**
  * LINE media through the Cloudflare Worker (ADR 0009). The Worker is stood in for by a local
@@ -18,6 +19,24 @@ const quiet = (): Logger & { warnings: string[] } => {
 }
 
 const SECRET = 's'.repeat(40)
+
+const memoryBlob = (): BlobStore => {
+  const objects = new Map<string, { data: Uint8Array<ArrayBuffer>; mime: string }>()
+  return {
+    async get(key) {
+      const found = objects.get(key)
+      if (!found) throw new Error(`missing ${key}`)
+      return found
+    },
+    async put(key, data, mime) {
+      objects.set(key, { data, mime })
+    },
+    async remove(key) {
+      objects.delete(key)
+    },
+    urlFor: (key) => `/media/${key}`,
+  }
+}
 const direct = {
   fetchMedia: async () => ({
     data: new Uint8Array([9]) as Uint8Array<ArrayBuffer>,
@@ -66,6 +85,74 @@ describe('LINE media through the proxy', () => {
     const media = await fetcher.fetchMedia?.('line:1', { channelAccessToken: 'tok' } as never)
     expect([...(media?.data ?? [])]).toEqual([9])
     expect(logger.warnings).toContain('LINE media proxy failed; fetching directly')
+  })
+
+  test('does not fall back or retry when LINE itself refused the media', async () => {
+    let proxied = 0
+    let directCalls = 0
+    const url = proxy(() => {
+      proxied += 1
+      return new Response('gone', { status: 404, headers: { 'x-upstream': 'line' } })
+    })
+    const proxyLogger = quiet()
+    const fetcher = withLineMediaProxy(
+      {
+        fetchMedia: async () => {
+          directCalls += 1
+          return { data: new Uint8Array([9]) as Uint8Array<ArrayBuffer>, mime: 'image/png' }
+        },
+      },
+      { channelType: 'line', proxyUrl: url, proxySecret: SECRET, logger: proxyLogger },
+    )
+    const logger = quiet()
+    const result = await resolveInboundMedia(
+      {
+        kind: 'image',
+        text: null,
+        attachments: [
+          {
+            storageKey: null,
+            sourceUrl: 'line:1',
+            mime: 'image/jpeg',
+            sizeBytes: null,
+            fileName: null,
+            width: null,
+            height: null,
+            durationMs: null,
+          },
+        ],
+      },
+      {
+        workspaceId: 'ws-1',
+        channelType: 'line',
+        adapter: fetcher,
+        config: { channelAccessToken: 'tok' },
+        blob: memoryBlob(),
+        logger,
+      },
+    )
+    expect(result.failed).toBe(1)
+    expect(proxied).toBe(1)
+    expect(directCalls).toBe(0)
+    // Recorded as a failed download, and not as a proxy failure worth falling back from.
+    expect(logger.warnings).toContain('could not download inbound media')
+    expect(proxyLogger.warnings).toEqual([])
+  })
+
+  test("still falls back when the refusal is the proxy's own", async () => {
+    let directCalls = 0
+    const url = proxy(() => new Response('unauthorised', { status: 401 }))
+    const fetcher = withLineMediaProxy(
+      {
+        fetchMedia: async () => {
+          directCalls += 1
+          return { data: new Uint8Array([9]) as Uint8Array<ArrayBuffer>, mime: 'image/png' }
+        },
+      },
+      { channelType: 'line', proxyUrl: url, proxySecret: SECRET, logger: quiet() },
+    )
+    await fetcher.fetchMedia?.('line:1', { channelAccessToken: 'tok' } as never)
+    expect(directCalls).toBe(1)
   })
 
   test('leaves other channels, and an installation without a proxy, alone', () => {

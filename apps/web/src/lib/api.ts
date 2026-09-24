@@ -679,10 +679,11 @@ export const api = {
     workspace: () =>
       get<{ settings: WorkspaceSettings; revision: string }>('/v1/settings/workspace'),
     me: () => get<Me>('/v1/settings/me'),
-    updateWorkspace: (patchBody: Partial<WorkspaceSettings>, revision?: string) =>
+    /** `expected` is what the page showed for each setting it changes; a mismatch is a 409. */
+    updateWorkspace: (patchBody: Partial<WorkspaceSettings>, expected?: Record<string, unknown>) =>
       patch<{ settings: WorkspaceSettings; revision: string }>('/v1/settings/workspace', {
         ...patchBody,
-        ...(revision ? { revision } : {}),
+        ...(expected ? { expected } : {}),
       }),
     providers: () => get<{ providers: Provider[] }>('/v1/settings/providers'),
     createProvider: (body: {

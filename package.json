@@ -20,7 +20,7 @@
     "backfill:plain-text": "bun run packages/infra/src/backfill-plain-text.ts",
     "db:seed": "bun run packages/db/src/seed.ts",
     "auth:generate": "bunx auth@1.7.5 generate --config packages/db/src/auth-config.ts --output packages/db/src/schema/auth.ts --yes",
-    "test": "bun test apps packages",
+    "test": "bun test apps packages workers",
     "typecheck": "tsc -p tsconfig.json && cd apps/web && tsc -p tsconfig.json && cd ../widget && tsc -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

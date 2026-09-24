@@ -51,7 +51,7 @@ describe('hybrid retrieval', () => {
       question: 'แพ็กเกจราคาเท่าไหร่',
       body: 'แพ็กเกจเริ่มต้นของ salon-saas ราคา 990 บาทต่อเดือน รวมการจองคิวออนไลน์',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
     const result = await retriever.retrieve({
@@ -74,7 +74,7 @@ describe('hybrid retrieval', () => {
       question: null,
       body: 'Plan SKU SALON-PRO-2026 includes unlimited staff accounts and SMS reminders.',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
     const result = await retriever.retrieve({
@@ -97,7 +97,7 @@ describe('hybrid retrieval', () => {
       question: 'จองคิวอย่างไร',
       body: 'เข้าไปที่เมนูการจองคิว แล้วเลือกวันและเวลาที่ต้องการ',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
     const result = await retriever.retrieve({
@@ -123,7 +123,7 @@ describe('hybrid retrieval', () => {
       question: null,
       body: 'Refunds are processed within 7 business days.',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, {
       embedSlot: null,
@@ -149,14 +149,14 @@ describe('hybrid retrieval', () => {
       question: null,
       body: 'Secret internal note about pricing changes.',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     await fixture.db
       .update(schema.knowledgeEntries)
       .set({ enabled: false })
       .where(eq(schema.knowledgeEntries.id, entryId))
     // Re-indexing a disabled entry removes its chunks.
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
     const result = await retriever.retrieve({
@@ -177,7 +177,7 @@ describe('hybrid retrieval', () => {
       body: 'LINE customers get a special sticker pack.',
       channelTypes: ['line'],
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
 
@@ -196,6 +196,24 @@ describe('hybrid retrieval', () => {
     expect(onMessenger.chunks).toHaveLength(0)
   })
 
+  test('an entry is indexed only under its own workspace', async () => {
+    const { fixture, embedSlot } = await setup()
+    const other = await createKnowledgeFixture()
+    fixtures.push(other)
+    const entryId = await createEntry(fixture.db, {
+      workspaceId: fixture.workspaceId,
+      sourceId: fixture.sourceId,
+      language: 'en',
+      question: null,
+      body: 'Only this workspace may index me.',
+    })
+
+    const wrong = await indexEntry(fixture.db, other.workspaceId, entryId, embedSlot)
+    expect(wrong.skipped).toBe(true)
+    const right = await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
+    expect(right.skipped).toBe(false)
+  })
+
   test("never returns another workspace's knowledge", async () => {
     const { fixture, embedSlot } = await setup()
     const other = await createKnowledgeFixture()
@@ -208,7 +226,7 @@ describe('hybrid retrieval', () => {
       question: null,
       body: 'Competitor pricing intelligence, strictly internal.',
     })
-    await indexEntry(other.db, entryId, embedSlot)
+    await indexEntry(other.db, other.workspaceId, entryId, embedSlot)
 
     const retriever = createPostgresRetriever(fixture.db, { embedSlot, fusion: TEST_FUSION })
     const result = await retriever.retrieve({
@@ -230,12 +248,12 @@ describe('hybrid retrieval', () => {
       question: null,
       body: 'The old answer.',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
     await fixture.db
       .update(schema.knowledgeEntries)
       .set({ body: 'The new answer.' })
       .where(eq(schema.knowledgeEntries.id, entryId))
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     const chunks = await fixture.db
       .select()
@@ -255,7 +273,7 @@ describe('hybrid retrieval', () => {
       question: 'Q',
       body: 'A',
     })
-    const result = await indexSource(fixture.db, fixture.sourceId, embedSlot)
+    const result = await indexSource(fixture.db, fixture.workspaceId, fixture.sourceId, embedSlot)
     expect(result.entries).toBe(1)
 
     const rows = await fixture.db
@@ -393,7 +411,7 @@ describe('reranking', () => {
         question: null,
         body,
       })
-      await indexEntry(fixture.db, entryId, embedSlot)
+      await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
     }
   }
 
@@ -482,7 +500,7 @@ describe('the review, phase D', () => {
       question: null,
       body: 'Opening hours are nine to six.',
     })
-    await indexEntry(fixture.db, entryId, embedSlot)
+    await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
 
     // Same server, same size of vector, a different model name: a different space.
     const otherModel = {
@@ -538,9 +556,9 @@ describe('the review, phase D', () => {
       })
       const embedSlot = fixture.embedSlot(`http://localhost:${proxy.port}/v1`)
 
-      const stale = await indexEntry(fixture.db, entryId, embedSlot)
+      const stale = await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
       expect(stale.skipped).toBe(true)
-      const fresh = await indexEntry(fixture.db, entryId, embedSlot)
+      const fresh = await indexEntry(fixture.db, fixture.workspaceId, entryId, embedSlot)
       expect(fresh.skipped).toBe(false)
 
       const chunks = await fixture.db

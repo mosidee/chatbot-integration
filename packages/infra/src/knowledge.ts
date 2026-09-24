@@ -20,6 +20,7 @@ export type IndexResult = {
 /** Chunk, embed and store one entry. Replaces whatever was indexed for it before. */
 export async function indexEntry(
   db: Database,
+  workspaceId: string,
   entryId: string,
   embedSlot: SlotConfig | null,
   dimensions = EMBEDDING_DIMENSIONS,
@@ -27,14 +28,26 @@ export async function indexEntry(
   const rows = await db
     .select()
     .from(schema.knowledgeEntries)
-    .where(eq(schema.knowledgeEntries.id, entryId))
+    .where(
+      and(
+        eq(schema.knowledgeEntries.id, entryId),
+        eq(schema.knowledgeEntries.workspaceId, workspaceId),
+      ),
+    )
     .limit(1)
 
   const entry = rows[0]
   if (!entry) return { chunks: 0, model: null, skipped: true }
 
   const clearChunks = () =>
-    db.delete(schema.knowledgeChunks).where(eq(schema.knowledgeChunks.entryId, entryId))
+    db
+      .delete(schema.knowledgeChunks)
+      .where(
+        and(
+          eq(schema.knowledgeChunks.entryId, entryId),
+          eq(schema.knowledgeChunks.workspaceId, workspaceId),
+        ),
+      )
 
   if (!entry.enabled) {
     await clearChunks()
@@ -71,7 +84,12 @@ export async function indexEntry(
         enabled: schema.knowledgeEntries.enabled,
       })
       .from(schema.knowledgeEntries)
-      .where(eq(schema.knowledgeEntries.id, entryId))
+      .where(
+        and(
+          eq(schema.knowledgeEntries.id, entryId),
+          eq(schema.knowledgeEntries.workspaceId, workspaceId),
+        ),
+      )
       .for('update')
     if (
       !current?.enabled ||
@@ -82,7 +100,14 @@ export async function indexEntry(
       return false
     }
 
-    await tx.delete(schema.knowledgeChunks).where(eq(schema.knowledgeChunks.entryId, entryId))
+    await tx
+      .delete(schema.knowledgeChunks)
+      .where(
+        and(
+          eq(schema.knowledgeChunks.entryId, entryId),
+          eq(schema.knowledgeChunks.workspaceId, workspaceId),
+        ),
+      )
     await tx.insert(schema.knowledgeChunks).values(
       pieces.map((text, index) => ({
         id: newId(),
@@ -200,6 +225,7 @@ export async function replaceFileSource(
 /** Index every entry of a source and record the outcome on the source row. */
 export async function indexSource(
   db: Database,
+  workspaceId: string,
   sourceId: string,
   embedSlot: SlotConfig | null,
   dimensions = EMBEDDING_DIMENSIONS,
@@ -207,24 +233,39 @@ export async function indexSource(
   await db
     .update(schema.knowledgeSources)
     .set({ status: 'processing', error: null, updatedAt: new Date() })
-    .where(eq(schema.knowledgeSources.id, sourceId))
+    .where(
+      and(
+        eq(schema.knowledgeSources.id, sourceId),
+        eq(schema.knowledgeSources.workspaceId, workspaceId),
+      ),
+    )
 
   try {
     const entries = await db
       .select({ id: schema.knowledgeEntries.id })
       .from(schema.knowledgeEntries)
-      .where(eq(schema.knowledgeEntries.sourceId, sourceId))
+      .where(
+        and(
+          eq(schema.knowledgeEntries.sourceId, sourceId),
+          eq(schema.knowledgeEntries.workspaceId, workspaceId),
+        ),
+      )
 
     let chunks = 0
     for (const entry of entries) {
-      const result = await indexEntry(db, entry.id, embedSlot, dimensions)
+      const result = await indexEntry(db, workspaceId, entry.id, embedSlot, dimensions)
       chunks += result.chunks
     }
 
     await db
       .update(schema.knowledgeSources)
       .set({ status: 'ready', error: null, updatedAt: new Date() })
-      .where(eq(schema.knowledgeSources.id, sourceId))
+      .where(
+        and(
+          eq(schema.knowledgeSources.id, sourceId),
+          eq(schema.knowledgeSources.workspaceId, workspaceId),
+        ),
+      )
 
     return { chunks, entries: entries.length }
   } catch (error) {
@@ -234,7 +275,12 @@ export async function indexSource(
     await db
       .update(schema.knowledgeSources)
       .set({ status: 'failed', error: message, updatedAt: new Date() })
-      .where(eq(schema.knowledgeSources.id, sourceId))
+      .where(
+        and(
+          eq(schema.knowledgeSources.id, sourceId),
+          eq(schema.knowledgeSources.workspaceId, workspaceId),
+        ),
+      )
     throw error
   }
 }

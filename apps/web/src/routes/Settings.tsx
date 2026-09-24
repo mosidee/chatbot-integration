@@ -87,8 +87,15 @@ export function Settings() {
   const workspace = useQuery({
     queryKey: ['workspace-settings'],
     queryFn: () => api.settings.workspace(),
-    // Fewer half-refreshed pages: most fields below are uncontrolled and would not follow.
+    /**
+     * The page shows one version and moves only with its own saves and a conflict: most
+     * fields below are uncontrolled and would not follow a refetch, and a controlled one that
+     * did would show a colleague's value without the page knowing it had seen it. The
+     * socket's reconnect skips this query for the same reason (`lib/ws.ts`).
+     */
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: Number.POSITIVE_INFINITY,
   })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
   // Providers, slots and channels answer admins only. They used to be asked for by every
@@ -114,31 +121,38 @@ export function Settings() {
   /** Bumped after a conflict, to rebuild every field from the version just fetched. */
   const [generation, setGeneration] = useState(0)
   const [conflict, setConflict] = useState(false)
-  /**
-   * Saves go one at a time. Each carries the revision the one before it returned; two in
-   * flight at once would both carry the same one, and the second would be refused as if a
-   * colleague had got there first.
-   */
+  /** Saves go one at a time, so each is judged against what the one before it left. */
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve())
   /**
-   * The version this page's fields were filled from: set on first load, by the page's own
-   * saves and after a conflict. Never read from the query cache, which a background refetch
-   * moves on — the socket's reconnect refetches every query — while the uncontrolled fields
-   * keep what they showed, and a save would then overwrite a colleague's change unseen.
+   * What this page's fields show, setting by setting: from the first load, then moved on
+   * only for the settings the page itself saved, and replaced after a conflict. A save sends
+   * the shown value of each setting it changes, and is refused only if one of those changed
+   * underneath it — not when a colleague edited a different card. Taking the whole response
+   * of a save would adopt a colleague's change to another setting that the page never shows.
    */
-  const baseRevision = useRef<string | null>(null)
-  if (baseRevision.current === null && workspace.data) {
-    baseRevision.current = workspace.data.revision
-  }
+  const shown = useRef<WorkspaceSettings | null>(null)
+  if (shown.current === null && workspace.data) shown.current = workspace.data.settings
 
   const saveWorkspace = useMutation({
     mutationFn: (patch: Parameters<typeof api.settings.updateWorkspace>[0]) => {
       const run = saveQueue.current
         .catch(() => undefined)
         .then(async () => {
-          const saved = await api.settings.updateWorkspace(patch, baseRevision.current ?? undefined)
-          baseRevision.current = saved.revision
-          queryClient.setQueryData(['workspace-settings'], saved)
+          const keys = Object.keys(patch) as (keyof WorkspaceSettings)[]
+          const base = shown.current
+          const expected = base
+            ? Object.fromEntries(keys.map((key) => [key, base[key]]))
+            : undefined
+          const saved = await api.settings.updateWorkspace(patch, expected)
+          const mine = Object.fromEntries(keys.map((key) => [key, saved.settings[key]]))
+          shown.current = { ...(shown.current ?? saved.settings), ...mine }
+          queryClient.setQueryData<{ settings: WorkspaceSettings; revision: string }>(
+            ['workspace-settings'],
+            (previous) => ({
+              revision: saved.revision,
+              settings: { ...(previous?.settings ?? saved.settings), ...mine },
+            }),
+          )
           return saved
         })
       saveQueue.current = run
@@ -154,7 +168,7 @@ export function Settings() {
       if (error instanceof ApiError && error.status === 409) {
         setConflict(true)
         void workspace.refetch().then((result) => {
-          if (result.data) baseRevision.current = result.data.revision
+          if (result.data) shown.current = result.data.settings
           setGeneration((value) => value + 1)
         })
       }

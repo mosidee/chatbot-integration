@@ -20,6 +20,17 @@ import { safeKeySegment } from './media-serving'
 
 const MAX_BYTES = 25 * 1024 * 1024
 
+/**
+ * The platform says this media cannot be had — expired, deleted, forbidden. Asking again
+ * returns the same answer, so it is not retried.
+ */
+export class PermanentMediaError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PermanentMediaError'
+  }
+}
+
 export type MediaResolution = {
   message: NormalizedMessage
   downloaded: number
@@ -105,7 +116,8 @@ export async function resolveInboundMedia(
 async function withRetry<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run()
-  } catch {
+  } catch (error) {
+    if (error instanceof PermanentMediaError) throw error
     return run()
   }
 }

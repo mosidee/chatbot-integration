@@ -41,7 +41,9 @@ export default {
     })
 
     // Status and type pass through unchanged; the caller decides what a refusal means.
-    const headers = new Headers({ 'cache-control': 'no-store' })
+    // `x-upstream` tells LINE's own answer apart from this Worker's refusals (401, 400),
+    // so the caller does not retry a photo LINE says is gone.
+    const headers = new Headers({ 'cache-control': 'no-store', 'x-upstream': 'line' })
     const type = upstream.headers.get('content-type')
     if (type) headers.set('content-type', type)
     const length = upstream.headers.get('content-length')
