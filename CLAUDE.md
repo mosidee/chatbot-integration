@@ -414,8 +414,9 @@ without spending money.
 - **A handoff always tells the customer.** `ai_handoff` and the unsupported-media branch
   emit `send_acknowledgement {kind:'handoff'}` before the note and the nudge to agents; the
   waiting-human timer sends `kind:'still_waiting'`, a separate apology, so the customer never
-  reads the same sentence twice. The language comes from the customer's last message
-  (`detectLanguage`), then their record, then the workspace default. Both texts are editable
+  reads the same sentence twice. The language comes from what the customer last typed
+  (`customerLanguageEvidence`, over `typedText` — never `messages.text`, where a photo is
+  our English `[image]`), then their record, then the workspace default. Both texts are editable
   per language in Settings → General; if both are empty it logs a warning rather than
   returning in silence.
 - **Postgres keeps microseconds and a JavaScript Date keeps milliseconds.** A `created_at`

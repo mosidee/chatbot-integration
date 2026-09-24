@@ -4,9 +4,8 @@ import {
   verifySignedPayload,
   webChannelAdapter,
 } from '@ci/channels'
-import { detectLanguage } from '@ci/core'
 import { schema } from '@ci/db'
-import { ingestInternal, withMediaLinks } from '@ci/infra'
+import { customerLanguageEvidence, ingestInternal, withMediaLinks } from '@ci/infra'
 import type { ConversationMode, Language } from '@ci/shared'
 import { identityAttributesSchema } from '@ci/shared'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
@@ -255,25 +254,6 @@ export function widgetRoutes(ctx: ApiContext) {
         mime: attachment.mime,
         fileName: attachment.fileName,
       }))
-  }
-
-  async function lastCustomerText(
-    workspaceId: string,
-    conversationId: string,
-  ): Promise<string | null> {
-    const rows = await db
-      .select({ text: schema.messages.text })
-      .from(schema.messages)
-      .where(
-        and(
-          eq(schema.messages.workspaceId, workspaceId),
-          eq(schema.messages.conversationId, conversationId),
-          eq(schema.messages.senderType, 'customer'),
-        ),
-      )
-      .orderBy(desc(schema.messages.createdAt))
-      .limit(1)
-    return rows[0]?.text ?? null
   }
 
   /** The conversation this visitor owns, or null. Never taken from the request. */
@@ -537,9 +517,8 @@ export function widgetRoutes(ctx: ApiContext) {
           const language =
             state === 'ai'
               ? loaded.language
-              : (detectLanguage(
-                  await lastCustomerText(conversation.workspaceId, conversation.id),
-                ) ?? loaded.language)
+              : ((await customerLanguageEvidence(db, conversation.workspaceId, conversation.id)) ??
+                loaded.language)
 
           return {
             conversationId: conversation.id,
