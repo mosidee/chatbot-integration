@@ -26,7 +26,7 @@ afterAll(async () => {
 })
 
 /** A multipart body with its boundary, which the fixture would otherwise label as JSON. */
-async function upload(name: string, type: string, content: string) {
+async function upload(name: string, type: string, content: string | Uint8Array<ArrayBuffer>) {
   const form = new FormData()
   form.set('file', new File([content], name, { type }))
   const encoded = new Request('http://localhost/', { method: 'POST', body: form })
@@ -37,6 +37,14 @@ async function upload(name: string, type: string, content: string) {
   })
 }
 
+/** A real one-pixel PNG: uploads now check that the bytes agree with the type. */
+const PNG = Uint8Array.from(
+  atob(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  ),
+  (char) => char.charCodeAt(0),
+)
+
 const SCRIPT =
   '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/v1/admin")</script></svg>'
 
@@ -46,8 +54,13 @@ describe('uploads', () => {
     expect((await upload('x.html', 'text/html', '<script>1</script>')).status).toBe(415)
   })
 
+  test('refuses a file whose bytes are not the type it claims', async () => {
+    const response = await upload('photo.png', 'image/png', '<html><script>1</script></html>')
+    expect(response.status).toBe(415)
+  })
+
   test('keeps the storage key inside the workspace whatever the name says', async () => {
-    const response = await upload('../../other/evil.png', 'image/png', 'png-bytes')
+    const response = await upload('../../other/evil.png', 'image/png', PNG)
     expect(response.status).toBe(200)
     const { storageKey } = await response.json()
     expect(storageKey).toMatch(new RegExp(`^${fixture.workspaceId}/[^/]+\\.png$`))
@@ -66,7 +79,7 @@ describe('uploads', () => {
   })
 
   test('an image is still shown inline', async () => {
-    const { storageKey } = await (await upload('photo.png', 'image/png', 'png-bytes')).json()
+    const { storageKey } = await (await upload('photo.png', 'image/png', PNG)).json()
     const response = await fixture.as(fixture.viewer, `/api/v1/uploads/${storageKey}`)
     expect(response.headers.get('content-type')).toBe('image/png')
     expect(response.headers.get('content-disposition')).toBe('inline')

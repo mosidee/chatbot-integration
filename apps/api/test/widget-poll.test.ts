@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { loadEnv } from '@ci/config'
-import { createWorkspace, newId, schema } from '@ci/db'
+import { createWorkspace, encryptJson, newId, schema } from '@ci/db'
 import type { NormalizedMessage } from '@ci/shared'
 import { eq } from 'drizzle-orm'
 import { createApp } from '../src/app'
@@ -34,6 +34,8 @@ async function say(input: {
   text: string
   kind?: string
   createdAt?: Date
+  status?: 'queued' | 'sent' | 'failed'
+  attachments?: { storageKey: string; mime: string; fileName: string }[]
 }): Promise<string> {
   const id = newId()
   await ctx.db.insert(schema.messages).values({
@@ -44,9 +46,15 @@ async function say(input: {
     senderType: input.senderType,
     // An 'event' row is not a NormalizedMessage the schema knows how to build, and writing
     // one is the point of that test: they must never reach a visitor's thread.
-    content: { kind: input.kind ?? 'text', text: input.text } as NormalizedMessage,
+    content: {
+      kind: input.kind ?? 'text',
+      text: input.text,
+      ...(input.attachments
+        ? { attachments: input.attachments.map((a) => ({ ...a, sourceUrl: null, sizeBytes: 1 })) }
+        : {}),
+    } as NormalizedMessage,
     text: input.text,
-    status: 'sent',
+    status: input.status ?? 'sent',
     ...(input.createdAt ? { createdAt: input.createdAt } : {}),
   })
   return id
@@ -248,5 +256,121 @@ describe('a widget on a suspended tenant is site', () => {
       .update(schema.workspaces)
       .set({ status: 'active' })
       .where(eq(schema.workspaces.id, workspaceId))
+  })
+})
+
+type Polled = {
+  messages: { id: string; text: string; at: string; attachments: { url: string }[] }[]
+}
+
+/**
+ * What a visitor may see is what actually reached them. A reply blocked by a takeover is
+ * stored as failed and must never appear; one still queued may yet be withdrawn.
+ */
+describe('only delivered replies', () => {
+  test('hides a failed or queued reply, and shows the queued one once it is sent', async () => {
+    // Well past every row the earlier tests wrote into this conversation's future.
+    const base = Date.now() + 30 * 24 * 60 * 60 * 1000
+    const blocked = await say({
+      direction: 'outbound',
+      senderType: 'ai',
+      text: `blocked-${newId()}`,
+      status: 'failed',
+      createdAt: new Date(base),
+    })
+    const queued = await say({
+      direction: 'outbound',
+      senderType: 'ai',
+      text: `queued-${newId()}`,
+      status: 'queued',
+      createdAt: new Date(base + 1),
+    })
+    const later = await say({
+      direction: 'inbound',
+      senderType: 'customer',
+      text: `later-${newId()}`,
+      createdAt: new Date(base + 2),
+    })
+
+    const first = (await (await poll(new Date(base - 1).toISOString())).json()) as Polled
+    const ids = first.messages.map((m) => m.id)
+    expect(ids).toContain(later)
+    expect(ids).not.toContain(blocked)
+    expect(ids).not.toContain(queued)
+
+    // Sent after the visitor's cursor has already moved past its creation time.
+    await ctx.db
+      .update(schema.messages)
+      .set({ status: 'sent', sentAt: new Date(base + 5) })
+      .where(eq(schema.messages.id, queued))
+    const cursor = first.messages.at(-1)?.at ?? ''
+    const second = (await (await poll(cursor)).json()) as Polled
+    expect(second.messages.map((m) => m.id)).toContain(queued)
+  })
+
+  test('a file an agent sent arrives as a signed link', async () => {
+    const id = await say({
+      direction: 'outbound',
+      senderType: 'human',
+      text: '',
+      kind: 'file',
+      createdAt: new Date(Date.now() + 40 * 24 * 60 * 60 * 1000),
+      attachments: [
+        { storageKey: `${workspaceId}/price.pdf`, mime: 'application/pdf', fileName: 'price.pdf' },
+      ],
+    })
+    const polled = (await (
+      await poll(new Date(Date.now() + 39 * 24 * 60 * 60 * 1000).toISOString())
+    ).json()) as Polled
+    const row = polled.messages.find((m) => m.id === id)
+    expect(row?.attachments[0]?.url).toContain('/api/media/')
+  })
+})
+
+/**
+ * Recommendation #15: the embedding rule lives at the frame, and the iframe's own session
+ * request — which carries our origin, never the host page's — is not refused by it.
+ */
+describe('embedding rules', () => {
+  const setOrigins = async (allowedOrigins: string[]) =>
+    ctx.db
+      .update(schema.channels)
+      .set({
+        configEncrypted: await encryptJson({ allowedOrigins }, env.APP_SECRET_KEY),
+      })
+      .where(eq(schema.channels.id, channelId))
+
+  const startFrom = (origin: string) =>
+    app.handle(
+      new Request(`http://localhost/api/widget/${channelId}/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: JSON.stringify({ visitorId: 'embed-visitor' }),
+      }),
+    )
+
+  test('the iframe starts a session even when the channel lists host origins', async () => {
+    await setOrigins(['https://shop.example'])
+    try {
+      expect((await startFrom(new URL(env.PUBLIC_API_URL).origin)).status).toBe(200)
+      expect((await startFrom('https://shop.example')).status).toBe(200)
+      expect((await startFrom('https://evil.example')).status).toBe(403)
+    } finally {
+      await setOrigins([])
+    }
+  })
+
+  test('the widget page may only be framed by the listed origins', async () => {
+    await setOrigins(['https://shop.example'])
+    try {
+      const page = await app.handle(
+        new Request(`http://localhost/widget/index.html?channel=${channelId}`),
+      )
+      expect(page.headers.get('content-security-policy')).toBe(
+        "frame-ancestors 'self' https://shop.example",
+      )
+    } finally {
+      await setOrigins([])
+    }
   })
 })

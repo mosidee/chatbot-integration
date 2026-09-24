@@ -1,4 +1,5 @@
 import { signPayload, verifySignedPayload } from '@ci/channels'
+import { isWorkspaceKey } from './media-serving'
 
 /**
  * Links to stored files that a chat platform can fetch.
@@ -73,7 +74,7 @@ export async function signMediaUrl(input: {
   ttlDays: number
   now?: Date
 }): Promise<string> {
-  if (!input.storageKey.startsWith(`${input.workspaceId}/`)) {
+  if (!isWorkspaceKey(input.workspaceId, input.storageKey)) {
     // Refused rather than signed: a key outside the workspace is a bug upstream, and this
     // is the last point at which it is still cheap to notice.
     throw new Error('refusing to sign a link for a file outside its workspace')

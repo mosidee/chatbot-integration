@@ -12,6 +12,7 @@ import type {
 } from '@ci/shared'
 import { messageToText } from '@ci/shared'
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
+import { isWorkspaceKey } from './media-serving'
 
 /**
  * Database operations the processors need.
@@ -473,7 +474,7 @@ export function foreignStorageKey(workspaceId: string, message: NormalizedMessag
 
   for (const attachment of media.attachments) {
     const key = attachment.storageKey
-    if (key && !key.startsWith(`${workspaceId}/`)) return key
+    if (key && !isWorkspaceKey(workspaceId, key)) return key
   }
   return null
 }

@@ -19,6 +19,7 @@ import {
   createTurnRetrieval,
   createWorkspaceToolSources,
   describeWriteFailure,
+  isWorkspaceKey,
   loadAiConfig,
   loadToolDefinitions,
   loadTurnContext,
@@ -670,7 +671,7 @@ async function readImages(
   const images: ImageInput[] = []
   for (const attachment of content.attachments) {
     if (!attachment.storageKey) continue
-    if (!attachment.storageKey.startsWith(`${workspaceId}/`)) {
+    if (!isWorkspaceKey(workspaceId, attachment.storageKey)) {
       runtime.logger.warn('skipped an attachment outside the workspace', {
         workspaceId,
         storageKey: attachment.storageKey,

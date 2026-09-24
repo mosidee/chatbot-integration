@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { mediaServingHeaders, safeExtension, safeKeySegment } from '../src/media-serving'
+import {
+  contentMatchesType,
+  isWorkspaceKey,
+  mediaServingHeaders,
+  safeExtension,
+  safeKeySegment,
+} from '../src/media-serving'
 
 /**
  * Recommendation #3: a stored file is served on the console's origin, so nothing a sender
@@ -58,5 +64,41 @@ describe('storage key segments', () => {
     expect(safeExtension('photo.JPG')).toBe('.jpg')
     expect(safeExtension('x./../../evil')).toBe('')
     expect(safeExtension('noext')).toBe('')
+  })
+})
+
+describe('isWorkspaceKey', () => {
+  test('accepts the canonical spelling of our own key', () => {
+    expect(isWorkspaceKey('ws1', 'ws1/abc.png')).toBe(true)
+    expect(isWorkspaceKey('ws1', 'ws1/knowledge/id-ราคา.pdf')).toBe(true)
+  })
+
+  test('refuses anything that is, or could become, another path', () => {
+    for (const key of [
+      'ws2/x',
+      'ws1/../ws2/x',
+      'ws1/./x',
+      'ws1//x',
+      'ws1/x\\..',
+      'ws1',
+      'ws10/x',
+    ]) {
+      expect(isWorkspaceKey('ws1', key)).toBe(false)
+    }
+    expect(isWorkspaceKey('', '/x')).toBe(false)
+  })
+})
+
+describe('contentMatchesType', () => {
+  test('agrees with real signatures and refuses a disguise', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0])
+    expect(contentMatchesType('image/png', png)).toBe(true)
+    expect(contentMatchesType('image/jpeg', png)).toBe(false)
+    expect(contentMatchesType('application/pdf', new TextEncoder().encode('%PDF-1.7'))).toBe(true)
+    expect(contentMatchesType('image/png', new TextEncoder().encode('<svg>'))).toBe(false)
+  })
+
+  test('leaves types it does not know to the serving policy', () => {
+    expect(contentMatchesType('text/plain', new TextEncoder().encode('anything'))).toBe(true)
   })
 })

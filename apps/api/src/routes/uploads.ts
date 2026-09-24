@@ -1,5 +1,5 @@
 import { newId } from '@ci/db'
-import { mediaServingHeaders, safeExtension } from '@ci/infra'
+import { contentMatchesType, isWorkspaceKey, mediaServingHeaders, safeExtension } from '@ci/infra'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import { authPlugin } from '../auth-plugin'
@@ -88,6 +88,9 @@ export function uploadRoutes(ctx: ApiContext) {
           const storageKey = `${workspaceId}/${newId()}${safeExtension(file.name)}`
 
           const bytes = new Uint8Array(await file.arrayBuffer())
+          if (!contentMatchesType(mime, bytes)) {
+            return status(415, { error: `The file is not the ${mime} it claims to be` })
+          }
           await runtime.blob.put(storageKey, bytes, mime)
 
           return {
@@ -109,7 +112,7 @@ export function uploadRoutes(ctx: ApiContext) {
         '/*',
         async ({ workspaceId, params, status }) => {
           const key = (params as Record<string, string>)['*'] ?? ''
-          if (!key.startsWith(`${workspaceId}/`)) {
+          if (!isWorkspaceKey(workspaceId, key)) {
             return status(404, { error: 'Not found' })
           }
           try {

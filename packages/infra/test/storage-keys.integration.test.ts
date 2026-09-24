@@ -106,6 +106,21 @@ describe('naming a storage key', () => {
     expect(foreignStorageKey(workspaceId, fileMessage(sneaky))).toBe(sneaky)
   })
 
+  /**
+   * Recommendation #6: a key that starts with our prefix and climbs out of it. The
+   * filesystem store resolves `..`, so this named workspace B's file with A's prefix.
+   */
+  test('is not fooled by a key that climbs out of the workspace', () => {
+    for (const sneaky of [
+      `${workspaceId}/../${otherWorkspaceId}/theirs.pdf`,
+      `${workspaceId}/./x.pdf`,
+      `${workspaceId}//x.pdf`,
+      `${workspaceId}/a\\..\\x.pdf`,
+    ]) {
+      expect(foreignStorageKey(workspaceId, fileMessage(sneaky))).toBe(sneaky)
+    }
+  })
+
   test('refuses to store a message naming another workspace object', async () => {
     const conversation = await makeConversation(workspaceId)
     await expect(

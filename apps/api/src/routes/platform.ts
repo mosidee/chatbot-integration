@@ -267,6 +267,7 @@ export function platformRoutes(ctx: ApiContext) {
             email: target.email.toLowerCase(),
             userId: target.id,
             invitedByUserId: user.id,
+            issuerScope: 'platform',
             ttlMs: PASSWORD_RESET_TTL_MS,
           })
 

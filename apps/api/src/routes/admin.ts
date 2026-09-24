@@ -1,5 +1,6 @@
 import { type Executor, newId, schema, type Transaction } from '@ci/db'
 import {
+  accountReach,
   INVITE_TTL_MS,
   inviteLink,
   issueInvitation,
@@ -27,7 +28,11 @@ import type { ApiContext } from '../context'
  * that is not an operation one tenant's admin gets to perform.
  */
 export function adminRoutes(ctx: ApiContext) {
-  const { db, env } = ctx
+  const { db, env, runtime } = ctx
+
+  /** Open sockets of this person re-prove themselves; see `ws.ts`. Best effort. */
+  const announceAccess = (workspaceId: string, userId: string) =>
+    runtime.publisher.publish(workspaceId, { type: 'auth.changed', userId }).catch(() => {})
 
   /**
    * Refuse to remove the last admin, having locked the whole set first.
@@ -175,6 +180,7 @@ export function adminRoutes(ctx: ApiContext) {
             return status(409, { error: 'A workspace needs at least one admin' })
           }
 
+          await announceAccess(workspaceId, params.userId)
           return { ok: true as const }
         },
         {
@@ -220,6 +226,7 @@ export function adminRoutes(ctx: ApiContext) {
           }
           if (outcome.error === 'not_a_member') return status(404, { error: 'Not a member' })
 
+          await announceAccess(workspaceId, params.userId)
           return { ok: true as const }
         },
         { auth: 'admin', params: z.object({ userId: z.string() }) },
@@ -342,16 +349,8 @@ export function adminRoutes(ctx: ApiContext) {
            * keeps. Everything wider goes to a platform admin, who is the only person on the
            * installation whose authority actually covers it.
            */
-          const reach = await db
-            .select({
-              memberships: sql<number>`count(distinct ${schema.member.organizationId})::int`,
-              platformAdmin: sql<boolean>`bool_or(${schema.platformAdmins.userId} is not null)`,
-            })
-            .from(schema.member)
-            .leftJoin(schema.platformAdmins, eq(schema.platformAdmins.userId, schema.member.userId))
-            .where(eq(schema.member.userId, params.userId))
-          const memberships = reach[0]?.memberships ?? 1
-          if (memberships > 1 || reach[0]?.platformAdmin) {
+          const reach = await accountReach(db, params.userId)
+          if (reach.memberships > 1 || reach.platformAdmin) {
             return status(403, {
               error:
                 'This account can reach more than this workspace, so a platform admin must issue the reset',

@@ -437,7 +437,7 @@ describe('sending a file to a customer', () => {
   })
 
   test('refuses a link whose claims were edited', async () => {
-    const uploaded = await upload('private.pdf', 'application/pdf', 'secret')
+    const uploaded = await upload('private.pdf', 'application/pdf', '%PDF-secret')
     const storageKey = (uploaded.body as { storageKey: string }).storageKey
     const link = await signMediaUrl({
       workspaceId: fixture.workspaceId,

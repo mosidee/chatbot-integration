@@ -12,6 +12,18 @@ describe('visitor tokens', () => {
     expect(claims.name).toBe('Nok')
   })
 
+  test('round-trips Thai and emoji claims', async () => {
+    // btoa on the JSON string threw on anything outside Latin-1, so a Thai display name in a
+    // verified identity could not be signed at all.
+    const token = await signVisitorToken(
+      { sub: 'บัญชี-1', name: 'นก 🌸', attributes: { plan: 'โปร' } },
+      SECRET,
+    )
+    const claims = await verifyVisitorToken(token, SECRET)
+    expect(claims.sub).toBe('บัญชี-1')
+    expect(claims.name).toBe('นก 🌸')
+  })
+
   test('rejects a token signed with a different secret', async () => {
     const token = await signVisitorToken({ sub: 'acct_1' }, SECRET)
     await expect(verifyVisitorToken(token, 'another-secret-at-least-16')).rejects.toThrow(

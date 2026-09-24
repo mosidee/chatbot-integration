@@ -77,3 +77,51 @@ export function safeExtension(name: string): string {
   const match = /\.([a-z0-9]{1,8})$/i.exec(name)
   return match?.[1] ? `.${match[1].toLowerCase()}` : ''
 }
+
+/**
+ * Whether a storage key names an object of this workspace, in its one canonical spelling.
+ *
+ * A prefix check alone accepted `workspaceA/../workspaceB/file`: it starts with A's prefix,
+ * and the filesystem store resolves the `..` into B's directory. Every read, signature and
+ * deletion goes through this instead, so a key is judged as the path it will become.
+ */
+export function isWorkspaceKey(workspaceId: string, key: string): boolean {
+  if (!workspaceId || !key.startsWith(`${workspaceId}/`)) return false
+  if (key.includes('\\') || key.includes('\0')) return false
+  return key.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
+}
+
+/**
+ * Whether a file's first bytes agree with the type it claims, for the types we render.
+ *
+ * The declared type comes from the sender. Serving is safe regardless (`nosniff`, the
+ * sandbox), but an image that is not an image is a sign of trouble worth refusing at the
+ * door. Types this does not know about pass: it is a check on claims we act on, not a
+ * catalogue of every format.
+ */
+export function contentMatchesType(mime: string, bytes: Uint8Array): boolean {
+  const starts = (...signature: number[]) => signature.every((byte, i) => bytes[i] === byte)
+  const ascii = (text: string, offset = 0) =>
+    [...text].every((char, i) => bytes[offset + i] === char.charCodeAt(0))
+
+  switch (mime) {
+    case 'image/png':
+      return starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+    case 'image/jpeg':
+      return starts(0xff, 0xd8, 0xff)
+    case 'image/gif':
+      return ascii('GIF87a') || ascii('GIF89a')
+    case 'image/webp':
+      return ascii('RIFF') && ascii('WEBP', 8)
+    case 'image/bmp':
+      return ascii('BM')
+    case 'image/avif':
+    case 'image/heic':
+    case 'image/heif':
+      return ascii('ftyp', 4)
+    case 'application/pdf':
+      return ascii('%PDF-')
+    default:
+      return true
+  }
+}

@@ -1,7 +1,7 @@
 import { newId, schema } from '@ci/db'
-import { consumeInvitation, findInvitation } from '@ci/infra'
+import { accountReach, consumeInvitation, findInvitation } from '@ci/infra'
 import { acceptInvitationBodySchema, type UserRoleName } from '@ci/shared'
-import { and, eq, sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import type { ApiContext } from '../context'
@@ -17,7 +17,7 @@ import type { ApiContext } from '../context'
  * cannot be redirected at somebody else's mailbox by anyone who holds it.
  */
 export function invitationRoutes(ctx: ApiContext) {
-  const { db, auth, authSignUp } = ctx
+  const { db, auth, authSignUp, runtime } = ctx
 
   /** Better Auth sets the session cookie on its own response; we pass it along verbatim. */
   const withCookies = (payload: unknown, headers: Headers): Response => {
@@ -44,26 +44,21 @@ export function invitationRoutes(ctx: ApiContext) {
       const invitation = await consumeInvitation(tx, token)
       if (!invitation) return null
 
-      const existing = await tx
-        .select({ id: schema.member.id })
-        .from(schema.member)
-        .where(
-          and(
-            eq(schema.member.organizationId, invitation.workspaceId),
-            eq(schema.member.userId, userId),
-          ),
-        )
-        .limit(1)
-
-      if (existing.length === 0) {
-        await tx.insert(schema.member).values({
+      /**
+       * One membership per person per workspace, held by `member_org_user_uq` (migration
+       * 0012; not in the generated auth schema, which `auth:generate` rewrites). Checking
+       * first and inserting after let two links accepted at once both insert.
+       */
+      await tx
+        .insert(schema.member)
+        .values({
           id: newId(),
           organizationId: invitation.workspaceId,
           userId,
           role: (invitation.role as UserRoleName | null) ?? 'agent',
           createdAt: new Date(),
         })
-      }
+        .onConflictDoNothing()
 
       return invitation
     })
@@ -184,11 +179,46 @@ export function invitationRoutes(ctx: ApiContext) {
           // ---- a password reset ------------------------------------------------------
           if (!body.password) return status(422, { error: 'A new password is needed' })
           if (!existingUserId) return status(404, GONE)
+          // The account the link was issued for, not whichever one now holds the address.
+          if (invitation.userId && invitation.userId !== existingUserId) {
+            return status(404, GONE)
+          }
+
+          /**
+           * Is the issuer's authority still enough?
+           *
+           * A workspace admin may reset an account that reaches their workspace alone. That
+           * was true when the link was issued; by now the person may belong to a second
+           * tenant, administer the platform, or have left this workspace. Spending the link
+           * then would set a password the issuer had no authority over, so it is refused
+           * and a platform admin has to issue one instead.
+           */
+          if (invitation.issuerScope === 'workspace') {
+            const reach = await accountReach(db, existingUserId)
+            if (
+              reach.memberships !== 1 ||
+              reach.platformAdmin ||
+              reach.workspaceIds[0] !== invitation.workspaceId
+            ) {
+              return status(409, {
+                error:
+                  'This link no longer covers this account. Ask a platform admin for a new one.',
+                code: 'reset_requires_platform' as const,
+              })
+            }
+          }
 
           const spent = await consumeInvitation(db, params.token)
           if (!spent) return status(409, { error: 'That link has already been used' })
 
           await setPassword(ctx, existingUserId, body.password)
+
+          // Every session of theirs just ended; so should every socket those sessions held.
+          for (const workspaceId of (await accountReach(db, existingUserId)).workspaceIds) {
+            await runtime.publisher
+              .publish(workspaceId, { type: 'auth.changed', userId: existingUserId })
+              .catch(() => {})
+          }
 
           /**
            * Signed in straight away, because the alternative is a sign-in form that the

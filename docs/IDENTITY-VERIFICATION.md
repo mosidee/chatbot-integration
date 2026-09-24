@@ -101,8 +101,13 @@ Deno alike:
 
 ```ts
 async function signConfirmation(sub: string, attributes: Record<string, string>) {
-  const encode = (value: unknown) =>
-    btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  // Base64url of the UTF-8 bytes. `btoa` on the string itself throws on Thai and emoji.
+  const base64url = (bytes: Uint8Array) => {
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  }
+  const encode = (value: unknown) => base64url(new TextEncoder().encode(JSON.stringify(value)))
 
   const header = encode({ alg: 'HS256', typ: 'JWT' })
   const payload = encode({
@@ -122,11 +127,7 @@ async function signConfirmation(sub: string, attributes: Record<string, string>)
     await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${header}.${payload}`)),
   )
 
-  let binary = ''
-  for (const byte of signature) binary += String.fromCharCode(byte)
-  const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-
-  return `${header}.${payload}.${encoded}`
+  return `${header}.${payload}.${base64url(signature)}`
 }
 ```
 

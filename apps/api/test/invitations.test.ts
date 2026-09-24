@@ -305,4 +305,94 @@ describe('the last admin', () => {
         .where(eq(schema.member.userId, fixture.agent.userId))
     }
   })
+
+  /**
+   * Recommendation #2. A workspace admin's link is checked again when it is spent: the
+   * account may since have come to reach further than the issuer's authority covers.
+   */
+  const joinAndIssueReset = async () => {
+    const email = `reach-${Math.random().toString(36).slice(2, 10)}@example.com`
+    const { link } = await json(await invite(email, 'agent'))
+    const { userId } = await (
+      await accept(tokenOf(link), { name: 'Reach', password: 'pw-first-1234' })
+    ).json()
+    strays.push(userId)
+    const reset = await json(
+      await fixture.as(fixture.admin, `/api/v1/admin/members/${userId}/reset-link`, {
+        method: 'POST',
+      }),
+    )
+    return { userId, token: tokenOf(reset.link) }
+  }
+
+  test('is refused once the account also belongs to another workspace', async () => {
+    const { userId, token } = await joinAndIssueReset()
+    const other = await createApiFixture(ctx, app)
+    try {
+      await ctx.db.insert(schema.member).values({
+        id: newId(),
+        organizationId: other.workspaceId,
+        userId,
+        role: 'agent',
+        createdAt: new Date(),
+      })
+      const response = await accept(token, { password: 'pw-takeover-1234' })
+      expect(response.status).toBe(409)
+      expect((await response.json()).code).toBe('reset_requires_platform')
+    } finally {
+      await ctx.db.delete(schema.member).where(eq(schema.member.organizationId, other.workspaceId))
+      await other.cleanup()
+    }
+  })
+
+  test('is refused once the account administers the platform', async () => {
+    const { userId, token } = await joinAndIssueReset()
+    await ctx.db.insert(schema.platformAdmins).values({ userId, grantedByUserId: null })
+    try {
+      expect((await accept(token, { password: 'pw-takeover-1234' })).status).toBe(409)
+    } finally {
+      await ctx.db.delete(schema.platformAdmins).where(eq(schema.platformAdmins.userId, userId))
+    }
+  })
+
+  test('is refused once the person has left the workspace', async () => {
+    const { userId, token } = await joinAndIssueReset()
+    await ctx.db.delete(schema.member).where(eq(schema.member.userId, userId))
+    expect((await accept(token, { password: 'pw-takeover-1234' })).status).toBe(409)
+  })
+})
+
+describe('accepting two invitations at once', () => {
+  /** Recommendation #14: one membership, whichever link wins. */
+  test('leaves one membership', async () => {
+    const email = `twice-${Math.random().toString(36).slice(2, 10)}@example.com`
+    const first = await json(await invite(email, 'agent'))
+    const { userId } = await (
+      await accept(tokenOf(first.link), { name: 'Twice', password: 'pw-twice-1234' })
+    ).json()
+    strays.push(userId)
+    // Leave the workspace, then accept two fresh links together.
+    await ctx.db.delete(schema.member).where(eq(schema.member.userId, userId))
+    const cookie = await signInAs(app, {
+      email,
+      password: 'pw-twice-1234',
+      origin: env.PUBLIC_WEB_URL,
+    })
+    const a = await json(await invite(email, 'agent'))
+    // A second live link: issued directly, since issuing through the route revokes the first.
+    const { issueInvitation, INVITE_TTL_MS } = await import('@ci/infra')
+    const b = await issueInvitation(ctx.db, {
+      workspaceId: fixture.workspaceId,
+      purpose: 'invite',
+      email: `${email.toUpperCase()}`,
+      role: 'agent',
+      ttlMs: INVITE_TTL_MS,
+    })
+    await Promise.all([accept(tokenOf(a.link), {}, cookie), accept(b.token, {}, cookie)])
+    const rows = await ctx.db
+      .select({ id: schema.member.id })
+      .from(schema.member)
+      .where(eq(schema.member.userId, userId))
+    expect(rows).toHaveLength(1)
+  })
 })

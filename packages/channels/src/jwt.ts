@@ -144,8 +144,10 @@ export async function signVisitorToken(claims: VisitorClaims, secret: string): P
 }
 
 export async function signPayload(claims: unknown, secret: string): Promise<string> {
+  // UTF-8 bytes, not the string: `btoa` takes Latin-1 only, so a Thai name or an emoji in a
+  // claim threw here while verification, which decodes UTF-8, would have accepted it.
   const encode = (value: unknown): string =>
-    btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    base64UrlEncode(new TextEncoder().encode(JSON.stringify(value)))
 
   const headerPart = encode({ alg: 'HS256', typ: 'JWT' })
   const payloadPart = encode(claims)
@@ -161,9 +163,11 @@ export async function signPayload(claims: unknown, secret: string): Promise<stri
     await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${headerPart}.${payloadPart}`)),
   )
 
-  let binary = ''
-  for (const b of signature) binary += String.fromCharCode(b)
-  const signaturePart = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${headerPart}.${payloadPart}.${base64UrlEncode(signature)}`
+}
 
-  return `${headerPart}.${payloadPart}.${signaturePart}`
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
