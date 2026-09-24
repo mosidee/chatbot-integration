@@ -1,5 +1,6 @@
 import type { NormalizedMessage } from '@ci/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -83,6 +84,17 @@ export function Simulator() {
     // Without this a send that failed cleared nothing and said nothing, so the only way to
     // tell was that the counter had not moved.
     onError: (caught) => setSendError(caught instanceof Error ? caught.message : String(caught)),
+  })
+
+  /**
+   * Where the messages went. Asked until it exists, since ingestion runs in the worker, and
+   * then shown as a link: a test ends with the conversation, not a count of what was sent.
+   */
+  const conversation = useQuery({
+    queryKey: ['simulator-conversation', channelId, externalId, sentCount],
+    queryFn: () => api.simulator.conversationFor(channelId as string, externalId),
+    enabled: Boolean(channelId) && sentCount > 0,
+    refetchInterval: (query) => (query.state.data?.conversationId ? false : 1500),
   })
 
   if (channels.isLoading) {
@@ -185,6 +197,16 @@ export function Simulator() {
             <span className="text-sm text-[var(--text-muted)]">
               {t('simulator.sentCount', { count: sentCount })}
             </span>
+          ) : null}
+          {conversation.data?.conversationId ? (
+            <Link
+              to="/"
+              search={{ tab: 'open', c: conversation.data.conversationId }}
+              data-testid="simulator-open-conversation"
+              className="text-sm font-medium text-[var(--color-brand-600)] underline underline-offset-2"
+            >
+              {t('simulator.openConversation')}
+            </Link>
           ) : null}
         </div>
         {sendError ? <ErrorNote message={sendError} /> : null}
