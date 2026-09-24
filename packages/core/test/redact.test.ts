@@ -5,6 +5,7 @@ import {
   isLuhnValid,
   isThaiNationalId,
   looksLikeCardNumber,
+  redactDeep,
   redactMessage,
   redactText,
 } from '../src/redaction/redact'
@@ -179,5 +180,25 @@ describe('redactMessage', () => {
     })
     if (message.kind !== 'quick_replies') throw new Error('kind changed')
     expect(message.text).toBe('confirm [card ••••4242]')
+  })
+})
+
+describe('redactDeep', () => {
+  test('masks strings at any depth and leaves keys and other values alone', () => {
+    const input = {
+      [VISA]: 'a key is not text anybody typed',
+      nested: [{ text: `card ${VISA}` }, 42, null, true],
+      id: THAI_ID,
+    }
+    const out = redactDeep(input)
+    expect(Object.keys(out)).toContain(VISA)
+    expect(JSON.stringify(out.nested)).not.toContain(VISA)
+    expect(out.nested.slice(1)).toEqual([42, null, true])
+    expect(out.id).not.toBe(THAI_ID)
+  })
+
+  test('returns the value untouched when redaction is switched off', () => {
+    const input = { text: VISA }
+    expect(redactDeep(input, { cardNumbers: false, thaiNationalId: false })).toBe(input)
   })
 })

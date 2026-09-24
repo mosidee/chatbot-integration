@@ -2,6 +2,8 @@ import {
   type ConversationTurn,
   type EffectPorts,
   type Logger,
+  redactDeep,
+  redactText,
   renderSummary,
   summarizeCustomer,
 } from '@ci/core'
@@ -146,10 +148,19 @@ export async function processSummarize(
       prices: aiConfig.prices,
     })
 
-    const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)
+    const traceId = await recordTrace(
+      db,
+      job.workspaceId,
+      job.conversationId,
+      result.trace,
+      settings.redaction,
+    )
 
     if (result.summary) {
-      const rendered = renderSummary(result.summary)
+      // What the model wrote about the customer, not what they said: masked here, because
+      // storeMessage never saw it.
+      const rendered = redactText(renderSummary(result.summary), settings.redaction).text
+      const facts = redactDeep(result.summary.facts, settings.redaction)
 
       await db
         .update(schema.customers)
@@ -167,7 +178,7 @@ export async function processSummarize(
            * Newer facts win. Only the summariser writes here, so what is already there is an
            * older reading of the same customer, and a plan they changed should read as changed.
            */
-          notes: { ...customer.notes, ...result.summary.facts },
+          notes: { ...customer.notes, ...facts },
           summaryUpdatedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -178,7 +189,7 @@ export async function processSummarize(
         workspaceId: job.workspaceId,
         customerId: customer.id,
         summary: rendered,
-        facts: result.summary.facts,
+        facts,
         model: result.trace.model,
         aiTraceId: traceId,
       })

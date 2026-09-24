@@ -1,5 +1,6 @@
 import { generateText, stepCountIs } from 'ai'
 import type { Logger } from '../ports'
+import { type RedactionOptions, redactText } from '../redaction/redact'
 import { estimateCost } from './cost'
 import { attemptSignal, DEFAULT_ATTEMPT_MS } from './deadline'
 import { toPlainText } from './plain-text'
@@ -43,6 +44,12 @@ export type RunAgentTurnOptions = {
   logger?: Logger
   /** The whole turn's deadline. Each model attempt also has its own; see `deadline.ts`. */
   signal?: AbortSignal
+  /**
+   * The workspace's redaction rules, applied to what the vision model read off an image
+   * before it reaches the chat model or the trace. A photographed card is text only once
+   * it has been described, and the customer's own messages were masked long before.
+   */
+  redaction?: RedactionOptions
 }
 
 /**
@@ -81,7 +88,10 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
   }
 
   const system = buildSystemPrompt(input, mode)
-  const messages = buildMessages(input.recentMessages, visionSummary)
+  const messages = buildMessages(
+    input.recentMessages,
+    visionSummary === null ? null : redactText(visionSummary, options.redaction).text,
+  )
 
   try {
     const attempt = await runWithFallback(chatSlot, async (target, model) => {

@@ -1,4 +1,4 @@
-import { applyEffects, type ConversationState, transition } from '@ci/core'
+import { applyEffects, type ConversationState, redactText, transition } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import {
   countReviewQueue,
@@ -713,7 +713,9 @@ export function conversationRoutes(ctx: ApiContext) {
             conversationId: params.id,
             authorType: 'human',
             authorUserId: user.id,
-            body: body.body,
+            // An agent pasting what the customer sent is still putting it in the database.
+            body: redactText(body.body, (await loadWorkspaceSettings(db, workspaceId)).redaction)
+              .text,
           })
           await runtime.publisher.publish(workspaceId, {
             type: 'conversation.updated',
