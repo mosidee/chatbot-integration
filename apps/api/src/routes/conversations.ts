@@ -1,4 +1,4 @@
-import { applyEffects, type ConversationState, redactText, transition } from '@ci/core'
+import { aiMaySend, applyEffects, type ConversationState, redactText, transition } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import {
   countReviewQueue,
@@ -608,6 +608,84 @@ export function conversationRoutes(ctx: ApiContext) {
             /** Set when the agent sent an AI draft, so the pair can be studied later. */
             suggestionId: z.string().optional(),
           }),
+        },
+      )
+
+      /**
+       * Try a message that failed to deliver again.
+       *
+       * Only `failed`, which the outbound job writes when it has used its last attempt, so a
+       * resend never races an automatic retry. `uncertain` may have arrived and `canceled`
+       * was withheld on purpose; neither is offered. The row is locked and moved back to
+       * `queued` in the same transaction as the job is asked for, so a double click is one
+       * resend. The job id is new each time: the failed job is still in BullMQ under the
+       * old one, and an add with that id would be ignored. `sent_parts` makes it resume
+       * after whatever part went out before the failure.
+       */
+      .post(
+        '/:id/messages/:messageId/resend',
+        async ({ workspaceId, params, status }) => {
+          const loaded = await loadState(workspaceId, params.id)
+          if (!loaded) return status(404, { error: 'Conversation not found' })
+
+          const outcome = await db.transaction(async (tx) => {
+            const [message] = await tx
+              .select({
+                id: schema.messages.id,
+                status: schema.messages.status,
+                direction: schema.messages.direction,
+                senderType: schema.messages.senderType,
+              })
+              .from(schema.messages)
+              .where(
+                and(
+                  eq(schema.messages.id, params.messageId),
+                  eq(schema.messages.conversationId, params.id),
+                  eq(schema.messages.workspaceId, workspaceId),
+                ),
+              )
+              .for('update')
+            if (message?.direction !== 'outbound') return 'missing' as const
+            if (message.status !== 'failed') return 'not_failed' as const
+            // The outbound job would withhold it anyway; saying so here is kinder.
+            if (message.senderType === 'ai' && !aiMaySend(loaded.state.mode)) {
+              return 'ai_withheld' as const
+            }
+
+            await tx
+              .update(schema.messages)
+              .set({ status: 'queued', error: null })
+              .where(eq(schema.messages.id, message.id))
+            await runtime.outbox.enqueue(tx, {
+              queue: 'outbound',
+              name: 'send',
+              workspaceId,
+              payload: { workspaceId, conversationId: params.id, messageId: message.id },
+              jobId: `outbound-${message.id}-resend-${newId()}`,
+            })
+            return 'queued' as const
+          })
+
+          if (outcome === 'missing') return status(404, { error: 'Message not found' })
+          if (outcome === 'not_failed') {
+            return status(409, { error: 'Only a message that failed can be sent again' })
+          }
+          if (outcome === 'ai_withheld') {
+            return status(409, {
+              error: 'A colleague owns this conversation, so the AI reply stays unsent',
+            })
+          }
+
+          await runtime.publisher.publish(workspaceId, {
+            type: 'message.updated',
+            conversationId: params.id,
+            messageId: params.messageId,
+          })
+          return { ok: true }
+        },
+        {
+          auth: 'agent',
+          params: z.object({ id: z.string(), messageId: z.string() }),
         },
       )
 

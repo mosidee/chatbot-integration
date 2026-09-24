@@ -487,6 +487,12 @@ without spending money.
 - **Messages have `canceled` and `uncertain` statuses.** `canceled`: withheld because a
   colleague took over. `uncertain`: the platform did not answer (`UncertainDeliveryError`),
   so it may have arrived; the outbound job never resends either.
+- **`failed` means nothing will try again.** The outbound job writes it only on its last
+  attempt (`JobMeta.finalAttempt`); before that the row stays `queued` with the error noted.
+  That is what makes the console's resend (`POST /conversations/:id/messages/:messageId/
+  resend`) safe: it locks the row, requires `failed`, moves it to `queued` and queues a job
+  with a fresh id (`outbound-<id>-resend-<uuid>`), since BullMQ keeps the failed job under
+  the old one and would ignore the add.
 - **An adapter that sends one message as several requests reports each** (`startAt`,
   `onUnitSent` on `SendContext`); the outbound job checkpoints units in `sent_parts` for a
   non-text message. LINE pushes carry `X-Line-Retry-Key` from the message id and part, and

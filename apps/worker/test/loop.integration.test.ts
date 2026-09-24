@@ -1660,6 +1660,49 @@ describe('LINE reply tokens', () => {
     expect(aiMessage?.error).toBeTruthy()
   })
 
+  /**
+   * `failed` is what the console offers to resend, so it must mean nothing else will try:
+   * a person resending while BullMQ still had a retry scheduled would deliver it twice.
+   */
+  test('a failed send stays queued until its last attempt', async () => {
+    const provider = mock([{ kind: 'text', text: 'แพ็กเกจเริ่มต้น 990 บาทค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: provider.url,
+      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
+    })
+    await lineSays(f, 'ราคาเท่าไหร่คะ', 'reply-token-retry')
+    const conversation = await lineConversation(f)
+    const ports = createEffectPorts(f.runtime, f.runtime.logger)
+    for (const job of await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      deliver: 'send' | 'draft'
+    }>(f, f.queues.ai_turn)) {
+      await processAiTurn(f.runtime, ports, f.runtime.logger, job)
+    }
+    const [job] = await drainQueue<{
+      workspaceId: string
+      conversationId: string
+      messageId: string
+    }>(f, f.queues.outbound)
+    if (!job) throw new Error('no delivery was queued')
+
+    const attempt = (finalAttempt: boolean) =>
+      processOutbound(f.runtime, ports, f.runtime.logger, job, {
+        jobId: `outbound-${job.messageId}`,
+        finalAttempt,
+      }).catch(() => {})
+    const aiMessage = async () =>
+      (await messagesOf(f, conversation.id)).find((m) => m.senderType === 'ai')
+
+    await attempt(false)
+    expect((await aiMessage())?.status).toBe('queued')
+    expect((await aiMessage())?.error).toBeTruthy()
+
+    await attempt(true)
+    expect((await aiMessage())?.status).toBe('failed')
+  })
+
   test('an expired token is not presented at all', async () => {
     const provider = mock([{ kind: 'text', text: 'ตอบกลับค่ะ' }])
     const f = await fixture({

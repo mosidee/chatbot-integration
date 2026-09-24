@@ -121,9 +121,14 @@ export function DeliveryTicks({ status }: { status: DeliveryStatus }) {
 export function DeliveryProblem({
   status,
   error,
+  onResend,
+  resending = false,
 }: {
   status: DeliveryStatus
   error: string | null | undefined
+  /** Only for `failed`: nothing will try again on its own, so a person may. */
+  onResend?: (() => void) | undefined
+  resending?: boolean
 }) {
   const { t } = useTranslation()
   if (status !== 'failed' && status !== 'canceled' && status !== 'uncertain') return null
@@ -137,6 +142,17 @@ export function DeliveryProblem({
     <p className="mt-1 text-[11px] opacity-90" data-testid="delivery-problem">
       {lead}
       {error && status !== 'uncertain' ? `: ${error}` : ''}
+      {status === 'failed' && onResend ? (
+        <button
+          type="button"
+          data-testid="resend"
+          disabled={resending}
+          onClick={onResend}
+          className="ml-2 font-semibold underline underline-offset-2 disabled:opacity-60"
+        >
+          {resending ? t('inbox.resending') : t('inbox.resend')}
+        </button>
+      ) : null}
     </p>
   )
 }

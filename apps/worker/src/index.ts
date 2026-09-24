@@ -91,6 +91,7 @@ function makeWorker<T>(
       const startedAt = Date.now()
       await handler(runtime, ports, logger, job.data, {
         jobId: job.id ?? `${name}-${job.timestamp}`,
+        finalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
       })
       logger.info('job completed', { queue: name, jobId: job.id, ms: Date.now() - startedAt })
     },

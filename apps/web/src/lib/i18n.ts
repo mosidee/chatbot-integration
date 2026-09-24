@@ -89,6 +89,8 @@ const th = {
     deliveryDelivered: 'ถึงผู้รับแล้ว',
     deliveryRead: 'อ่านแล้ว',
     deliveryFailed: 'ส่งไม่สำเร็จ',
+    resend: 'ส่งอีกครั้ง',
+    resending: 'กำลังส่ง…',
     deliveryCanceled: 'ไม่ได้ส่ง เพราะเจ้าหน้าที่รับเรื่องต่อแล้ว',
     deliveryUncertain: 'ไม่แน่ใจว่าส่งถึงหรือไม่',
     deliveryUncertainHint: 'แพลตฟอร์มไม่ตอบกลับ ข้อความอาจส่งถึงแล้ว ระบบจะไม่ส่งซ้ำเอง โปรดตรวจสอบก่อนส่งใหม่',
@@ -633,6 +635,8 @@ const en: typeof th = {
     deliveryDelivered: 'Delivered',
     deliveryRead: 'Read',
     deliveryFailed: 'Not delivered',
+    resend: 'Send again',
+    resending: 'Sending…',
     deliveryCanceled: 'Not sent: a colleague took over first',
     deliveryUncertain: 'Delivery uncertain',
     deliveryUncertainHint:
