@@ -3,7 +3,7 @@
 ## Processes (Docker Compose)
 - **api** — Elysia on Bun. HTTP + WebSocket. Stateless. Webhook endpoints verify signature, persist raw event, enqueue, return 200. Also serves the built console and the widget from disk, so one hostname fronts the product; neither has a process of its own.
 - **worker** — Bun. BullMQ consumers: inbound, ai_turn, suggestion, outbound, the waiting_human timer, summarize, knowledge_ingest, retention (nightly), idle_resolve (every 15 minutes), customer and workspace erasure; plus the outbox relay and the two job schedulers.
-- **postgres** (pgvector, pg_trgm), **redis** (queues + pub/sub), **minio** (S3 API for media), plus a one-shot **minio-init** that creates the bucket.
+- **postgres** (pgvector, pg_trgm), **redis** (queues + pub/sub). Media is in an S3-compatible bucket outside the stack — Cloudflare R2 in production (ADR 0008), the filesystem locally; a bundled MinIO remains behind the `minio` profile.
 
 ## Monorepo
 ```

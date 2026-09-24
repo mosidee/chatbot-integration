@@ -12,8 +12,8 @@ Decisions taken during implementation are recorded in `docs/adr/`.
 
 ## Stack
 
-Bun + Elysia, Drizzle on Postgres 16 with pgvector and pg_trgm, BullMQ on Redis, MinIO for
-media, Vite + React 19 for the console. Bun workspaces monorepo. Zod everywhere.
+Bun + Elysia, Drizzle on Postgres 16 with pgvector and pg_trgm, BullMQ on Redis, Cloudflare R2 for
+media (the filesystem locally), Vite + React 19 for the console. Bun workspaces monorepo. Zod everywhere.
 
 ```
 apps/api      HTTP, WebSocket, webhooks. Thin.
@@ -97,7 +97,7 @@ an ADR.
 ## Commands
 
 ```
-bun run infra:up        # Postgres, Redis, MinIO in Docker
+bun run infra:up        # Postgres and Redis in Docker
 bun run db:migrate      # apply migrations (creates extensions first)
 bun run db:seed         # workspace, admin user, test and web channels
 bun run db:reset        # DESTROYS ALL DATA, then migrates and seeds. Local only:
@@ -120,8 +120,10 @@ without spending money.
   stopped tracking releases at 1.4.21. Keep its version equal to `better-auth`.
 - Better Auth's routes must be mounted at the **root** of the app. Mounting them inside a
   prefixed group buries `/api/auth` and sign-in returns 404.
-- MinIO images come from **quay.io**; the Docker Hub repository is no longer public. The `mc`
-  image runs `mc` as its entrypoint, so shell commands need `--entrypoint /bin/sh`.
+- **MinIO is no longer published** (Docker Hub from 2026-09-11, quay.io from 2026-09-24), so
+  nothing may depend on pulling it. Production media is in Cloudflare R2, CI and local
+  development use the filesystem store, and MinIO survives only behind the `minio` compose
+  profile for a host that already holds the images. See ADR 0008.
 - The AI SDK refuses to download images from loopback and private hosts. Vision receives
   **bytes**, not URLs; see ADR 0001.
 - The AI SDK's `image` content part is deprecated in v7. Use a `file` part with `mediaType`.
