@@ -574,21 +574,35 @@ test('a conversation says which channel it arrived on', async ({ page, request }
 })
 
 /**
- * A customer sitting in the Open tab is announced on the Inbox itself, from any page.
+ * What is sitting in the inbox is announced on the Inbox itself, from any page.
  *
  * The agent who most needs to know is the one who is somewhere else — reading the dashboard,
- * changing a setting — so the count lives in the navigation rather than inside the inbox.
+ * changing a setting — so the counts live in the navigation rather than inside the inbox.
+ * Blue for open, red for waiting on a person.
  */
-test('the inbox badge counts open conversations from any page', async ({ page, request }) => {
+test('the inbox badges count open and waiting conversations from any page', async ({
+  page,
+  request,
+}) => {
   await signIn(page)
   await page.goto('/settings')
 
-  const badge = page.getByTestId('nav-inbox-badge').first()
-  const before = Number((await badge.textContent({ timeout: 20_000 }).catch(() => '0')) || '0')
+  const open = page.getByTestId('nav-inbox-badge').first()
+  const waiting = page.getByTestId('nav-inbox-waiting-badge').first()
+  const read = async (badge: typeof open) =>
+    Number((await badge.textContent({ timeout: 5_000 }).catch(() => '0')) || '0')
 
+  // Let the first poll land before reading, or "no badge yet" reads as zero.
+  await expect(open).toBeVisible({ timeout: 20_000 })
+  const openBefore = await read(open)
+  const waitingBefore = await read(waiting)
+
+  // A customer who asks for a person: the mock provider hands that off, so this one
+  // conversation should move both numbers.
   const channelId = await findTestChannelId(request)
-  await customerSays(request, channelId, uniqueCustomer('badge'), 'สวัสดีค่ะ')
+  await customerSays(request, channelId, uniqueCustomer('badge'), 'ขอคุยกับเจ้าหน้าที่ค่ะ')
 
-  // Polled, so a new conversation shows up without anybody reloading the page.
-  await expect(badge).toHaveText(String(before + 1), { timeout: 30_000 })
+  // Polled, so both show up without anybody reloading the page.
+  await expect(open).toHaveText(String(openBefore + 1), { timeout: 30_000 })
+  await expect(waiting).toHaveText(String(waitingBefore + 1), { timeout: 30_000 })
 })

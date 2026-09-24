@@ -226,6 +226,9 @@ export async function loadDashboard(
         and(
           eq(schema.conversations.workspaceId, workspaceId),
           eq(schema.conversations.mode, 'waiting_human'),
+          // Resolving does not change the mode, so a conversation somebody closed while it
+          // was waiting would otherwise be counted as waiting forever.
+          eq(schema.conversations.status, 'open'),
         ),
       ),
     countReviewQueue(db, workspaceId),
