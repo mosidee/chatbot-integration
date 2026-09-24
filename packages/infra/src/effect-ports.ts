@@ -6,6 +6,7 @@ import { and, eq } from 'drizzle-orm'
 import { summaryJobId, waitingHumanJobId } from './queues'
 import {
   conversationLanguage,
+  customerLanguageEvidence,
   findMessageIdByTurnKey,
   loadWorkspaceSettings,
   storeMessage,
@@ -87,20 +88,24 @@ export function createEffectPorts(
     },
 
     async sendAcknowledgement(ctx, input) {
-      const settings = await loadWorkspaceSettings(db, ctx.workspaceId)
+      // On the executor: inside a transaction, a second pooled connection per call can
+      // exhaust the pool while every holder waits for one more.
+      const settings = await loadWorkspaceSettings(executor, ctx.workspaceId)
       const texts =
         input.kind === 'handoff' ? settings.acknowledgementText : settings.stillWaitingText
 
       /**
        * The language the customer is owed this in.
        *
-       * The caller knows it when a message prompted the handoff; the timer does not, and
-       * falls back to what this customer has been answered in before. An empty string
-       * counts as missing, because a tenant clearing the box means the same as never
-       * having filled it.
+       * The caller knows it when a message prompted the handoff. Otherwise — the
+       * unsupported-media handoff, the timer — it is what the customer last typed
+       * (`customerLanguageEvidence`), then what this customer has been answered in before.
+       * An empty string counts as missing, because a tenant clearing the box means the
+       * same as never having filled it.
        */
       const chosen: Language =
         input.language ??
+        (await customerLanguageEvidence(executor, ctx.workspaceId, ctx.conversationId)) ??
         (await conversationLanguage(
           executor,
           ctx.workspaceId,
@@ -165,7 +170,7 @@ export function createEffectPorts(
 
     async addInternalNote(ctx, body) {
       // A handoff note can quote the customer, and the model writes it, not the customer.
-      const { redaction } = await loadWorkspaceSettings(db, ctx.workspaceId)
+      const { redaction } = await loadWorkspaceSettings(executor, ctx.workspaceId)
       await executor.insert(schema.internalNotes).values({
         id: newId(),
         workspaceId: ctx.workspaceId,

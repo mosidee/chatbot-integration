@@ -10,7 +10,7 @@ import { z } from 'zod'
  */
 
 export const attachmentSchema = z.object({
-  /** Key in object storage (MinIO/S3/R2). Absent until the media download job completes. */
+  /** Key in object storage. Absent until the inbound job has downloaded the media. */
   storageKey: z.string().nullable().default(null),
   /** Original URL on the platform's CDN. Often short-lived, so we download eagerly. */
   sourceUrl: z.string().nullable().default(null),
@@ -160,7 +160,6 @@ export function typedText(message: NormalizedMessage): string | null {
   switch (message.kind) {
     case 'text':
     case 'quick_replies':
-      return message.text
     case 'image':
     case 'file':
     case 'audio':

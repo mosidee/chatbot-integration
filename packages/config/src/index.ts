@@ -36,7 +36,12 @@ export const envSchema = z.object({
    * Both or neither: without them LINE media is fetched directly, which from the pilot VPS
    * crawls at about 14 KB/s over a lossy route to LINE's Tokyo servers.
    */
-  LINE_MEDIA_PROXY_URL: z.string().url().optional(),
+  // https only: the request carries the shared secret and a tenant's LINE channel token.
+  LINE_MEDIA_PROXY_URL: z
+    .string()
+    .url()
+    .refine((url) => url.startsWith('https://'), 'LINE_MEDIA_PROXY_URL must be https')
+    .optional(),
   LINE_MEDIA_PROXY_SECRET: z.string().min(32).optional(),
 
   BETTER_AUTH_SECRET: z.string().min(16),
@@ -96,6 +101,12 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
       .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('\n')
     throw new Error(`Invalid environment configuration:\n${issues}`)
+  }
+  // Half a proxy configuration silently turns the proxy off; say so at startup instead.
+  if (Boolean(parsed.data.LINE_MEDIA_PROXY_URL) !== Boolean(parsed.data.LINE_MEDIA_PROXY_SECRET)) {
+    throw new Error(
+      'Invalid environment configuration:\n  - LINE_MEDIA_PROXY_URL and LINE_MEDIA_PROXY_SECRET are set together or not at all',
+    )
   }
   cached = parsed.data
   return cached

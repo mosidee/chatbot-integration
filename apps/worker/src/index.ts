@@ -29,7 +29,7 @@ import { handOffAfterFailure, processAiTurn } from './processors/ai-turn'
 import { IDLE_RESOLVE_EVERY_MINUTES, processIdleResolve } from './processors/idle-resolve'
 import { processInbound } from './processors/inbound'
 import { processKnowledgeIngest } from './processors/knowledge-ingest'
-import { processOutbound } from './processors/outbound'
+import { markDeliveryFailed, processOutbound } from './processors/outbound'
 import {
   processCustomerErasure,
   processRetention,
@@ -175,6 +175,7 @@ async function main() {
       logger,
       CONCURRENCY.outbound,
       processOutbound,
+      (job, error) => markDeliveryFailed(runtime, job, error),
     ),
     makeWorker<WaitingHumanTimeoutJob>(
       QUEUE_NAMES.waitingHuman,

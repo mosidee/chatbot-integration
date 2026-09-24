@@ -257,7 +257,8 @@ export async function processOutbound(
     /**
      * `failed` means nothing will try again, which is what lets a person resend it without
      * racing an automatic retry. Until the last attempt it stays `queued`, with the reason
-     * recorded so the console can say why it is taking a while.
+     * recorded on the row for whoever investigates. A throw before this `try` is covered by
+     * `markDeliveryFailed`, which the worker runs when the job has used its last attempt.
      */
     const final = meta?.finalAttempt ?? true
     await db
@@ -302,4 +303,33 @@ function hasAttachments(message: NormalizedMessage): boolean {
  */
 function retryKeyFor(messageId: string, part: number): string {
   return `${messageId.slice(0, -4)}${part.toString(16).padStart(4, '0')}`
+}
+
+/**
+ * The outbound job failed for good somewhere the send's own `catch` does not reach — loading
+ * the channel, decrypting its credentials, a stalled job. Without this the message stayed
+ * `queued` for ever and the console never offered to send it again.
+ */
+export async function markDeliveryFailed(
+  runtime: Runtime,
+  job: OutboundJob,
+  error: Error,
+): Promise<void> {
+  await runtime.db
+    .update(schema.messages)
+    .set({ status: 'failed', error: error.message.slice(0, 500) })
+    .where(
+      and(
+        eq(schema.messages.id, job.messageId),
+        eq(schema.messages.workspaceId, job.workspaceId),
+        eq(schema.messages.status, 'queued'),
+      ),
+    )
+  await runtime.publisher
+    .publish(job.workspaceId, {
+      type: 'message.updated',
+      conversationId: job.conversationId,
+      messageId: job.messageId,
+    })
+    .catch(() => {})
 }

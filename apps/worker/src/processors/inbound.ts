@@ -190,6 +190,26 @@ export async function processInbound(
           afterCommit: (fn) => notifications.push(fn),
         })
 
+        /**
+         * One customer message at a time per conversation, and ids in commit order.
+         *
+         * `storeMessage` takes the message's id inside this transaction, and an AI turn
+         * decides which message is newer by comparing ids (`newerTurnOwed`). Unlocked, two
+         * quick messages could commit in the opposite order to their ids: the later one's
+         * turn answered without seeing the earlier message, and the earlier one's turn then
+         * stepped aside for it — the customer's first question went unanswered.
+         */
+        await tx
+          .select({ id: schema.conversations.id })
+          .from(schema.conversations)
+          .where(
+            and(
+              eq(schema.conversations.id, resolved.conversationId),
+              eq(schema.conversations.workspaceId, job.workspaceId),
+            ),
+          )
+          .for('update')
+
         const stored = await storeMessage(tx, {
           workspaceId: job.workspaceId,
           conversationId: resolved.conversationId,
