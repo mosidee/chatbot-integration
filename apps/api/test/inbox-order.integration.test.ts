@@ -517,3 +517,80 @@ describe('sending a file to a customer', () => {
     expect(stored?.attachments?.[0]?.storageKey).toBe(storageKey)
   })
 })
+
+/**
+ * The badge on the Inbox in the navigation.
+ *
+ * It is shown on every page, so it cannot be derived from the list the inbox loads; and it
+ * must be this workspace's count and nobody else's.
+ */
+describe('the open-conversation badge', () => {
+  const openCount = async (actor = fixture.admin): Promise<number> => {
+    const response = await fixture.as(actor, '/api/v1/conversations/open-count')
+    expect(response.status).toBe(200)
+    return ((await response.json()) as { count: number }).count
+  }
+
+  test('counts open conversations and nothing else', async () => {
+    const before = await openCount()
+
+    const { conversationId } = await seed({
+      name: 'badge',
+      owner: null,
+      customerSpokeAt: minutesAgo(1),
+    })
+    expect(await openCount()).toBe(before + 1)
+
+    // Resolving takes it off the badge: there is nothing waiting in the Open tab any more.
+    await ctx.db
+      .update(schema.conversations)
+      .set({ status: 'resolved' })
+      .where(eq(schema.conversations.id, conversationId))
+    expect(await openCount()).toBe(before)
+  })
+
+  test('a viewer sees it too', async () => {
+    // Reading the inbox is a viewer's whole job, so the badge that points at it is theirs.
+    expect(await openCount(fixture.viewer)).toBeGreaterThanOrEqual(0)
+  })
+
+  test('another workspace is conversations never reach it', async () => {
+    const before = await openCount()
+
+    const other = await createApiFixture(ctx, app)
+    const otherChannel = (
+      await ctx.db
+        .select({ id: schema.channels.id })
+        .from(schema.channels)
+        .where(eq(schema.channels.workspaceId, other.workspaceId))
+    )[0]?.id as string
+    const customerId = newId()
+    await ctx.db.insert(schema.customers).values({
+      id: customerId,
+      workspaceId: other.workspaceId,
+      displayName: 'elsewhere',
+      fields: {},
+    })
+    const identityId = newId()
+    await ctx.db.insert(schema.channelIdentities).values({
+      id: identityId,
+      workspaceId: other.workspaceId,
+      channelId: otherChannel,
+      externalId: `elsewhere-${Math.random().toString(36).slice(2, 12)}`,
+      customerId,
+      profile: {},
+    })
+    await ctx.db.insert(schema.conversations).values({
+      id: newId(),
+      workspaceId: other.workspaceId,
+      channelId: otherChannel,
+      customerId,
+      channelIdentityId: identityId,
+      mode: 'ai',
+      status: 'open',
+    })
+
+    expect(await openCount()).toBe(before)
+    await other.cleanup()
+  })
+})

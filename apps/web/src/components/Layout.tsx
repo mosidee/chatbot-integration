@@ -24,8 +24,21 @@ export function Layout() {
 
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 60_000 })
 
-  const items = [
-    { to: '/', label: t('nav.inbox') },
+  /**
+   * How many conversations are open, for the badge on the Inbox.
+   *
+   * Shown on every page, because the agent who most needs to know a customer is sitting in
+   * the inbox is the one looking at Settings or the dashboard. Polled here; the inbox also
+   * refreshes it the moment its own socket hears about a change.
+   */
+  const openCount = useQuery({
+    queryKey: ['open-count'],
+    queryFn: () => api.conversations.openCount(),
+    refetchInterval: 20_000,
+  })
+
+  const items: NavItem[] = [
+    { to: '/', label: t('nav.inbox'), badge: openCount.data?.count ?? 0 },
     { to: '/dashboard', label: t('nav.dashboard') },
     { to: '/knowledge', label: t('nav.knowledge') },
     { to: '/simulator', label: t('nav.simulator') },
@@ -57,13 +70,14 @@ export function Layout() {
               key={item.to}
               to={item.to}
               className={cn(
-                'rounded-lg px-3 py-1.5 text-sm transition-colors',
+                'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
                 isActive(item.to)
                   ? 'bg-[var(--surface-muted)] font-medium text-[var(--text)]'
                   : 'text-[var(--text-muted)] hover:text-[var(--text)]',
               )}
             >
               {item.label}
+              <NavBadge count={item.badge} label={t('nav.openCount', { count: item.badge ?? 0 })} />
             </Link>
           ))}
         </nav>
@@ -111,6 +125,31 @@ export function Layout() {
   )
 }
 
+/** A destination in the navigation, with an optional count of things waiting there. */
+type NavItem = { to: string; label: string; badge?: number }
+
+/**
+ * The count beside a navigation item. Nothing at all when there is nothing waiting, so the
+ * badge means something when it appears.
+ */
+function NavBadge({ count, label }: { count: number | undefined; label: string }) {
+  if (!count) return null
+  return (
+    <>
+      {/* The digit is for the eye, the sentence for a screen reader: "3" read out after
+          "Inbox" says nothing about what there are three of. */}
+      <span
+        data-testid="nav-inbox-badge"
+        aria-hidden="true"
+        className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-600)] px-1.5 text-[11px] font-semibold leading-none text-white tabular-nums"
+      >
+        {count > 99 ? '99+' : count}
+      </span>
+      <span className="sr-only">{label}</span>
+    </>
+  )
+}
+
 /**
  * Navigation on a phone.
  *
@@ -123,13 +162,7 @@ export function Layout() {
  */
 const BOTTOM_NAV_SLOTS = 4
 
-function BottomNav({
-  items,
-  isActive,
-}: {
-  items: { to: string; label: string }[]
-  isActive: (to: string) => boolean
-}) {
+function BottomNav({ items, isActive }: { items: NavItem[]; isActive: (to: string) => boolean }) {
   const { t } = useTranslation()
   const [showMore, setShowMore] = useState(false)
 
@@ -179,11 +212,14 @@ function BottomNav({
             key={item.to}
             to={item.to}
             className={cn(
-              'min-w-0 flex-1 truncate px-1 py-3 text-center text-xs font-medium transition-colors',
+              'flex min-w-0 flex-1 items-center justify-center gap-1 px-1 py-3 text-xs font-medium transition-colors',
               isActive(item.to) ? 'text-[var(--color-brand-600)]' : 'text-[var(--text-muted)]',
             )}
           >
-            {item.label}
+            {/* The label truncates and the badge does not: a clipped count is worse than a
+                clipped word, because the word is already known and the count is the news. */}
+            <span className="min-w-0 truncate">{item.label}</span>
+            <NavBadge count={item.badge} label={t('nav.openCount', { count: item.badge ?? 0 })} />
           </Link>
         ))}
         {needsMore ? (

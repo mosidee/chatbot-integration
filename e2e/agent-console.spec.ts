@@ -572,3 +572,23 @@ test('a conversation says which channel it arrived on', async ({ page, request }
     timeout: 15_000,
   })
 })
+
+/**
+ * A customer sitting in the Open tab is announced on the Inbox itself, from any page.
+ *
+ * The agent who most needs to know is the one who is somewhere else — reading the dashboard,
+ * changing a setting — so the count lives in the navigation rather than inside the inbox.
+ */
+test('the inbox badge counts open conversations from any page', async ({ page, request }) => {
+  await signIn(page)
+  await page.goto('/settings')
+
+  const badge = page.getByTestId('nav-inbox-badge').first()
+  const before = Number((await badge.textContent({ timeout: 20_000 }).catch(() => '0')) || '0')
+
+  const channelId = await findTestChannelId(request)
+  await customerSays(request, channelId, uniqueCustomer('badge'), 'สวัสดีค่ะ')
+
+  // Polled, so a new conversation shows up without anybody reloading the page.
+  await expect(badge).toHaveText(String(before + 1), { timeout: 30_000 })
+})

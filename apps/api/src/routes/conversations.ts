@@ -272,6 +272,31 @@ export function conversationRoutes(ctx: ApiContext) {
       )
 
       /**
+       * The badge on the Inbox in the navigation: how many conversations are open.
+       *
+       * Its own count rather than the length of the list, because the badge is shown on
+       * every page — an agent on Settings or the dashboard is exactly who needs to know a
+       * conversation is sitting there — and the list is only loaded on the inbox itself,
+       * a page of fifty at a time.
+       */
+      .get(
+        '/open-count',
+        async ({ workspaceId }) => {
+          const rows = await db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.conversations)
+            .where(
+              and(
+                eq(schema.conversations.workspaceId, workspaceId),
+                eq(schema.conversations.status, 'open'),
+              ),
+            )
+          return { count: rows[0]?.count ?? 0 }
+        },
+        { auth: 'viewer' },
+      )
+
+      /**
        * One conversation, with the most recent slice of its messages.
        *
        * A window rather than the whole thread. It used to take the first two hundred

@@ -160,6 +160,8 @@ export function Inbox() {
     if ('conversationId' in event) {
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       void queryClient.invalidateQueries({ queryKey: ['review-count'] })
+      // The navigation badge, so a new conversation shows there without waiting for its poll.
+      void queryClient.invalidateQueries({ queryKey: ['open-count'] })
       if (event.conversationId === selectedId) {
         void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
       }
@@ -427,6 +429,8 @@ function ConversationPane({
     void queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
     void queryClient.invalidateQueries({ queryKey: ['conversations'] })
     void queryClient.invalidateQueries({ queryKey: ['review-count'] })
+    // Resolving or reopening changes the count on the Inbox badge.
+    void queryClient.invalidateQueries({ queryKey: ['open-count'] })
   }
 
   /**
