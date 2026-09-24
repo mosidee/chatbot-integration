@@ -53,6 +53,16 @@ export const wsEventSchema = z.discriminatedUnion('type', [
     type: z.literal('workspace.status'),
     status: workspaceStatusSchema,
   }),
+  /**
+   * Somebody's access to this workspace may have changed: a role, a removal, a password
+   * reset that ended their sessions. Never reaches a browser; the socket server re-checks
+   * the named person's sockets (everyone's when `userId` is null) and closes the ones that
+   * no longer qualify.
+   */
+  z.object({
+    type: z.literal('auth.changed'),
+    userId: z.string().nullable(),
+  }),
 ])
 export type WsEvent = z.infer<typeof wsEventSchema>
 

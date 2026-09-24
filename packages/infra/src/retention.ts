@@ -1,6 +1,7 @@
 import type { BlobStore, Logger } from '@ci/core'
 import { type Database, newId, schema } from '@ci/db'
 import { and, eq, inArray, lt } from 'drizzle-orm'
+import { isWorkspaceKey } from './media-serving'
 
 /**
  * Forgetting, on a schedule and on request.
@@ -62,7 +63,7 @@ async function mediaKeysOf(
          * written before that rule existed must not take another tenant's file with it.
          */
         const key = attachment.storageKey
-        if (key?.startsWith(`${workspaceId}/`)) keys.add(key)
+        if (key && isWorkspaceKey(workspaceId, key)) keys.add(key)
       }
     }
   }
@@ -324,7 +325,9 @@ export async function eraseWorkspace(
           // Keyed `<workspaceId>/knowledge/<id>-<name>` by the upload route, so the same
           // prefix rule applies to them as to message attachments.
           ...sources.flatMap((row) =>
-            row.storageKey?.startsWith(`${input.workspaceId}/`) ? [row.storageKey] : [],
+            row.storageKey && isWorkspaceKey(input.workspaceId, row.storageKey)
+              ? [row.storageKey]
+              : [],
           ),
         ]),
       ]

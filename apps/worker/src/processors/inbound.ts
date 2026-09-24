@@ -293,7 +293,12 @@ export async function processInbound(
 
     await db
       .update(schema.inboundEvents)
-      .set({ processedAt: new Date(), error: null })
+      /**
+       * The raw body is emptied once it has become messages. The message rows are redacted;
+       * this copy was not, and nothing reads it again: a processed event is never parsed
+       * twice, and deduplication keys on `platform_event_id`, which stays.
+       */
+      .set({ processedAt: new Date(), error: null, payload: {} })
       .where(eq(schema.inboundEvents.id, eventRow.id))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

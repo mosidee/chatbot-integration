@@ -108,7 +108,13 @@ export async function ingestWebhook(
     workspaceId: channel.workspaceId,
     channelId,
     platformEventId,
-    payload: request,
+    /**
+     * The body only. Headers were for the signature, which was checked on the live request
+     * above, and they carry a platform's tokens and whatever proxies added; the query holds
+     * nothing a parser reads. What is kept is what the worker parses, and it is emptied
+     * once the worker has parsed it (see the inbound processor).
+     */
+    payload: { rawBody: request.rawBody, headers: {}, query: {} },
   })
 }
 

@@ -18,7 +18,7 @@ import { toolRoutes } from './routes/tools'
 import { traceRoutes } from './routes/traces'
 import { uploadRoutes } from './routes/uploads'
 import { webhookRoutes } from './routes/webhooks'
-import { widgetRoutes } from './routes/widget'
+import { widgetFrameAncestors, widgetRoutes } from './routes/widget'
 import { createWsRoutes } from './ws'
 
 /**
@@ -30,6 +30,23 @@ import { createWsRoutes } from './ws'
  */
 export function createApp(ctx: ApiContext) {
   const { env } = ctx
+
+  /**
+   * The widget's page, with the channel's own rule on which sites may frame it.
+   *
+   * This is where "only our site may embed the chat" is enforced: the browser refuses to
+   * render the frame anywhere else, before any request of ours is made.
+   */
+  const widgetShell = async (file: Blob, url: URL): Promise<Response> => {
+    const channel = url.searchParams.get('channel')
+    const ancestors = channel ? await widgetFrameAncestors(ctx, channel).catch(() => null) : null
+    return new Response(file, {
+      headers: {
+        'content-type': 'text/html',
+        ...(ancestors ? { 'content-security-policy': `frame-ancestors ${ancestors}` } : {}),
+      },
+    })
+  }
 
   return (
     new Elysia()
@@ -130,11 +147,12 @@ export function createApp(ctx: ApiContext) {
             const root = `${process.cwd()}/apps/widget/dist`
             const requested = url.pathname.replace(/^\/widget\/?/, '') || 'index.html'
             const asset = Bun.file(`${root}/${requested}`)
+            if (requested === 'index.html' && (await asset.exists())) return widgetShell(asset, url)
             if (await asset.exists()) return new Response(asset)
 
             const shell = Bun.file(`${root}/index.html`)
             if (await shell.exists()) {
-              return new Response(shell, { headers: { 'content-type': 'text/html' } })
+              return widgetShell(shell, url)
             }
             return new Response('The widget has not been built. Run bun run build:widget.', {
               status: 404,

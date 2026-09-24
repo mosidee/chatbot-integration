@@ -4,7 +4,7 @@ import { schema } from '@ci/db'
 import type { OutboundJob, Runtime } from '@ci/infra'
 import { customerLanguage, loadChannel, withMediaLinks, workspaceIsWorkable } from '@ci/infra'
 import type { NormalizedMessage } from '@ci/shared'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 /**
  * Deliver a stored outbound message through its channel.
@@ -212,7 +212,13 @@ export async function processOutbound(
 
     await db
       .update(schema.messages)
-      .set({ status: 'sent', platformMessageId: lastPlatformId, error: null })
+      .set({
+        status: 'sent',
+        platformMessageId: lastPlatformId,
+        error: null,
+        // The first send wins: a retry that finds it sent must not move it later.
+        sentAt: sql`coalesce(${schema.messages.sentAt}, now())`,
+      })
       .where(eq(schema.messages.id, message.id))
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)

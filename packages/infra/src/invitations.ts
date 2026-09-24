@@ -50,6 +50,8 @@ export async function issueInvitation(
     role?: UserRoleName | null
     userId?: string | null
     invitedByUserId?: string | null
+    /** `platform` only from the platform routes; see `workspaceInvitations.issuerScope`. */
+    issuerScope?: 'workspace' | 'platform'
     ttlMs: number
   },
 ): Promise<IssuedInvitation> {
@@ -80,6 +82,7 @@ export async function issueInvitation(
     userId: input.userId ?? null,
     tokenHash: await hashToken(token),
     invitedByUserId: input.invitedByUserId ?? null,
+    issuerScope: input.issuerScope ?? 'workspace',
     expiresAt,
   })
 
@@ -94,7 +97,35 @@ export type InvitationRow = {
   email: string
   role: string | null
   userId: string | null
+  issuerScope: 'workspace' | 'platform'
   expiresAt: Date
+}
+
+/**
+ * How far an account reaches: how many workspaces, and whether it administers the platform.
+ *
+ * A password reset sets the password on the account, which opens all of that. So this is
+ * what decides who may issue one, and it is asked again when the link is spent.
+ */
+export async function accountReach(
+  db: Executor,
+  userId: string,
+): Promise<{ memberships: number; platformAdmin: boolean; workspaceIds: string[] }> {
+  const rows = await db
+    .select({
+      workspaceIds: sql<
+        string[]
+      >`coalesce(array_agg(distinct ${schema.member.organizationId}), '{}')`,
+      platformAdmin: sql<boolean>`exists (select 1 from ${schema.platformAdmins} where ${schema.platformAdmins.userId} = ${userId})`,
+    })
+    .from(schema.member)
+    .where(eq(schema.member.userId, userId))
+  const workspaceIds = (rows[0]?.workspaceIds ?? []).filter(Boolean)
+  return {
+    memberships: workspaceIds.length,
+    platformAdmin: Boolean(rows[0]?.platformAdmin),
+    workspaceIds,
+  }
 }
 
 /**
@@ -114,6 +145,7 @@ export async function findInvitation(db: Database, token: string): Promise<Invit
       email: schema.workspaceInvitations.email,
       role: schema.workspaceInvitations.role,
       userId: schema.workspaceInvitations.userId,
+      issuerScope: schema.workspaceInvitations.issuerScope,
       expiresAt: schema.workspaceInvitations.expiresAt,
     })
     .from(schema.workspaceInvitations)
@@ -161,6 +193,7 @@ export async function consumeInvitation(
       email: schema.workspaceInvitations.email,
       role: schema.workspaceInvitations.role,
       userId: schema.workspaceInvitations.userId,
+      issuerScope: schema.workspaceInvitations.issuerScope,
       expiresAt: schema.workspaceInvitations.expiresAt,
     })
 

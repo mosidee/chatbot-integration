@@ -1,4 +1,4 @@
-import { mediaServingHeaders, verifyMediaToken } from '@ci/infra'
+import { isWorkspaceKey, mediaServingHeaders, verifyMediaToken } from '@ci/infra'
 import Elysia from 'elysia'
 import type { ApiContext } from '../context'
 
@@ -28,7 +28,11 @@ export function mediaRoutes(ctx: ApiContext) {
 
     let key: string
     try {
-      key = (await verifyMediaToken(token, env.APP_SECRET_KEY)).key
+      const claims = await verifyMediaToken(token, env.APP_SECRET_KEY)
+      // Signed by us, and checked again anyway: a link minted before the canonical-key rule
+      // must not reach another tenant's file through a `..` in its key.
+      if (!isWorkspaceKey(claims.ws, claims.key)) throw new Error('foreign key')
+      key = claims.key
     } catch {
       /**
        * An expired link and a forged one get the same answer. There is nothing useful to

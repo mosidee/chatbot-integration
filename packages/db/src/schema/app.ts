@@ -117,6 +117,8 @@ export const toolKindEnum = pgEnum('tool_kind', ['http'])
 export const identityProofEnum = pgEnum('identity_proof', ['widget_token', 'verification_link'])
 export const workspaceStatusEnum = pgEnum('workspace_status', ['active', 'suspended', 'deleting'])
 export const invitationPurposeEnum = pgEnum('invitation_purpose', ['invite', 'password_reset'])
+/** Whose authority a link was issued under, which decides what it may still do when spent. */
+export const invitationIssuerEnum = pgEnum('invitation_issuer', ['workspace', 'platform'])
 
 // ---------------------------------------------------------------------------
 // Workspace (1:1 extension of Better Auth's organization)
@@ -459,6 +461,12 @@ export const messages = pgTable(
      * meant the retry began again at part one, and the customer read the opening twice.
      */
     sentParts: integer('sent_parts').notNull().default(0),
+    /**
+     * When the platform first took the whole message. Null while queued, and for a message
+     * that never went out. What the widget pages by and what response times are measured
+     * from: `created_at` is when we decided to say something, not when it was said.
+     */
+    sentAt: ts('sent_at'),
     createdAt: ts('created_at').defaultNow().notNull(),
   },
   (t) => [
@@ -859,6 +867,13 @@ export const workspaceInvitations = pgTable(
     invitedByUserId: text('invited_by_user_id').references(() => user.id, {
       onDelete: 'set null',
     }),
+    /**
+     * A workspace admin's reset may only ever touch an account that reaches that workspace
+     * alone. The account can change between issue and use — join a second tenant, become a
+     * platform admin, be removed — so the scope travels with the link and is checked again
+     * when it is spent.
+     */
+    issuerScope: invitationIssuerEnum('issuer_scope').default('workspace').notNull(),
     expiresAt: ts('expires_at').notNull(),
     usedAt: ts('used_at'),
     createdAt: ts('created_at').defaultNow().notNull(),

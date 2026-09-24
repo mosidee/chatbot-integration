@@ -3,6 +3,7 @@ import net from 'node:net'
 import type { FetchLike } from '@ci/core'
 import { type Database, schema } from '@ci/db'
 import { eq } from 'drizzle-orm'
+import { pinnedRequest } from './pinned-transport'
 
 /**
  * Restricted egress for every URL a tenant can type.
@@ -188,29 +189,29 @@ async function assertAllowed(
   allowPrivate: boolean,
   allowedOrigins: ReadonlySet<string>,
   lookup: LookupFn,
-): Promise<void> {
+): Promise<{ address: string; family: number }[] | null> {
   if (url.username || url.password) {
     throw new EgressRefusedError('credentials in the URL are not allowed')
   }
   // Approved by a platform admin, not by the tenant: it may be private, and it may be http.
-  if (allowedOrigins.has(url.origin)) return
+  if (allowedOrigins.has(url.origin)) return null
 
   if (url.protocol !== 'https:' && !(allowPrivate && url.protocol === 'http:')) {
     throw new EgressRefusedError(`only https is allowed, and ${url.protocol}// was requested`)
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, '')
-  if (allowPrivate) return
+  if (allowPrivate) return null
 
   // A literal address never reaches the resolver, so check it directly.
   if (net.isIP(hostname)) {
     if (isPrivateAddress(hostname)) {
       throw new EgressRefusedError(`${hostname} is not a public address`)
     }
-    return
+    return [{ address: hostname, family: net.isIP(hostname) }]
   }
 
-  let addresses: { address: string }[]
+  let addresses: { address: string; family: number }[]
   try {
     addresses = await lookup(hostname)
   } catch (error) {
@@ -227,6 +228,8 @@ async function assertAllowed(
       throw new EgressRefusedError(`${hostname} resolves to ${address}, which is not public`)
     }
   }
+  // Handed to the connection, so it reaches exactly what was checked; see pinned-transport.
+  return addresses
 }
 
 /**
@@ -235,15 +238,28 @@ async function assertAllowed(
  * Redirects are followed by hand, because the automatic follow would take the second hop
  * without asking us and that hop is the easiest one to point at localhost.
  *
- * Residual risk, accepted and recorded in ADR 0004: between the check and the connection,
- * the name can change its answer. Closing that window means connecting to the address we
- * resolved, which breaks TLS certificate verification for the hostname.
+ * The connection goes to the address the check approved, not to a second resolution of the
+ * name, so a name that changes its answer between the two cannot slip inward (ADR 0004).
  */
 export function createRestrictedFetch(options: RestrictedFetchOptions = {}): FetchLike {
   const allowPrivate = options.allowPrivate ?? false
   const allowedOrigins = new Set(options.allowedOrigins ?? [])
   const lookup = options.lookup ?? defaultLookup
-  const transport: FetchLike = options.transport ?? ((input, init) => fetch(input, init))
+  /**
+   * How a checked request is sent. By default it connects to the addresses the check
+   * approved (`pinnedRequest`), which closes the gap between checking a name and connecting
+   * to it. Where nothing was resolved — an origin a platform admin approved, or private
+   * egress allowed for development — the plain fetch is used. Tests inject their own.
+   */
+  const send = async (
+    url: URL,
+    init: RequestInit,
+    addresses: { address: string; family: number }[] | null,
+  ): Promise<Response> => {
+    if (options.transport) return options.transport(url.toString(), init)
+    if (addresses) return pinnedRequest(url, init, addresses)
+    return fetch(url, init)
+  }
 
   return async function restrictedFetch(input, init) {
     // A Request carries its own method, headers and body. Reading only its URL would send
@@ -268,9 +284,9 @@ export function createRestrictedFetch(options: RestrictedFetchOptions = {}): Fet
     let remaining = MAX_REDIRECTS
 
     for (;;) {
-      await assertAllowed(url, allowPrivate, allowedOrigins, lookup)
+      const addresses = await assertAllowed(url, allowPrivate, allowedOrigins, lookup)
 
-      const response = await transport(url.toString(), { ...current, redirect: 'manual' })
+      const response = await send(url, { ...current, redirect: 'manual' }, addresses)
       const location = response.headers.get('location')
       const isRedirect = response.status >= 300 && response.status < 400 && location
 

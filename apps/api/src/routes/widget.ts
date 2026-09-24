@@ -6,10 +6,10 @@ import {
 } from '@ci/channels'
 import { detectLanguage } from '@ci/core'
 import { schema } from '@ci/db'
-import { ingestInternal } from '@ci/infra'
+import { ingestInternal, withMediaLinks } from '@ci/infra'
 import type { ConversationMode, Language } from '@ci/shared'
 import { identityAttributesSchema } from '@ci/shared'
-import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import type { ApiContext } from '../context'
@@ -103,65 +103,114 @@ const sessionClaimsSchema = z.object({
 type SessionClaims = z.infer<typeof sessionClaimsSchema>
 
 /** Only the parts of a stored attachment the widget is allowed to see. */
-type WidgetAttachment = { sourceUrl: string | null; mime: string; fileName: string | null }
+type WidgetAttachment = {
+  storageKey: string | null
+  sourceUrl: string | null
+  mime: string
+  fileName: string | null
+}
 
-export function widgetRoutes(ctx: ApiContext) {
+/** The widget channel, its config, and the secret its session tokens are signed with. */
+export async function loadWidgetChannel(ctx: ApiContext, channelId: string) {
   const { db, runtime } = ctx
+  const rows = await db
+    .select({
+      channel: schema.channels,
+      status: schema.workspaces.status,
+      settings: schema.workspaces.settings,
+    })
+    .from(schema.channels)
+    .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.channels.workspaceId))
+    .where(and(eq(schema.channels.id, channelId), eq(schema.channels.type, 'web')))
+    .limit(1)
+  const channel = rows[0]?.channel
+  if (!channel?.enabled) return null
 
-  /** The widget channel, its config, and the secret its session tokens are signed with. */
-  async function loadChannel(channelId: string) {
-    const rows = await db
-      .select({
-        channel: schema.channels,
-        status: schema.workspaces.status,
-        settings: schema.workspaces.settings,
-      })
-      .from(schema.channels)
-      .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.channels.workspaceId))
-      .where(and(eq(schema.channels.id, channelId), eq(schema.channels.type, 'web')))
-      .limit(1)
-    const channel = rows[0]?.channel
-    if (!channel?.enabled) return null
+  // The tenant's own language, so the few sentences this route composes itself match the
+  // rest of their site rather than defaulting to ours.
+  const language: Language = rows[0]?.settings?.defaultLanguage ?? 'th'
 
-    // The tenant's own language, so the few sentences this route composes itself match the
-    // rest of their site rather than defaulting to ours.
-    const language: Language = rows[0]?.settings?.defaultLanguage ?? 'th'
-
-    /**
-     * A widget on a suspended tenant's site stops working, and says so plainly.
-     *
-     * Unlike a webhook there is a person on the other end of this, reading the page, so
-     * pretending everything is fine and silently dropping their message would be worse than
-     * telling them the chat is unavailable. A tenant being deleted reads as no channel at
-     * all, because in a moment it will not exist.
-     */
-    const status = rows[0]?.status
-    if (status !== 'active') {
-      return { channel, config: null, language, suspended: status === 'suspended' } as const
-    }
-
-    // The web adapter directly rather than through the registry: the registry erases its
-    // config type, and this route needs the origin list from it.
-    const { decryptJson } = await import('@ci/db')
-    const raw = channel.configEncrypted
-      ? await decryptJson<Record<string, unknown>>(
-          channel.configEncrypted,
-          runtime.env.APP_SECRET_KEY,
-        )
-      : {}
-
-    return {
-      channel,
-      config: webChannelAdapter.parseConfig(raw),
-      language,
-      suspended: false,
-    } as const
+  /**
+   * A widget on a suspended tenant's site stops working, and says so plainly.
+   *
+   * Unlike a webhook there is a person on the other end of this, reading the page, so
+   * pretending everything is fine and silently dropping their message would be worse than
+   * telling them the chat is unavailable. A tenant being deleted reads as no channel at
+   * all, because in a moment it will not exist.
+   */
+  const status = rows[0]?.status
+  if (status !== 'active') {
+    return { channel, config: null, language, suspended: status === 'suspended' } as const
   }
 
-  /** The origin rule is the channel's, so a pilot can allow none and production can list them. */
-  function originAllowed(allowed: string[], origin: string | undefined): boolean {
+  // The web adapter directly rather than through the registry: the registry erases its
+  // config type, and this route needs the origin list from it.
+  const { decryptJson } = await import('@ci/db')
+  const raw = channel.configEncrypted
+    ? await decryptJson<Record<string, unknown>>(
+        channel.configEncrypted,
+        runtime.env.APP_SECRET_KEY,
+      )
+    : {}
+
+  return {
+    channel,
+    config: webChannelAdapter.parseConfig(raw),
+    language,
+    suspended: false,
+  } as const
+}
+
+/**
+ * Which pages may frame this channel's widget, as a CSP `frame-ancestors` value.
+ *
+ * The embedding restriction belongs at the frame. The session request comes from inside
+ * the iframe, so its `Origin` is ours, never the host page's, and checking it against the
+ * host allowlist refused every legitimate visitor as soon as the list was non-empty.
+ * Null when the channel allows any page, or does not exist (the page then fails anyway).
+ */
+export async function widgetFrameAncestors(
+  ctx: ApiContext,
+  channelId: string,
+): Promise<string | null> {
+  const loaded = await loadWidgetChannel(ctx, channelId)
+  const allowed = loaded?.config?.allowedOrigins ?? []
+  if (allowed.length === 0) return null
+  const origins = allowed.flatMap((entry) => {
+    try {
+      return [new URL(entry).origin]
+    } catch {
+      return []
+    }
+  })
+  return ["'self'", ...origins].join(' ')
+}
+
+export function widgetRoutes(ctx: ApiContext) {
+  const { db, runtime, env } = ctx
+
+  const loadChannel = (channelId: string) => loadWidgetChannel(ctx, channelId)
+
+  /**
+   * Who may start a session.
+   *
+   * Our own iframe always may: that is where the widget runs, whatever page framed it, and
+   * which pages may frame it is `widgetFrameAncestors`' job. A host page calling the API
+   * directly is held to the channel's list, as before. An empty list allows anyone.
+   */
+  const ownOrigins = new Set(
+    [env.PUBLIC_API_URL, env.PUBLIC_WEB_URL, env.WEBHOOK_BASE_URL].flatMap((value) => {
+      try {
+        return [new URL(value).origin]
+      } catch {
+        return []
+      }
+    }),
+  )
+  function sessionOriginAllowed(allowed: string[], origin: string | null): boolean {
     if (allowed.length === 0) return true
-    return typeof origin === 'string' && allowed.includes(origin)
+    if (!origin) return false
+    return ownOrigins.has(origin) || allowed.includes(origin)
   }
 
   async function readSession(
@@ -184,6 +233,30 @@ export function widgetRoutes(ctx: ApiContext) {
   }
 
   /** The last thing this visitor typed, which is the evidence for what language they read. */
+  /** A message's files as links the visitor can open without a session. */
+  async function widgetAttachments(content: unknown, workspaceId: string) {
+    const withLinks = await withMediaLinks(
+      { kind: 'file', ...(content as object) } as {
+        kind: string
+        attachments?: WidgetAttachment[]
+      },
+      {
+        workspaceId,
+        secret: env.APP_SECRET_KEY,
+        baseUrl: env.WEBHOOK_BASE_URL,
+        ttlDays: env.MEDIA_LINK_TTL_DAYS,
+      },
+    ).catch(() => ({ attachments: [] as WidgetAttachment[] }))
+    // A link that cannot be signed — a key outside the workspace — is left out, not shown dead.
+    return (withLinks.attachments ?? [])
+      .filter((attachment) => Boolean(attachment.sourceUrl))
+      .map((attachment) => ({
+        url: attachment.sourceUrl as string,
+        mime: attachment.mime,
+        fileName: attachment.fileName,
+      }))
+  }
+
   async function lastCustomerText(
     workspaceId: string,
     conversationId: string,
@@ -246,9 +319,7 @@ export function widgetRoutes(ctx: ApiContext) {
               ? status(403, { error: 'This workspace is suspended', code: 'workspace_suspended' })
               : status(404, { error: 'Unknown widget channel' })
           }
-          if (
-            !originAllowed(loaded.config.allowedOrigins, request.headers.get('origin') ?? undefined)
-          ) {
+          if (!sessionOriginAllowed(loaded.config.allowedOrigins, request.headers.get('origin'))) {
             return status(403, { error: 'This origin may not embed the widget' })
           }
           if (!loaded.channel.webhookSecret) {
@@ -393,13 +464,20 @@ export function widgetRoutes(ctx: ApiContext) {
            * Opening the widget shows the end of the conversation, which is where they
            * left off.
            */
+          /**
+           * When a row became part of the visitor's conversation: an inbound one when it
+           * arrived, a reply when it was sent. Paging by this rather than `created_at` is
+           * what lets a queued reply stay hidden without being skipped for good once a later
+           * row has moved the cursor past it.
+           */
+          const visibleAt = sql<Date>`coalesce(${schema.messages.sentAt}, ${schema.messages.createdAt})`
           const rows = await db
             .select({
               id: schema.messages.id,
               senderType: schema.messages.senderType,
               direction: schema.messages.direction,
               content: schema.messages.content,
-              createdAt: schema.messages.createdAt,
+              visibleAt: sql<string>`${visibleAt}`,
             })
             .from(schema.messages)
             .where(
@@ -412,10 +490,22 @@ export function widgetRoutes(ctx: ApiContext) {
                 // Through coalesce: a row with no kind is not an event, and a bare `<>` against
                 // NULL is NULL, which would have hidden it.
                 sql`coalesce(${schema.messages.content}->>'kind', '') <> 'event'`,
-                ...(resuming ? [] : [gt(schema.messages.createdAt, since as Date)]),
+                /**
+                 * Only what actually reached them. A queued reply may yet be withdrawn, and a
+                 * failed one — a reply blocked because a colleague took over — never went
+                 * out at all: showing it here said on the web what the takeover had stopped.
+                 */
+                sql`(${schema.messages.direction} = 'inbound' OR ${schema.messages.status} IN ('sent', 'delivered', 'read'))`,
+                ...(resuming
+                  ? []
+                  : [sql`${visibleAt} > ${(since as Date).toISOString()}::timestamptz`]),
               ),
             )
-            .orderBy(resuming ? desc(schema.messages.createdAt) : asc(schema.messages.createdAt))
+            .orderBy(
+              ...(resuming
+                ? [sql`${visibleAt} desc`, desc(schema.messages.id)]
+                : [sql`${visibleAt} asc`, asc(schema.messages.id)]),
+            )
             .limit(resuming ? RESUME_PAGE : 100)
 
           if (resuming) rows.reverse()
@@ -447,42 +537,41 @@ export function widgetRoutes(ctx: ApiContext) {
              */
             state,
             stateText: stateText(state, language),
-            messages: rows.map((row) => ({
-              id: row.id,
-              // The iframe app still keys its bubbles on this. It is served with the API, so
-              // the two always move together; `sender` is the richer answer.
-              from: row.direction === 'inbound' ? 'you' : 'support',
-              /**
-               * Who actually wrote it.
-               *
-               * A visitor reading a thread that changes tone mid-way deserves to know
-               * why. `system` is the product speaking rather than either.
-               */
-              sender:
-                row.direction === 'inbound'
-                  ? ('you' as const)
-                  : row.senderType === 'human'
-                    ? ('agent' as const)
-                    : row.senderType === 'system'
-                      ? ('system' as const)
-                      : ('ai' as const),
-              text: (row.content as { text?: string | null }).text ?? '',
-              /**
-               * Files an agent sent, as links the widget can render.
-               *
-               * Signed by the outbound job when the message went out, so they are already
-               * fetchable without a session, which is what the visitor has. An attachment
-               * we never resolved a link for is left out rather than shown as a dead one.
-               */
-              attachments: ((row.content as { attachments?: WidgetAttachment[] }).attachments ?? [])
-                .filter((attachment) => Boolean(attachment.sourceUrl))
-                .map((attachment) => ({
-                  url: attachment.sourceUrl as string,
-                  mime: attachment.mime,
-                  fileName: attachment.fileName,
-                })),
-              at: row.createdAt.toISOString(),
-            })),
+            messages: await Promise.all(
+              rows.map(async (row) => ({
+                id: row.id,
+                // The iframe app still keys its bubbles on this. It is served with the API, so
+                // the two always move together; `sender` is the richer answer.
+                from: row.direction === 'inbound' ? 'you' : 'support',
+                /**
+                 * Who actually wrote it.
+                 *
+                 * A visitor reading a thread that changes tone mid-way deserves to know
+                 * why. `system` is the product speaking rather than either.
+                 */
+                sender:
+                  row.direction === 'inbound'
+                    ? ('you' as const)
+                    : row.senderType === 'human'
+                      ? ('agent' as const)
+                      : row.senderType === 'system'
+                        ? ('system' as const)
+                        : ('ai' as const),
+                text: (row.content as { text?: string | null }).text ?? '',
+                /**
+                 * Files an agent sent, as links the widget can render.
+                 *
+                 * Signed here, at read time, from the storage key: the outbound job signs a
+                 * link for the platform and never stores it, so a file an agent sent never
+                 * reached the widget, and a stored link would have expired anyway.
+                 */
+                attachments: await widgetAttachments(row.content, conversation.workspaceId),
+                // Milliseconds, so a `since` built from it sits a hair before the row and the
+                // next poll may return it again. The widget drops a repeat by id; a skip is
+                // the failure that would matter, and rounding down cannot cause one.
+                at: new Date(row.visibleAt).toISOString(),
+              })),
+            ),
           }
         },
         {
