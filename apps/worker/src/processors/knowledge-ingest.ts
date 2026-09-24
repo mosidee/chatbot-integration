@@ -118,7 +118,7 @@ export async function processKnowledgeIngest(
       return
     }
 
-    const result = await indexSource(db, source.id, embedSlot)
+    const result = await indexSource(db, job.workspaceId, source.id, embedSlot)
     logger.info('knowledge indexed', {
       sourceId: source.id,
       entries: result.entries,

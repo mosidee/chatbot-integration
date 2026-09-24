@@ -71,6 +71,64 @@ describe('workspace settings', () => {
     expect(next.status).toBe(200)
   })
 
+  /**
+   * What the console sends. A whole-document revision refused a save whenever anything had
+   * changed — a colleague on another card, a platform admin suspending and restoring the
+   * tenant. Now only the settings being changed are compared.
+   */
+  test('a colleague changing another setting does not block a save; the same setting does', async () => {
+    const page = (await (await fixture.as(fixture.admin, '/api/v1/settings/workspace')).json()) as {
+      settings: { persona: string; defaultLanguage: string }
+    }
+
+    // A colleague rewrites the persona.
+    expect(
+      (
+        await fixture.as(
+          fixture.admin,
+          '/api/v1/settings/workspace',
+          json({ persona: `colleague ${Math.random()}` }),
+        )
+      ).status,
+    ).toBe(200)
+
+    // The page changes the language, from what it showed: nothing to do with the persona.
+    const other = await fixture.as(
+      fixture.admin,
+      '/api/v1/settings/workspace',
+      json({
+        defaultLanguage: page.settings.defaultLanguage === 'th' ? 'en' : 'th',
+        expected: { defaultLanguage: page.settings.defaultLanguage },
+      }),
+    )
+    expect(other.status).toBe(200)
+
+    // The page changes the persona too, from the text it still shows: refused, and named.
+    const same = await fixture.as(
+      fixture.admin,
+      '/api/v1/settings/workspace',
+      json({ persona: 'from the morning', expected: { persona: page.settings.persona } }),
+    )
+    expect(same.status).toBe(409)
+    expect((await same.json()).fields).toEqual(['persona'])
+  })
+
+  test('a nested setting compares by value, whatever order its keys come back in', async () => {
+    const page = (await (await fixture.as(fixture.admin, '/api/v1/settings/workspace')).json()) as {
+      settings: { redaction: { cardNumbers: boolean; thaiNationalId: boolean } }
+    }
+    const reordered = {
+      thaiNationalId: page.settings.redaction.thaiNationalId,
+      cardNumbers: page.settings.redaction.cardNumbers,
+    }
+    const response = await fixture.as(
+      fixture.admin,
+      '/api/v1/settings/workspace',
+      json({ redaction: page.settings.redaction, expected: { redaction: reordered } }),
+    )
+    expect(response.status).toBe(200)
+  })
+
   test('a save without a revision still overwrites, for scripts that mean to', async () => {
     const response = await fixture.as(
       fixture.admin,

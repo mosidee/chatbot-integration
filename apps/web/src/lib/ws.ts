@@ -53,7 +53,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         attempt = 0
         setStatus('open')
         // Everything published while we were away is gone; ask again for what is shown.
-        if (opened) void queryClient.invalidateQueries()
+        // Not Settings: that page shows one version on purpose and moves it itself.
+        if (opened) {
+          void queryClient.invalidateQueries({
+            predicate: (query) => query.queryKey[0] !== 'workspace-settings',
+          })
+        }
         opened = true
       }
 

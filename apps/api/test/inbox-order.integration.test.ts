@@ -679,3 +679,51 @@ describe('paging the queue', () => {
     expect(seen.length).toBe(total)
   })
 })
+
+describe('an agent answering', () => {
+  /**
+   * An agent's reply used to leave `last_message_at` where the customer's message put it,
+   * so the conversation kept its place among the waiting as if nobody had answered.
+   */
+  test('moves the conversation out of the waiting order', async () => {
+    const tag = `answering${Math.random().toString(36).slice(2, 8)}`
+    const spoke = minutesAgo(30)
+    const answered = await seed({
+      name: `${tag}-agent-answered`,
+      owner: null,
+      customerSpokeAt: spoke,
+    })
+    const waiting = await seed({
+      name: `${tag}-still-waiting`,
+      owner: null,
+      customerSpokeAt: minutesAgo(5),
+    })
+
+    const reply = await fixture.as(
+      fixture.agent,
+      `/api/v1/conversations/${answered.conversationId}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: { kind: 'text', text: 'On it.' } }),
+      },
+    )
+    expect(reply.status).toBe(200)
+
+    const [row] = await ctx.db
+      .select({ last: schema.conversations.lastMessageAt })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, answered.conversationId))
+    expect(row?.last?.getTime()).toBeGreaterThan(spoke.getTime())
+
+    // Waiting longest used to put the answered one first; now the one still waiting is.
+    // Narrowed by search: earlier tests here leave more than a page of conversations.
+    const response = await fixture.as(fixture.admin, `/api/v1/conversations?limit=100&q=${tag}`)
+    const body = (await response.json()) as {
+      conversations: { customer: { displayName: string | null } }[]
+    }
+    const names = body.conversations.map((c) => c.customer.displayName ?? '')
+    expect(names).toEqual([`${tag}-still-waiting`, `${tag}-agent-answered`])
+    expect(waiting.conversationId).toBeTruthy()
+  })
+})

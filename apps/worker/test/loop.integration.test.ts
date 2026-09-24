@@ -983,7 +983,7 @@ describe('grounded answers', () => {
       question: 'แพ็กเกจราคาเท่าไหร่',
       body: 'แพ็กเกจเริ่มต้นของ salon-saas ราคา 990 บาทต่อเดือน รวมการจองคิวออนไลน์',
     })
-    await indexEntry(f.runtime.db, entryId, f.embedSlot())
+    await indexEntry(f.runtime.db, f.workspaceId, entryId, f.embedSlot())
 
     await customerSays(f, 'ราคาเท่าไหร่คะ')
     await runQueuedWork(f)

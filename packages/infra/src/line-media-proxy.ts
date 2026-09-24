@@ -1,6 +1,7 @@
 import type { ChannelAdapter } from '@ci/channels'
 import type { Logger } from '@ci/core'
 import type { ChannelType } from '@ci/shared'
+import { PermanentMediaError } from './media'
 
 /**
  * LINE media through the Cloudflare Worker in `workers/line-media` (ADR 0009).
@@ -14,7 +15,9 @@ import type { ChannelType } from '@ci/shared'
  * The proxy URL is the operator's, from the environment, never a tenant's, which is why a
  * plain fetch is right here and restricted egress is not.
  *
- * If the Worker fails, the direct fetch still runs: slow is better than a missing photo.
+ * If the Worker fails, the direct fetch still runs: slow is better than a missing photo. If
+ * LINE itself refused (a 4xx the Worker passed through, marked `x-upstream`), the direct fetch
+ * would be refused the same way, so it is skipped and the refusal is not retried.
  */
 
 type Fetcher = Pick<ChannelAdapter<never>, 'fetchMedia'>
@@ -43,6 +46,7 @@ export function withLineMediaProxy(
           secret: proxySecret,
         })
       } catch (error) {
+        if (error instanceof PermanentMediaError) throw error
         input.logger.warn('LINE media proxy failed; fetching directly', {
           error: error instanceof Error ? error.message : String(error),
         })
@@ -68,6 +72,10 @@ async function viaProxy(
     body: JSON.stringify({ messageId, token: config.channelAccessToken }),
     signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
   })
+  const fromLine = response.headers.get('x-upstream') === 'line'
+  if (fromLine && response.status >= 400 && response.status < 500 && response.status !== 429) {
+    throw new PermanentMediaError(`LINE refused the media: ${response.status}`)
+  }
   if (!response.ok) throw new Error(`the proxy answered ${response.status}`)
   const buffer = await response.arrayBuffer()
   const data = new Uint8Array(new ArrayBuffer(buffer.byteLength))

@@ -590,6 +590,14 @@ export function conversationRoutes(ctx: ApiContext) {
                 redaction: settings.redaction,
               })
 
+              /**
+               * An agent's reply is an answer. It used to leave `last_message_at` alone, so
+               * the inbox's waiting order (`last_customer_message_at >= last_message_at`)
+               * kept an answered conversation near the top as if the customer were still
+               * waiting, and retention aged it from before the reply.
+               */
+              await updateConversation(tx, workspaceId, params.id, { lastMessageAt: new Date() })
+
               await runtime.outbox.enqueue(tx, {
                 queue: 'outbound',
                 name: 'send',
