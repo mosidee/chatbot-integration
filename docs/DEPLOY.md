@@ -211,6 +211,24 @@ conversation off.
 
 Take a `pg_dump` before deploying it, as for any migration that writes data.
 
+### Migrations 0012 to 0014 (the review fixes)
+
+All three add columns and write data, so take a `pg_dump` first.
+
+- **0012** adds `invitation_issuer`, `messages.sent_at` (back-filled from `created_at` for
+  sent messages), and the unique membership index `member_org_user_uq`, deleting any
+  duplicate memberships first (the oldest is kept). Reset links issued before it read as
+  workspace-issued, so one sent by a platform admin to somebody in two workspaces is refused
+  and has to be issued again.
+- **0013** adds the `canceled` and `uncertain` message statuses, `platform_message_ids`,
+  `inbound_events.channel_identity_id` and the `blob_deletions` table.
+- **0014** adds `embedding_space` to both embedding tables, labelled from each workspace's
+  embedding slot, and `conversations.summarized_through_message_id`, set for conversations
+  already summarised so their next summary does not index the same messages again.
+
+Nothing needs running by hand afterwards. The nightly retention job now also drains
+`blob_deletions` and queues agent uploads nobody sent after a day.
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that

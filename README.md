@@ -14,6 +14,8 @@ owed is worse than a reply that says "let me fetch someone".
 - **Running it on a server**: [docs/DEPLOY.md](docs/DEPLOY.md)
 - **Giving the AI a tool of your own**: [docs/TOOLS.md](docs/TOOLS.md)
 - **Letting the AI read a customer's account**: [docs/IDENTITY-VERIFICATION.md](docs/IDENTITY-VERIFICATION.md)
+- **The security and reliability review, and its status**: [recommendation.md](recommendation.md)
+- **The console and widget UX audit, and its status**: [docs/UX-AUDIT.md](docs/UX-AUDIT.md)
 
 ## What works today
 

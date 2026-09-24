@@ -51,12 +51,12 @@ jobs:
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:latest server /data
+            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then break; fi
             sleep 2
           done
-          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c \
+          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 -c \
             "mc alias set local http://localhost:9000 minioadmin minioadmin && \
              mc mb --ignore-existing local/media"
       - uses: oven-sh/setup-bun@v2
@@ -132,3 +132,47 @@ jobs:
             test-results
             playwright-report
           retention-days: 7
+
+  images:
+    name: release images
+    runs-on: ubuntu-latest
+    # What is deployed is the images, not the source tree: build both exactly as production
+    # does, start the stack, and require both services to report healthy.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Write an environment for the stack
+        run: |
+          cat > .env <<'ENV'
+          NODE_ENV=production
+          POSTGRES_PASSWORD=ci_images_password
+          DATABASE_URL=postgres://ci:ci_images_password@postgres:5432/chatbot_integration
+          REDIS_URL=redis://redis:6379
+          APP_SECRET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          BETTER_AUTH_SECRET=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+          BETTER_AUTH_URL=http://localhost:3000
+          S3_ENDPOINT=http://minio:9000
+          S3_REGION=us-east-1
+          S3_BUCKET=media
+          S3_ACCESS_KEY_ID=minioadmin
+          S3_SECRET_ACCESS_KEY=minioadmin
+          S3_FORCE_PATH_STYLE=true
+          PUBLIC_API_URL=http://localhost:3000
+          PUBLIC_WEB_URL=http://localhost:3000
+          WEBHOOK_BASE_URL=http://localhost:3000
+          ENV
+      - run: docker compose -f docker-compose.yml build api worker
+      - run: docker compose -f docker-compose.yml up -d
+      - name: Both services come up healthy
+        run: |
+          for i in $(seq 1 60); do
+            api=$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f docker-compose.yml ps -q api) 2>/dev/null || true)
+            worker=$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f docker-compose.yml ps -q worker) 2>/dev/null || true)
+            echo "api=$api worker=$worker"
+            if [ "$api" = healthy ] && [ "$worker" = healthy ]; then exit 0; fi
+            sleep 5
+          done
+          docker compose -f docker-compose.yml logs --tail 200
+          exit 1
+      - if: always()
+        run: docker compose -f docker-compose.yml down -v
+

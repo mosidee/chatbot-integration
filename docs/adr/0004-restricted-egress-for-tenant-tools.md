@@ -102,11 +102,22 @@ stripped `authorization`, `cookie` and `proxy-authorization`, and a tool whose c
 travelled as `x-api-key` — the header name is the tenant's choice — handed it to the redirect
 target. A cross-origin 307 or 308, which replays the body by definition, is refused.
 
-## Residual risk, accepted
+## The DNS race, closed (2026-09-24)
 
 Between the check and the connection, a name can change its answer: the resolver says
-`93.184.216.34`, and by the time the socket opens it says `127.0.0.1`. Closing that window
-means connecting to the address we resolved rather than to the name.
+`93.184.216.34`, and by the time the socket opens it says `127.0.0.1`. This was accepted as
+a residual risk until the check could hand its answer to the connection.
+
+`pinnedRequest` (`packages/infra/src/pinned-transport.ts`) does that: it makes the request
+with Node's `https.request`, giving it a `lookup` that returns the addresses the check
+approved, so the socket goes where the check looked while TLS still verifies the certificate
+against the hostname and sends it as SNI. `agent: false` matters — a pooled connection skips
+`lookup` entirely. The restricted fetch uses it whenever it resolved a name itself; an origin
+a platform admin approved, and private egress allowed for development, use the plain fetch.
+
+## Residual risk, accepted
+
+What is recorded below was the reasoning while the race was open.
 
 We do not do that, because it breaks TLS. A certificate is presented for a hostname; a
 connection opened to a literal address either fails verification or has to be told to skip

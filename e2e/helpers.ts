@@ -264,3 +264,63 @@ export async function confirmTwice(control: import('@playwright/test').Locator):
   await control.page().waitForTimeout(450)
   await control.click()
 }
+
+/**
+ * Make the next matching request fail, once, as a server or network would.
+ *
+ * No test used `page.route` before, so every "what does the console do when this fails"
+ * question was answered only by reading code. `status: 'network'` aborts the request.
+ */
+export async function failNext(
+  page: Page,
+  url: string | RegExp,
+  options: { status?: number | 'network'; method?: string; times?: number } = {},
+): Promise<void> {
+  // More than once where the console retries on its own, as it does for a load that died.
+  let left = options.times ?? 1
+  await page.route(url, async (route) => {
+    if (left === 0 || (options.method && route.request().method() !== options.method)) {
+      return route.fallback()
+    }
+    left -= 1
+    if (options.status === 'network') return route.abort('failed')
+    return route.fulfill({
+      status: options.status ?? 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'injected by the test' }),
+    })
+  })
+}
+
+/**
+ * A member of the seeded workspace with the given role, signed in on `page`.
+ *
+ * Invited through the API and accepted in the browser, as a person would be. Returns a
+ * cleanup that removes the membership again, so runs do not accumulate members.
+ */
+export async function signInAs(
+  page: Page,
+  request: APIRequestContext,
+  role: 'viewer' | 'agent' | 'admin',
+): Promise<{ email: string; cleanup: () => Promise<void> }> {
+  const email = `e2e-${role}-${uniqueToken()}@example.com`
+  const invited = await request.post(`${API_URL}/api/v1/admin/invitations`, {
+    data: { email, role },
+  })
+  const { link } = (await invited.json()) as { link: string }
+  await page.goto(link)
+  await page.getByTestId('invite-name').fill(`E2E ${role}`)
+  await page.getByTestId('invite-password').fill('a-good-password-1')
+  await page.getByTestId('invite-submit').click()
+  await page.waitForURL('**/', { timeout: 20_000 })
+
+  return {
+    email,
+    cleanup: async () => {
+      const members = await request.get(`${API_URL}/api/v1/admin/members`)
+      const body = (await members.json()) as { members: { email: string; userId: string }[] }
+      const userId = body.members.find((member) => member.email === email)?.userId
+      if (userId) await request.delete(`${API_URL}/api/v1/admin/members/${userId}`)
+    },
+  }
+}

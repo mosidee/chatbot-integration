@@ -6,6 +6,8 @@ COPY package.json bun.lock bunfig.toml ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY apps/worker/package.json apps/worker/
+# Every workspace in the lockfile, or --frozen-lockfile sees a manifest missing and refuses.
+COPY apps/widget/package.json apps/widget/
 COPY packages/channels/package.json packages/channels/
 COPY packages/config/package.json packages/config/
 COPY packages/core/package.json packages/core/

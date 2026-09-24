@@ -24,8 +24,29 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     locale: 'en-GB',
+    /**
+     * The embed tests serve a host page from 127.0.0.1 that loads the widget from
+     * localhost: two origins, one machine. Chrome's local-network-access check treats that
+     * as a page reaching into the loopback address space and blocks the script. In the
+     * world the host site and the chat server are both public, so the check never applies;
+     * here it would stop the test from exercising anything.
+     */
+    launchOptions: { args: ['--disable-features=LocalNetworkAccessChecks'] },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  /**
+   * Desktop runs everything not tagged for another project. The others run only what is
+   * tagged for them, so the suite is not multiplied by every configuration: `@mobile` for
+   * phone-width layouts, `@theme` for dark mode in Thai.
+   */
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, grepInvert: /@mobile|@theme/ },
+    { name: 'mobile', use: { ...devices['Pixel 7'] }, grep: /@mobile/ },
+    {
+      name: 'dark-th',
+      use: { ...devices['Desktop Chrome'], colorScheme: 'dark', locale: 'th-TH' },
+      grep: /@theme/,
+    },
+  ],
   /**
    * Runs once, after the servers are up, to resolve conversations left open by earlier
    * runs. See `clearInbox` for why the suite cannot simply ignore them any more.
