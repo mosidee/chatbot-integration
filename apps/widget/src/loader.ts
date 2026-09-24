@@ -6,6 +6,7 @@
  *         data-channel="<channel id>"
  *         data-token="<optional signed visitor token>"
  *         data-colour="#2563eb"
+ *         data-lang="th"
  *         defer></script>
  * ```
  *
@@ -15,12 +16,16 @@
  * own requests are same-origin, so there is no cross-origin story to get wrong.
  */
 
+import { launcherTextOn } from './launcher-colour'
+
 type Settings = {
   channel: string
   token: string | null
   colour: string
   title: string
   origin: string
+  /** `th` or `en`; the chat's own words. Omitted, the workspace's language is used. */
+  lang: string | null
 }
 
 function readSettings(): Settings | null {
@@ -35,8 +40,9 @@ function readSettings(): Settings | null {
     channel,
     token: script.dataset.token ?? null,
     colour: script.dataset.colour ?? '#2563eb',
-    title: script.dataset.title ?? 'แชทกับเรา',
+    title: script.dataset.title ?? (script.dataset.lang === 'en' ? 'Chat with us' : 'แชทกับเรา'),
     origin: new URL(script.src).origin,
+    lang: script.dataset.lang === 'en' || script.dataset.lang === 'th' ? script.dataset.lang : null,
   }
 }
 
@@ -50,6 +56,7 @@ function mount(settings: Settings): void {
   frameUrl.searchParams.set('channel', settings.channel)
   frameUrl.searchParams.set('colour', settings.colour)
   if (settings.token) frameUrl.searchParams.set('token', settings.token)
+  if (settings.lang) frameUrl.searchParams.set('lang', settings.lang)
 
   const host = document.createElement('div')
   host.style.cssText = 'position:fixed;inset:auto 16px 16px auto;z-index:2147483000'
@@ -105,7 +112,8 @@ function mount(settings: Settings): void {
     'font-family:system-ui,sans-serif',
     'font-size:24px',
     'line-height:1',
-    'color:#fff',
+    // The same readable-on-brand choice the chat makes, not white on whatever the brand is.
+    `color:${launcherTextOn(settings.colour)}`,
     `background:${settings.colour}`,
     'box-shadow:0 6px 20px rgba(0,0,0,.2)',
   ].join(';')
@@ -131,10 +139,36 @@ function mount(settings: Settings): void {
   ].join(';')
   launcher.append(badge)
 
+  let unreadCount = 0
+  /** The launcher's name says what the badge shows, for somebody who cannot see it. */
+  const describe = () => {
+    const unreadText =
+      unreadCount > 0
+        ? settings.lang === 'en'
+          ? ` (${unreadCount} new)`
+          : ` (ข้อความใหม่ ${unreadCount})`
+        : ''
+    launcher.setAttribute('aria-label', `${settings.title}${unreadText}`)
+  }
   const setUnread = (count: number) => {
+    unreadCount = count
     badge.textContent = count > 9 ? '9+' : String(count)
     badge.style.display = count > 0 ? 'block' : 'none'
+    badge.setAttribute('aria-hidden', 'true')
+    describe()
   }
+
+  /**
+   * A visible focus ring. `all:initial` resets the browser's own outline, and an inline
+   * style cannot say `:focus-visible`, so it is drawn on focus and removed on blur.
+   */
+  launcher.addEventListener('focus', () => {
+    launcher.style.outline = `3px solid ${settings.colour}`
+    launcher.style.outlineOffset = '3px'
+  })
+  launcher.addEventListener('blur', () => {
+    launcher.style.outline = 'none'
+  })
 
   /**
    * Whether the chat is open, remembered for this tab.
@@ -162,6 +196,8 @@ function mount(settings: Settings): void {
     sizeFrame()
     launcher.textContent = open ? '✕' : '💬'
     launcher.append(badge)
+    launcher.setAttribute('aria-expanded', open ? 'true' : 'false')
+    describe()
     // Hidden behind a full-screen chat: on a phone the header's own close button is the
     // way out, and a floating launcher on top of the composer is just in the way.
     launcher.style.display = open && phone() ? 'none' : 'flex'

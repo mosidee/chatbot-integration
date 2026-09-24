@@ -344,6 +344,8 @@ export function widgetRoutes(ctx: ApiContext) {
 
           return {
             session,
+            /** The workspace's language, for the widget's own words when the embed names none. */
+            language: loaded.language,
             identified: visitor.identified,
             displayName: visitor.displayName,
           }

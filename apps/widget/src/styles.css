@@ -29,6 +29,8 @@
     --border: #2f3439;
     --bubble: #272b30;
     --text: #f2f4f7;
+    /* The light theme's red is about 2.6:1 on this surface; this is over 7:1. */
+    --error: #fda29b;
   }
 }
 
@@ -189,9 +191,32 @@ body,
 }
 
 .error {
-  color: #b42318;
+  color: var(--error, #b42318);
   font-size: 13px;
   padding: 0 14px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* `display:flex` above beats the attribute, as it does for the typing dots. */
+.error[hidden] {
+  display: none;
+}
+
+.error button {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.error button[hidden] {
+  display: none;
 }
 
 /* Who is answering. Sits above the box so it is read before the next message is typed. */
