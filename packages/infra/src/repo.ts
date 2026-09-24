@@ -97,6 +97,12 @@ export function withSettingsDefaults(settings: WorkspaceSettings): WorkspaceSett
     // A workspace from before the wait had its own sentence would otherwise send the
     // handoff text twice, which is the thing the second text exists to prevent.
     stillWaitingText: settings.stillWaitingText ?? defaultWorkspaceSettings().stillWaitingText,
+    // Absent means a workspace written before the setting existed, and gets the default. An
+    // explicit null is somebody switching it off, which `??` would silently undo.
+    autoResolveAfterHours:
+      'autoResolveAfterHours' in settings
+        ? settings.autoResolveAfterHours
+        : defaultWorkspaceSettings().autoResolveAfterHours,
     identity: {
       // A widget token was already trusted before this key existed, so leaving it on
       // changes nothing for anyone. The link is new, and starts off.

@@ -18,6 +18,7 @@ export const QUEUE_NAMES = {
   summarize: 'summarize',
   knowledgeIngest: 'knowledge_ingest',
   retention: 'retention',
+  idleResolve: 'idle_resolve',
   customerErasure: 'customer_erasure',
   workspaceErasure: 'workspace_erasure',
 } as const
@@ -75,6 +76,9 @@ export type WaitingHumanTimeoutJob = {
 
 /** Omit the workspace to sweep every one of them. */
 export type RetentionJob = { workspaceId?: string | null }
+
+/** Omit the workspace to plan a pass over every one of them. */
+export type IdleResolveJob = { workspaceId?: string | null }
 
 /**
  * Erasing one customer on request, which Thailand's PDPA gives them a right to. Kept as a
@@ -137,6 +141,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     knowledge_ingest: make(QUEUE_NAMES.knowledgeIngest),
     summarize: make(QUEUE_NAMES.summarize),
     retention: make(QUEUE_NAMES.retention),
+    idle_resolve: make(QUEUE_NAMES.idleResolve),
     customer_erasure: make(QUEUE_NAMES.customerErasure),
     workspace_erasure: make(QUEUE_NAMES.workspaceErasure),
   }

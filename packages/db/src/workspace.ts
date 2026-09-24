@@ -47,6 +47,10 @@ export function defaultWorkspaceSettings(
     retentionDays: 730,
     redaction: { cardNumbers: true, thaiNationalId: true },
     waitingHumanFallbackMinutes: 15,
+    // A day: Messenger's reply window, after which the customer cannot be written to freely
+    // anyway, and long enough that somebody who went to check their account comes back to
+    // the same conversation.
+    autoResolveAfterHours: 24,
     acknowledgementText: {
       th: 'สักครู่นะคะ กำลังโอนสายให้เจ้าหน้าที่ดูแลต่อค่ะ',
       en: 'One moment please, I am passing you to a colleague.',

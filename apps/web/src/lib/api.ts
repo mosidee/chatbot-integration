@@ -264,6 +264,7 @@ export type WorkspaceSettings = {
   identity: IdentitySettings
   retentionDays: number
   waitingHumanFallbackMinutes: number | null
+  autoResolveAfterHours: number | null
   redaction: { cardNumbers: boolean; thaiNationalId: boolean }
   acknowledgementText: Record<string, string>
   stillWaitingText: Record<string, string>

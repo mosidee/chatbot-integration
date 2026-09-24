@@ -8,6 +8,7 @@ import {
   createQueues,
   createRedis,
   createRuntime,
+  type IdleResolveJob,
   type InboundJob,
   type JobMeta,
   type KnowledgeIngestJob,
@@ -25,6 +26,7 @@ import {
 import { type Job, Worker } from 'bullmq'
 
 import { processAiTurn } from './processors/ai-turn'
+import { IDLE_RESOLVE_EVERY_MINUTES, processIdleResolve } from './processors/idle-resolve'
 import { processInbound } from './processors/inbound'
 import { processKnowledgeIngest } from './processors/knowledge-ingest'
 import { processOutbound } from './processors/outbound'
@@ -60,6 +62,8 @@ const CONCURRENCY = {
   // Deletion is not urgent and touches object storage; one at a time keeps it out of the
   // way of anything a customer is waiting on.
   retention: 1,
+  // Housekeeping on a timer: one tenant at a time is plenty.
+  idle_resolve: 1,
   customer_erasure: 1,
   // One at a time, and never more: it deletes a whole tenant's rows and then its media.
   workspace_erasure: 1,
@@ -183,6 +187,14 @@ async function main() {
       CONCURRENCY.retention,
       processRetention,
     ),
+    makeWorker<IdleResolveJob>(
+      QUEUE_NAMES.idleResolve,
+      runtime,
+      ports,
+      logger,
+      CONCURRENCY.idle_resolve,
+      processIdleResolve,
+    ),
     makeWorker<CustomerErasureJob>(
       QUEUE_NAMES.customerErasure,
       runtime,
@@ -242,6 +254,22 @@ async function main() {
     { name: 'retention', data: {} },
   )
   logger.info('retention scheduled', { pattern: '17 3 * * *', tz: 'Asia/Bangkok' })
+
+  /**
+   * Closing conversations the customer stopped replying to, every quarter hour.
+   *
+   * A sweep rather than a timer per conversation: every reply would otherwise have to
+   * cancel and reschedule one, and a missed cancel closes a live conversation. A sweep
+   * reads the truth each time, so the worst a late pass can do is close something fifteen
+   * minutes after it qualified.
+   */
+  const idleResolvePattern = `*/${IDLE_RESOLVE_EVERY_MINUTES} * * * *`
+  await queues.idle_resolve.upsertJobScheduler(
+    'idle-resolve',
+    { pattern: idleResolvePattern, tz: 'Asia/Bangkok' },
+    { name: 'idle_resolve', data: {} },
+  )
+  logger.info('idle resolve scheduled', { pattern: idleResolvePattern })
 
   /**
    * A health endpoint, not an API.

@@ -203,6 +203,8 @@ export function Settings() {
 
             <HoldingMessages settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
 
+            <AutoResolve settings={settings} onSave={(patch) => saveWorkspace.mutate(patch)} />
+
             <fieldset>
               <legend className="mb-1 text-xs font-medium text-[var(--text-muted)]">
                 {t('settings.redaction')}
@@ -356,6 +358,53 @@ function HoldingMessages({
         />
         <p className="mt-1 text-[11px] text-[var(--text-muted)]">
           {t('settings.waitingHumanFallbackHint')}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * How long the AI's conversations stay open after the customer goes quiet.
+ *
+ * Nothing closed a conversation on its own, and resolving is what folds one into the
+ * customer's memory, so a conversation the customer simply walked away from was never
+ * remembered. Empty switches it off.
+ */
+function AutoResolve({
+  settings,
+  onSave,
+}: {
+  settings: WorkspaceSettings
+  onSave: (patch: Partial<WorkspaceSettings>) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+      <div>
+        <h3 className="text-[13px] font-semibold">{t('settings.autoResolve')}</h3>
+        <p className="text-[12px] text-[var(--text-muted)]">{t('settings.autoResolveHint')}</p>
+      </div>
+      <div className="max-w-xs">
+        <Label htmlFor="auto-resolve-hours">{t('settings.autoResolveHours')}</Label>
+        <Input
+          id="auto-resolve-hours"
+          data-testid="auto-resolve-hours"
+          type="number"
+          min={1}
+          max={720}
+          placeholder={t('settings.autoResolveOff')}
+          defaultValue={settings.autoResolveAfterHours ?? ''}
+          onBlur={(event) => {
+            const raw = event.target.value.trim()
+            const next = raw === '' ? null : Number(raw)
+            if (next !== null && (!Number.isInteger(next) || next < 1 || next > 720)) return
+            if (next === settings.autoResolveAfterHours) return
+            onSave({ autoResolveAfterHours: next })
+          }}
+        />
+        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+          {t('settings.autoResolveOffHint')}
         </p>
       </div>
     </div>
