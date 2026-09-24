@@ -151,8 +151,6 @@ export type ChannelAdapter<TConfig = unknown> = {
   fetchMedia?(
     reference: string,
     config: TConfig,
-    /** Aborted when the attempt has taken too long; see `resolveInboundMedia`. */
-    options?: { signal?: AbortSignal },
   ): Promise<{ data: Uint8Array<ArrayBuffer>; mime: string }>
   /**
    * Ask the platform whether these credentials work.
