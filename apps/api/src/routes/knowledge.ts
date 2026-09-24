@@ -1,4 +1,4 @@
-import { newId, schema } from '@ci/db'
+import { type Executor, newId, schema } from '@ci/db'
 import {
   createEntry,
   createExternalRetriever,
@@ -36,8 +36,8 @@ export function knowledgeRoutes(ctx: ApiContext) {
    * the index describing a version nobody can see any more. The row's own id is used, which
    * is still stable across relay attempts of that one request.
    */
-  const enqueueIngest = (workspaceId: string, sourceId: string) =>
-    runtime.outbox.enqueue(db, {
+  const enqueueIngest = (workspaceId: string, sourceId: string, executor: Executor = db) =>
+    runtime.outbox.enqueue(executor, {
       queue: 'knowledge_ingest',
       name: 'ingest',
       workspaceId,
@@ -241,7 +241,9 @@ export function knowledgeRoutes(ctx: ApiContext) {
                 ),
               )
               .returning({ sourceId: schema.knowledgeEntries.sourceId })
-            return { kind: 'saved' as const, sourceId: updated?.sourceId ?? null }
+            // Re-index in the same commit: a stale chunk is an answer the AI would still give.
+            if (updated?.sourceId) await enqueueIngest(workspaceId, updated.sourceId, tx)
+            return { kind: 'saved' as const }
           })
 
           if (outcome.kind === 'missing') return status(404, { error: 'Entry not found' })
@@ -251,9 +253,6 @@ export function knowledgeRoutes(ctx: ApiContext) {
               code: 'entry_conflict',
             })
           }
-
-          // Re-index immediately: a stale chunk is an answer the AI would still give.
-          if (outcome.sourceId) await enqueueIngest(workspaceId, outcome.sourceId)
 
           return { ok: true, revision: patch.updatedAt?.toISOString() ?? null }
         },

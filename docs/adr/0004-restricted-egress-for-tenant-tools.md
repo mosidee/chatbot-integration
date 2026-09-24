@@ -8,7 +8,8 @@ Status: accepted
 M5 lets a workspace admin type a URL and have the AI call it during a conversation. That
 turns a text field in a settings form into a request origin inside our network.
 
-The worker shares a Docker network with Postgres, Redis and MinIO, each reachable by
+The worker shares a Docker network with Postgres and Redis (and, when this was written,
+MinIO), each reachable by
 container name. The model gateway answers on a private address. Nothing about a tool call
 is suspicious to the machine making it: the worker fetches the URL, gets a body, and the
 model reads that body out to a customer. A tool pointed at `http://postgres:5432` or at a
@@ -117,9 +118,10 @@ a platform admin approved, and private egress allowed for development, use the p
 
 ## Residual risk, accepted
 
-What is recorded below was the reasoning while the race was open.
+What is recorded below was the reasoning while the race was open. The obvious fix then was
+to connect to the resolved address literally instead of to the name.
 
-We do not do that, because it breaks TLS. A certificate is presented for a hostname; a
+We did not do that, because it breaks TLS. A certificate is presented for a hostname; a
 connection opened to a literal address either fails verification or has to be told to skip
 it, and skipping certificate verification to close an SSRF hole trades a narrow race for a
 wider hole. The proper fix is a socket-level hook that validates the peer address after

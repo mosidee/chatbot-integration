@@ -40,7 +40,7 @@ import {
 import { handOffAfterFailure, processAiTurn } from '../src/processors/ai-turn'
 import { processIdleResolve } from '../src/processors/idle-resolve'
 import { processInbound } from '../src/processors/inbound'
-import { processOutbound } from '../src/processors/outbound'
+import { markDeliveryFailed, processOutbound } from '../src/processors/outbound'
 import { processSuggestion } from '../src/processors/suggestion'
 import { processSummarize } from '../src/processors/summarize'
 import { processWaitingHumanTimeout } from '../src/processors/waiting-human'
@@ -1209,7 +1209,8 @@ describe('the waiting-human fallback timer', () => {
       settings: { waitingHumanFallbackMinutes: 1 },
     })
 
-    await customerSays(f, 'question')
+    // In Thai: the apology is in the language the customer typed.
+    await customerSays(f, 'มีคำถามค่ะ')
     await runQueuedWork(f)
     const conversation = await onlyConversation(f)
 
@@ -3360,6 +3361,93 @@ describe('the review, phase B', () => {
 
     const told = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'system')
     expect(told.map((m) => m.text)).toEqual(['รอสักครู่นะคะ'])
+  })
+
+  /**
+   * The unsupported-media handoff and the waiting timer pass no language, and used to fall
+   * back to the customer's record — the workspace default, never updated — so a Thai
+   * customer in an English workspace was answered in English.
+   */
+  test('an unsupported-media handoff uses the language the customer typed', async () => {
+    const provider = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url, settings: { defaultLanguage: 'en' } })
+    await customerSays(f, 'สวัสดีค่ะ มีคำถามค่ะ')
+    await drainQueue(f, f.queues.ai_turn)
+
+    const outcome = await ingestInternal(f.runtime, f.runtime.db, {
+      channelId: f.channelId,
+      expectedType: 'test',
+      body: {
+        externalId: 'sim-customer-1',
+        displayName: 'Nok',
+        eventId: `evt-${crypto.randomUUID()}`,
+        message: {
+          kind: 'video',
+          text: null,
+          attachments: [
+            {
+              storageKey: null,
+              sourceUrl: null,
+              mime: 'video/mp4',
+              sizeBytes: null,
+              fileName: null,
+              width: null,
+              height: null,
+            },
+          ],
+        },
+      },
+    })
+    if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
+    await drainQueue(f, f.queues.inbound)
+    await processInbound(f.runtime, portsFor(f), f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      channelId: f.channelId,
+      inboundEventId: outcome.inboundEventId,
+    })
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.mode).toBe('waiting_human')
+    const told = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'system')
+    expect(told.map((m) => m.text)).toEqual(['รอสักครู่นะคะ'])
+  })
+
+  /**
+   * A delivery job that failed for good before reaching the send — its channel could not be
+   * loaded — used to leave the message `queued` for ever, so nobody was offered a resend.
+   */
+  test('a delivery that failed for good outside the send reads failed', async () => {
+    const provider = mock([{ kind: 'text', text: 'คำตอบค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    await customerSays(f, 'ถามหน่อยค่ะ')
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+    const reply = (await messagesOf(f, conversation.id)).find((m) => m.senderType === 'ai')
+    if (!reply) throw new Error('no reply')
+    await f.runtime.db
+      .update(schema.messages)
+      .set({ status: 'queued' })
+      .where(eq(schema.messages.id, reply.id))
+
+    const job = { workspaceId: f.workspaceId, conversationId: conversation.id, messageId: reply.id }
+    await markDeliveryFailed(f.runtime, job, new Error('channel could not be decrypted'))
+    const [after] = await f.runtime.db
+      .select({ status: schema.messages.status, error: schema.messages.error })
+      .from(schema.messages)
+      .where(eq(schema.messages.id, reply.id))
+    expect(after).toEqual({ status: 'failed', error: 'channel could not be decrypted' })
+
+    // A message that did go out is never marked failed after the fact.
+    await f.runtime.db
+      .update(schema.messages)
+      .set({ status: 'sent', error: null })
+      .where(eq(schema.messages.id, reply.id))
+    await markDeliveryFailed(f.runtime, job, new Error('late'))
+    const [still] = await f.runtime.db
+      .select({ status: schema.messages.status })
+      .from(schema.messages)
+      .where(eq(schema.messages.id, reply.id))
+    expect(still?.status).toBe('sent')
   })
 
   test('a turn that failed for good is handed to a person, once', async () => {

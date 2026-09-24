@@ -5,13 +5,10 @@ import type { BlobStore } from '@ci/core'
 /**
  * Filesystem-backed object storage, for local development.
  *
- * Selected by setting `S3_ENDPOINT` to a `file://` path. It exists because Colima's port
- * forwarder on macOS corrupts SigV4-signed requests, so a host process cannot talk to a
- * MinIO container even though containers on the same network can. Rather than make every
- * developer reconfigure their VM, the BlobStore port lets the storage implementation swap.
- *
- * Production and CI use the S3 implementation; this one is never used when
- * `S3_ENDPOINT` is an http(s) URL.
+ * Selected by setting `S3_ENDPOINT` to a `file://` path, which local development and CI do.
+ * It began as a way round Colima's port forwarder corrupting SigV4 requests to a local MinIO
+ * (ADR 0002); since MinIO was removed it is simply the store wherever there is no bucket.
+ * Production uses the S3 implementation against Cloudflare R2 (ADR 0008).
  */
 export function createFilesystemBlobStore(root: string, publicUrl: string): BlobStore {
   const base = resolve(root)

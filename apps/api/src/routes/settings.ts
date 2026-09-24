@@ -303,8 +303,11 @@ export function settingsRoutes(ctx: ApiContext) {
                   .object({
                     enabled: z.boolean().optional(),
                     url: z.string().url().nullable().optional(),
-                    /** Omit to keep the stored secret; send an empty string to clear it. */
-                    secret: z.string().optional(),
+                    /**
+                     * Omit to keep the stored secret; send an empty string to clear it. A
+                     * short one could be guessed, and it is what proves an identity.
+                     */
+                    secret: z.union([z.literal(''), z.string().min(16)]).optional(),
                     ttlMinutes: z.number().int().min(1).max(1440).optional(),
                   })
                   .optional(),

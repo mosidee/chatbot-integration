@@ -76,16 +76,17 @@ S3_PUBLIC_URL=/api/v1/uploads
 The bucket needs no public access: media leaves through the API's signed links.
 
 LINE photos can be fetched through a Cloudflare Worker, which matters wherever the server's
-route to LINE's Tokyo servers is poor (ADR 0009). Deploy `workers/line-media` with
-`bunx wrangler deploy`, set its `PROXY_SECRET` with `bunx wrangler secret put PROXY_SECRET`,
-and give the server the same secret:
+route to LINE's Tokyo servers is poor (ADR 0009). `workers/` is not a Bun workspace, so run
+these from its folder: `cd workers/line-media`, then `bunx wrangler deploy`, then
+`bunx wrangler secret put PROXY_SECRET`. Give the server the same secret:
 
 ```
 LINE_MEDIA_PROXY_URL=https://chatbot-line-media.<your-subdomain>.workers.dev
 LINE_MEDIA_PROXY_SECRET=<the same random secret, 32 characters or more>
 ```
 
-Without them LINE media is fetched directly.
+Without them LINE media is fetched directly. Set both or neither (the server refuses to start
+with one), and the URL must be https.
 
 Any other S3-compatible store works the same way. The bundled MinIO was removed on
 2026-09-24 after MinIO stopped publishing its images (ADR 0008).
@@ -192,7 +193,9 @@ Then sign in, open **Settings**, add an AI provider with its base URL and key, p
 arrive within seconds.
 
 The worker has its own health endpoint on port 3001 inside the network, reporting whether the
-database and Redis are reachable and how many queues it is consuming.
+database and Redis are reachable, how many queues it is consuming, and the outbox (rows
+waiting to be relayed and the age of the oldest). It calls itself degraded when the oldest
+has waited more than a minute.
 
 ## Connecting LINE and Messenger
 
@@ -229,6 +232,18 @@ touched, an agent's own words are left as they wrote them, and `content` keeps t
 original in every case. Safe to run twice: a row already converted does not change again. It can run at any time
 after the deploy, and a fresh installation never needs it.
 
+### One-off: folding conversations that were split
+
+Before conversations were kept one per channel identity, a returning customer could end up
+with several threads. `conversations:merge` folds them into the oldest, repointing every table
+keyed by conversation. It is dry by default and irreversible when it writes, so take a
+`pg_dump` first.
+
+```bash
+docker compose exec api bun run conversations:merge                                   # what it would do
+docker compose exec -e CONFIRM_MERGE_CONVERSATIONS=yes api bun run conversations:merge  # does it
+```
+
 ### Private model gateways after migration 0011
 
 Before 0011, provider and external-retrieval URLs were fetched without the egress guard.
@@ -244,7 +259,7 @@ Take a `pg_dump` before deploying it, as for any migration that writes data.
 
 All three add columns and write data, so take a `pg_dump` first.
 
-- **0012** adds `invitation_issuer`, `messages.sent_at` (back-filled from `created_at` for
+- **0012** adds `workspace_invitations.issuer_scope` (the `invitation_issuer` enum), `messages.sent_at` (back-filled from `created_at` for
   sent messages), and the unique membership index `member_org_user_uq`, deleting any
   duplicate memberships first (the oldest is kept). Reset links issued before it read as
   workspace-issued, so one sent by a platform admin to somebody in two workspaces is refused
@@ -305,7 +320,8 @@ media. To grow:
    one-shot job, then start the replicas.
 2. Run more `api` and `worker` containers behind the proxy. No sticky sessions are needed.
 3. Put PgBouncer in front of Postgres; several replicas multiply connections.
-4. Move media to R2 or S3 by changing the `S3_*` variables only.
+4. Media is already off the box, in R2. Any other S3-compatible store is a change to the
+   `S3_*` variables only.
 5. When one machine is not enough, push the same images to Fly.io, Cloud Run or Kubernetes.
    Nothing in the code assumes a single host.
 

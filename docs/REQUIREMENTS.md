@@ -1,6 +1,6 @@
 # chatbot-integration — Requirements and Feature List
 
-Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass and the security-review fixes. Edit freely; this is the source of truth for scope.
+Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass, the security-review fixes, the second group of residuals, the move of media to Cloudflare R2 and the LINE media Worker. Edit freely; this is the source of truth for scope.
 
 ## 1. Purpose
 
@@ -12,10 +12,10 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 
 | # | Decision | Choice | Why |
 |---|---|---|---|
-| 1 | Tenancy | Single business now, **tenant-ready schema** (`workspace_id` on every table), one workspace of UI | Cheap now, keeps SaaS door open |
+| 1 | Tenancy | Started as one business on a **tenant-ready schema** (`workspace_id` on every table); multi-tenant since M6, with a workspace switcher and platform admins (§3.11) | Cheap at the start, and it kept the SaaS door open |
 | 2 | Build vs fork | **Build ourselves**, reuse libraries only | AI+human loop lives in the GUI; bolting it onto Chatwoot's Rails UI is painful. Chatwoot remains the fallback |
 | 3 | Deployment | **Docker Compose on operator's VPS** (public IP, Nginx Proxy Manager, Let's Encrypt). Scale-up via containers (Fly.io / Cloud Run / k3s / Cloudflare Containers), not Workers | Long LLM calls, WebSockets and ingestion jobs fit containers |
-| 4 | Stack | **Elysia on Bun**, Drizzle ORM, Postgres + pgvector, Redis (BullMQ + pub/sub), MinIO (S3 API), **Vite React SPA** with Tailwind and hand-rolled components, Bun workspaces monorepo, **Zod** schemas shared, hand-written typed `fetch` client | Team preference; thin HTTP layer keeps core framework-free. shadcn/ui, TypeBox and Eden Treaty were in the original plan and not adopted: Eden's route inference slowed the browser typecheck and tied it to the server's |
+| 4 | Stack | **Elysia on Bun**, Drizzle ORM, Postgres + pgvector, Redis (BullMQ + pub/sub), S3-compatible object storage (Cloudflare R2 in production, the filesystem locally; ADR 0008), **Vite React SPA** with Tailwind and hand-rolled components, Bun workspaces monorepo, **Zod** schemas shared, hand-written typed `fetch` client | Team preference; thin HTTP layer keeps core framework-free. shadcn/ui, TypeBox and Eden Treaty were in the original plan and not adopted: Eden's route inference slowed the browser typecheck and tied it to the server's |
 | 5 | Customer identity | Contact per channel identity → `customers` record; **merge suggested** by shared phone / order ID, **human confirms**; never auto-merge | Avoid leaking one customer's history to another |
 | 6 | Conversation modes | `ai` (default for pilot), `ai_supervised`, `human`, `waiting_human`; selectable per workspace / channel / conversation. **AI never sends while mode is `human`** | Trusted pilot partner; supervised mode ready for later |
 | 7 | AI capabilities | **Tool-using agent**: internal tools first, the registry designed for HTTP tools and MCP later. Both halves happened — see rows 18 to 20. Fallback to answer-only for models without function calling | Option 3 is "register another tool" |
@@ -31,13 +31,13 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 17 | Phasing | M1 skeleton+loop → M2 knowledge+memory → M3 real channels → M4 pilot readiness → M5 salon-saas tools → M6 tenant and user management. v1 = M1–M4 | Architecture proven before features pile on |
 | 18 | Tool extensibility | The agent takes tool **sources**, not tools. `http_tool` (one configured endpoint) and an **MCP client** (a connected server's whole set) are two sources behind one interface; both are **tenant-facing**, configured per workspace by an admin. `http_tool` first | `http_tool` is the low floor: any tenant with an endpoint, no server to run. MCP is the ceiling: the tenant owns the definitions and adds tools without us shipping. A source interface from the start keeps the agent loop untouched when the second arrives |
 | 19 | Tool identity | A tool definition separates **arguments the model fills** from **values the system binds** (verified customer, workspace, conversation). The model can neither name nor override a bound value, and a tool needing identity cannot run in a conversation where identity was never proven | Letting a model choose whose account to read is the cross-customer leak in a new place. `get_customer_profile` already does this with an empty input schema; the config format promotes it |
-| 20 | Tenant-defined egress | A tenant-defined tool is fetched through a **restricted client**: HTTPS only, hostname resolved and the resolved address checked, loopback / private / link-local / CGNAT refused, re-checked on redirect. Provider and external-retrieval URLs too, since tenants have their own admins; a private gateway is reachable only when a platform admin approves its origin for that tenant (ADR 0004) | A tenant typing a URL gets a request origin inside our network: the worker shares a network with Postgres, Redis and MinIO, and the model gateway answers on a private address. Checking the hostname alone survives neither a name that resolves inward nor one that changes answer after the check |
+| 20 | Tenant-defined egress | A tenant-defined tool is fetched through a **restricted client**: HTTPS only, hostname resolved and the resolved address checked, loopback / private / link-local / CGNAT refused, re-checked on redirect. Provider and external-retrieval URLs too, since tenants have their own admins; a private gateway is reachable only when a platform admin approves its origin for that tenant (ADR 0004) | A tenant typing a URL gets a request origin inside our network: the worker shares a network with Postgres and Redis, and the model gateway answers on a private address. Checking the hostname alone survives neither a name that resolves inward nor one that changes answer after the check |
 | 21 | Identity proofs | Two ways to prove who a customer is, each switched on and off separately: a **widget token** the host application signs, and a **one-time verification link** the person follows and confirms inside that application. A proof that is switched off still identifies a returning visitor, but binds no tool | They are not equivalent, and a tenant should be able to accept one and not the other: a signed token is worth what the application signing it is worth, and a link is worth whatever login sits behind it. Keeping "who is this" separate from "what was proved" is what lets continuity survive turning a proof off |
 | 22 | Platform admin | Who may create and delete tenants is a row in **`platform_admins`**, not a role on a membership. It carries no workspace, and a platform admin reads a tenant's conversations only by inviting themselves into it like anybody else | A role lives inside one tenant; this authority is over tenants, so expressing it as a role would make the word "admin" mean two things and put an ambient cross-tenant path into every permission check. The platform tables also have to outlive a tenant: a workspace's own `audit_log` cascades with it, so it cannot be the record of its own deletion |
 | 23 | Adding a person | An admin issues a **single-use link** and passes it on themselves. Only its hash is stored, it expires, and the same mechanism issues a password reset. Accounts are created by a second auth instance the public API never mounts | There is no mail transport here, and adding one — provider, domain, deliverability, queue — before the first colleague can be invited is the wrong order. The security property is identical either way: the link is the credential, works once, and expires. Keeping sign-up disabled on the mounted instance is what keeps the product invite-only |
 | 24 | Tenant lifecycle | A workspace has a **status**: `active`, `suspended` or `deleting`. Suspended locks members out, drops queued work and acknowledges webhooks without acting; deleting is set before the erasure job runs and is not reversible. Deleting is confirmed by typing the slug | A suspension has to be reversible and cheap, and must not cost the operator their webhook registration: LINE and Meta disable an endpoint that keeps failing, so a suspended tenant answers 200 and discards. Setting the status before the erasure is what stops new rows arriving while the job collects what to delete |
 | 25 | Asking for work | Work is promised as a row in **`outbox`**, written in the transaction that made it necessary, and a relay in the worker moves it to BullMQ. Nothing else touches a queue: `Runtime` carries none | Committing rows and then enqueueing is two systems with no transaction between them, and the gap lost work in four separate places — a customer's message stored but never answered, an AI reply written twice, a tenant stuck mid-deletion. The writer choosing the job id makes relaying and consuming both safe to repeat. See ADR 0006 |
-| 26 | The customer is told | A handoff always sends the customer a **holding message**, in the language of their last message; the waiting-human timer sends a **second, different** one. Both texts are the workspace's own, editable per language | "The AI never goes silent" was enforced from the inside: a turn ended in a reply or a handoff. A handoff told agents and said nothing to the person who asked, so from their side the thread simply stopped. Repeating one sentence minutes apart reads like a machine that has lost its place |
+| 26 | The customer is told | A handoff always sends the customer a **holding message**, in the language they last typed in (then their record, then the workspace default); the waiting-human timer sends a **second, different** one. Both texts are the workspace's own, editable per language | "The AI never goes silent" was enforced from the inside: a turn ended in a reply or a handoff. A handoff told agents and said nothing to the person who asked, so from their side the thread simply stopped. Repeating one sentence minutes apart reads like a machine that has lost its place |
 | 27 | Closing quiet conversations | A conversation **closes itself** after the customer has been quiet for `autoResolveAfterHours` (default 24, off when empty) — only when the AI is answering and our side spoke last. A sweep every 15 minutes, not a timer per conversation | Resolving is what folds a conversation into the customer's summary, so one the customer walked away from was never remembered. Waiting and colleague-owned conversations are owed somebody's reply and are never closed. A sweep reads the truth each time; per-conversation timers would need cancelling on every reply, and a missed cancel closes a live conversation |
 | 28 | Who may open the network | Every URL a tenant admin types — tools, model providers, embeddings, rerank, external retrieval — goes through the restricted client. A private or plain-http origin is reachable only when a **platform admin** approves it **for that tenant** (`workspaces.private_egress_origins`, from the Platform page) | Since tenants have their own admins, the provider form was a tenant's way to make the server fetch any internal address; the `/models` button read the answer back. A self-hosted gateway on a private address is still legitimate, but approving one is an exception to the rule, and the rule cannot let the party it restrains grant it. See ADR 0004 |
 | 29 | Serving stored files | Every stored file goes out through one policy: raster images, audio, video and PDF inline; everything else as a download; always `nosniff`; a script-free CSP `sandbox` on all but PDF. Uploads accept raster images by exact type, never SVG or HTML | Files are served on the console's own origin, with whatever type their sender claimed. An SVG or HTML file opened inline ran as the console, with the signed-in agent's session. A separate media origin is the stronger design and waits on the deployment having a second hostname |
@@ -68,14 +68,15 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [v1] Modes `ai` / `ai_supervised` / `human` / `waiting_human`, defaults per workspace and per channel
 - [v1] AI→human handoff: the `handoff_to_human` tool, with the model choosing the reason from a fixed list. Media the AI cannot read hands off without a turn. (A confidence threshold, a sentiment check and keyword/intent rules were planned and not built; the model's own judgement has covered the pilot)
 - [v1] Handoff reason posted as internal note
-- [UX] The customer is told on every handoff, including media the AI cannot read: `acknowledgementText`, in the language of their last message (`detectLanguage`), editable per language in Settings → General. (`businessHours` is stored and nothing reads it)
+- [UX] The customer is told on every handoff, including media the AI cannot read: `acknowledgementText`, in the language the customer last typed in (`customerLanguageEvidence`; a photo's placeholder text does not count), then their record, then the workspace default; editable per language in Settings → General. (`businessHours` is stored; only its timezone is read, by the dashboard)
 - [v1] One-click take over; one-click return to AI with optional instruction note the AI reads
 - [v1] `waiting_human` queue. After `waitingHumanFallbackMinutes` the customer gets a second, apologetic holding message (`stillWaitingText`) and agents are nudged; the conversation is not handed back to the AI
 - [UX] Conversations close on their own after `autoResolveAfterHours` (default 24, empty = off) when open, the AI is answering, our side spoke last and the customer has been quiet since; the close runs the summary like a manual resolve, leaves an internal note, and a new customer message reopens it
 - [v1] Assignment to agent; status open / resolved; tags. (`snoozed` exists in the enum and nothing sets it)
-- [next] Debounce AI turns so a burst of customer messages produces one considered reply
-  rather than one per message. Needs care: a deterministic job id alone would drop a message
-  that arrived mid-turn
+- [v1] A burst of customer messages gets one considered reply: every message still queues its
+  own turn, and a turn steps aside when a newer message has a turn of its own owed, which
+  answers both (`newerTurnOwed`; recommendation #7). A reply already stored is not recalled if
+  the customer writes after it
 - [later] Auto-return to AI after human inactivity; assignment rules / round-robin; SLA timers
 
 ### 3.3 AI harness
@@ -120,7 +121,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [v1] Provider audit: which provider received which message
 
 ### 3.6 Agent GUI
-- [v1] Inbox list: filters by mode/channel/assignee/tags/status, open and waiting counts as badges on the Inbox from every page (`/v1/conversations/counts`), real-time via WebSocket over Redis pub/sub
+- [v1] Inbox list: filters by mode/channel/assignee/tags/status, search by name, identifier or message text (`?q=`), load-more paging, open and waiting counts as badges on the Inbox from every page (`/v1/conversations/counts`), real-time via WebSocket over Redis pub/sub
 - [M6] A customer has an **account owner**, set from the conversation sidebar, which outlives every conversation they start and is inherited by the next one nobody has claimed
 - [M6] The queue is ordered by that owner first — yours, then unclaimed, then everybody else's — and by longest wait inside each group
 - [v1] Conversation view: channel-specific rendering, internal notes, canned responses with shortcuts
@@ -152,11 +153,11 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 
 ### 3.8 Platform / ops
 - [v1] Bun workspaces monorepo: `apps/api`, `apps/worker`, `apps/web`, `apps/widget`, `packages/core` (framework-free domain), `packages/channels`, `packages/db`, `packages/infra`, `packages/shared`, `packages/config`
-- [v1] Docker Compose: api, worker, web (static via nginx or served by api), postgres+pgvector, redis, minio; `.env.example`
+- [v1] Docker Compose: api (also serves the console and the widget), worker, postgres+pgvector, redis; media in an S3-compatible bucket (R2) outside the stack; `.env.example`
 - [v1] Drizzle migrations; seed script for a workspace, admin user, test channel. [M6] The seed also grants the admin platform admin, since nothing in the running API can create an account
 - [v1] Stateless API, BullMQ queues, S3-compatible storage client, PgBouncer-ready connection handling
 - [v1] Staging on VPS behind Nginx Proxy Manager (WebSocket enabled)
-- [v1] CI: typecheck, lint, unit tests incl. webhook fixture replay
+- [v1] CI: lint, typecheck, migrations, web and widget builds, unit and integration tests incl. webhook fixture replay, browser tests, and both release images built and started healthy
 - [M6] Tenant lifecycle: `active` / `suspended` / `deleting` on the workspace, enforced on every authenticated request, every webhook, the widget, the identity link and every queued job
 - [M6] Queued tenant erasure: rows by cascade, stored media by a list saved before the rows go, recorded in `platform_audit_log` and `workspace_erasures`, both of which outlive the tenant
 - [review] Restricted egress for every tenant-typed URL, private gateways approved per tenant by a platform admin (decision 28); stored files served as downloads or inert media (decision 29)
@@ -338,7 +339,7 @@ without anybody touching the database. Delivered:
   by a check that locks the whole admin set rather than the row being changed.
 - **A workspace status** — `active`, `suspended`, `deleting` — read on every authenticated
   request in the same query as the membership, and honoured by every webhook, the widget,
-  the identity link and every queued job type (nine now, with `idle_resolve`).
+  the identity link and every processing job (nine; the two erasure jobs excepted).
 - **Queued erasure** with a record written before anything is destroyed, so a retry knows
   which stored objects are left and a job with no record deletes nothing. It collects
   knowledge files as well as message attachments, which the existing media sweep never saw.
@@ -409,12 +410,21 @@ was fixed with the review; see below.)
 - **Console and widget:** decisions 30–33, and every UX item — failure states, drafts,
   reachability, scroll anchoring, reconnect, roles, keyboard and dialogs, delivery states,
   save ordering, setup checklist, dashboard definitions, contrast, the widget in English.
-- **Release:** both images built and started in CI; MinIO pinned by digest.
+- **Release:** both images built and started in CI; MinIO pinned by digest (since removed; ADR 0008).
+
+**Second group, 2026-09-24.** Overlapping turns (a superseded turn steps aside; migration
+0015), the redaction inventory (traces, drafts, notes, summaries, facts, field updates,
+vision text), revision conflicts on settings and knowledge entries (409), concurrent
+reindexes (row locks), resending a failed delivery (`failed` only on the last attempt), and
+inbox search (migration 0016). The same day media moved from the bundled MinIO, whose images
+stopped being published, to Cloudflare R2 (ADR 0008), and LINE media began coming through a
+Cloudflare Worker, because the pilot server's route to LINE's content servers ran at about
+14 KB/s (ADR 0009).
 
 What remains is listed in the status table of `recommendation.md` and `UX-AUDIT.md`: a
-separate media origin, a redaction inventory beyond raw events, serialising turns across
-messages, conversation search, per-record revision conflicts, a restore rehearsal, and a
-manual screen-reader pass.
+separate media origin, a restore rehearsal, a manual screen-reader pass, Messenger
+idempotency, stable write keys when a retried model changes its arguments, an "indexed and
+ready" state for knowledge, and agent replies updating `last_message_at`.
 
 ## 3.10 M5 design intent
 
@@ -446,7 +456,7 @@ it harder rather than easier, because a server declares its own arguments; a ten
 that asks for a customer id gets ours or nothing.
 
 **A tenant who can type a URL has a request origin inside our network.** The worker shares a
-Docker network with Postgres, Redis and MinIO, and the model gateway answers on a private
+Docker network with Postgres and Redis (and, then, MinIO), and the model gateway answers on a private
 address, so a tool aimed at an internal host would fetch it and read the answer to a
 customer. Tenant-defined tools therefore go through a restricted client: HTTPS, the
 hostname resolved and the resolved address checked rather than the string, loopback,
@@ -547,4 +557,4 @@ workspace's own audit log cascades with the very deletion it would be the record
 - Who maintains knowledge day to day (assumed partner staff via GUI, admin-gated)
 - Exact 9router API behaviour (model listing, streaming) — verify at integration time
 - Whether humans should see unmasked card/ID numbers (currently: no)
-- Business hours for the pilot (stored, and read by nothing yet). Acknowledgement wording is settled: each workspace edits its own, per language
+- Business hours for the pilot (stored; only the timezone is read, by the dashboard). Acknowledgement wording is settled: each workspace edits its own, per language

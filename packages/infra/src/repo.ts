@@ -40,7 +40,7 @@ export type LoadedWorkspace = {
  * and then asks about the status separately could be told the workspace is fine and act on
  * settings from before a suspension, which is the kind of gap worth closing by construction.
  */
-export async function loadWorkspace(db: Database, workspaceId: string): Promise<LoadedWorkspace> {
+export async function loadWorkspace(db: Executor, workspaceId: string): Promise<LoadedWorkspace> {
   const rows = await db
     .select()
     .from(schema.workspaces)
@@ -52,7 +52,7 @@ export async function loadWorkspace(db: Database, workspaceId: string): Promise<
 }
 
 export async function loadWorkspaceSettings(
-  db: Database,
+  db: Executor,
   workspaceId: string,
 ): Promise<WorkspaceSettings> {
   return (await loadWorkspace(db, workspaceId)).settings
@@ -643,29 +643,6 @@ export async function updateConversation(
         eq(schema.conversations.workspaceId, workspaceId),
       ),
     )
-}
-
-export async function addInternalNote(
-  db: Database,
-  input: {
-    workspaceId: string
-    conversationId: string
-    authorType: SenderType
-    authorUserId?: string | null
-    body: string
-  },
-): Promise<string> {
-  const id = newId()
-  await db.insert(schema.internalNotes).values({
-    id,
-    workspaceId: input.workspaceId,
-    conversationId: input.conversationId,
-    authorType: input.authorType,
-    authorUserId: input.authorUserId ?? null,
-    body: redactText(input.body, (await loadWorkspaceSettings(db, input.workspaceId)).redaction)
-      .text,
-  })
-  return id
 }
 
 export async function recordTrace(

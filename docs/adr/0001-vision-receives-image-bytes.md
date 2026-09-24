@@ -23,7 +23,9 @@ Images are sent to the provider as AI SDK `file` content parts.
 ## Consequences
 
 - Object storage can stay entirely private. No public bucket, no presigned URLs for vision.
-- Development against MinIO on localhost works with no special configuration.
+- Development against MinIO on localhost works with no special configuration. (MinIO was
+  later removed; media is on the filesystem locally and in Cloudflare R2 in production, ADR
+  0008. The reasoning holds for any bucket.)
 - Request bodies to the provider are larger, since images are inlined rather than linked.
   Acceptable for support screenshots; revisit if customers start sending large photos, in
   which case the worker should downscale before calling the model.
