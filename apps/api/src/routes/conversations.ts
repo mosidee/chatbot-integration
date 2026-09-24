@@ -136,7 +136,10 @@ export function conversationRoutes(ctx: ApiContext) {
             const pattern = `%${query.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
             filters.push(sql`(
               ${schema.customers.displayName} ilike ${pattern}
-              or ${schema.customers.fields}::text ilike ${pattern}
+              or exists (
+                select 1 from jsonb_each_text(${schema.customers.fields}) field
+                where field.value ilike ${pattern}
+              )
               or exists (
                 select 1 from ${schema.messages} m
                 where m.conversation_id = ${schema.conversations.id}

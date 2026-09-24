@@ -95,6 +95,8 @@ describe('searching the inbox', () => {
     expect(await namesFor(`somchai ${token}`)).toEqual([`Somchai ${token}`])
     expect(await namesFor('0812345')).toEqual([`Somchai ${token}`])
     expect(await namesFor('แพ็กเกจรายปี')).toEqual([`Somchai ${token}`])
+    // The name of a field is not something anybody said or is called.
+    expect(await namesFor('phone')).toEqual([])
   })
 
   test('treats % and _ as the characters they are', async () => {

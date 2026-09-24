@@ -589,10 +589,11 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>
   older turn. `outbox_job_id_idx` (migration 0015) keeps the lookup cheap.
 - **Settings and knowledge entries carry a revision** (`revision` from `GET /settings/
   workspace`, an entry's `updatedAt`). A save sends the one it started from and a mismatch
-  is a 409, so nobody overwrites a value they never saw. The console sends saves one at a
-  time, taking each revision from the previous response, and the settings query never
-  refetches in the background: its fields are uncontrolled, so a refetch would move the
-  revision on without moving what they show. Omitting `revision` still overwrites.
+  is a 409, so nobody overwrites a value they never saw. **Never take that revision from the
+  query cache at save time**: the socket's reconnect refetches every query, which moves the
+  cache on while the fields still show the old text. Settings keep it in a ref (first load,
+  own saves, a conflict); the entry editor takes it at focus and follows its own chain of
+  saves through a map. Saves go one at a time. Omitting `revision` still overwrites.
 - **Index swaps re-check under a lock.** `indexEntry` locks the entry and stores nothing if
   its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
   the source row, since two concurrent swaps could not see each other's new entry and left

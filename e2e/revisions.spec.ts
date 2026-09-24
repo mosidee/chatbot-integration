@@ -56,3 +56,51 @@ test('a save over a colleague’s newer settings is refused and shows their vers
     })
   }
 })
+
+test('an entry edit started before a colleague’s change is refused, even after a refresh', async ({
+  page,
+  request,
+}) => {
+  await apiSignIn(request)
+  const title = `revision ${uniqueToken()}`
+  const created = await request.post(`${API_URL}/api/v1/knowledge/sources`, {
+    data: { title, language: 'en', question: null, body: 'The trial is fourteen days.' },
+  })
+  const { sourceId } = (await created.json()) as { sourceId: string }
+
+  try {
+    await signIn(page)
+    await page.goto('/knowledge')
+    await page.getByTestId(`knowledge-source-${sourceId}`).click()
+    const body = page.getByTestId('entry-body')
+    await expect(body).toHaveValue('The trial is fourteen days.')
+    // Editing starts from the version on screen.
+    await body.click()
+
+    const { entries } = (await (
+      await request.get(`${API_URL}/api/v1/knowledge/sources/${sourceId}/entries`)
+    ).json()) as { entries: { id: string; updatedAt: string }[] }
+    const entry = entries[0]
+    if (!entry) throw new Error('the source has no entry')
+    const theirs = 'The trial is thirty days.'
+    const saved = await request.patch(`${API_URL}/api/v1/knowledge/entries/${entry.id}`, {
+      data: { body: theirs, revision: entry.updatedAt },
+    })
+    expect(saved.ok()).toBe(true)
+
+    // The console refreshes the entry in the background while the field is being edited,
+    // which is what used to hand the save the colleague's revision.
+    // Past the console's ten-second freshness, so returning to the tab refetches.
+    await page.waitForTimeout(10_500)
+    const refreshed = page.waitForResponse((r) => r.url().endsWith(`/sources/${sourceId}/entries`))
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')))
+    await refreshed
+
+    await body.fill('The trial is seven days.')
+    await body.blur()
+    await expect(page.getByTestId('entry-conflict')).toBeVisible()
+    await expect(body).toHaveValue(theirs)
+  } finally {
+    await request.delete(`${API_URL}/api/v1/knowledge/sources/${sourceId}`)
+  }
+})

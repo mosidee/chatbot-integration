@@ -134,6 +134,7 @@ function SourceRow({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
+          data-testid={`knowledge-source-${source.id}`}
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className="min-w-0 flex-1 text-left"
@@ -236,31 +237,39 @@ function EntryEditor({
   const [question, setQuestion] = useState(entry.question ?? '')
   const [body, setBody] = useState(entry.body)
   const [editing, setEditing] = useState<'question' | 'body' | null>(null)
-  /**
-   * The version the fields were filled from, sent with every save so that one made over a
-   * colleague's newer text is refused rather than silently replacing it. Not moved on while
-   * a field is being edited: that field still holds what was typed over the older version.
-   */
-  const known = useRef(entry.updatedAt)
   const [conflict, setConflict] = useState(false)
   useEffect(() => {
     if (editing !== 'question') setQuestion(entry.question ?? '')
     if (editing !== 'body') setBody(entry.body)
-    if (editing === null) known.current = entry.updatedAt
-  }, [entry.question, entry.body, entry.updatedAt, editing])
+  }, [entry.question, entry.body, editing])
 
-  /** One save at a time, each carrying the revision the previous one returned. */
+  /**
+   * The version a field showed when somebody started editing it, sent with the save so that
+   * one made over a colleague's newer text is refused rather than silently replacing it.
+   * Taken at focus, not at blur: the entries query refetches in the background, and by the
+   * blur it may already hold the colleague's revision while the field holds the old text.
+   */
+  const startedFrom = useRef(entry.updatedAt)
+  /**
+   * What this editor's own saves turned each revision into. A second save that started from
+   * the version the first one replaced is still this person's own chain, not a conflict.
+   */
+  const successors = useRef(new Map<string, string>())
+
+  /** One save at a time, so each can follow the revision the previous one returned. */
   const queue = useRef<Promise<unknown>>(Promise.resolve())
   const save = useMutation({
-    mutationFn: (patch: Record<string, unknown>) => {
+    mutationFn: ({ patch, base }: { patch: Record<string, unknown>; base: string }) => {
       const run = queue.current
         .catch(() => undefined)
         .then(async () => {
-          const saved = await api.knowledge.updateEntry(entry.id, {
-            ...patch,
-            revision: known.current,
-          })
-          if (saved.revision) known.current = saved.revision
+          let revision = base
+          for (let next = successors.current.get(revision); next; ) {
+            revision = next
+            next = successors.current.get(revision)
+          }
+          const saved = await api.knowledge.updateEntry(entry.id, { ...patch, revision })
+          if (saved.revision) successors.current.set(revision, saved.revision)
           return saved
         })
       queue.current = run
@@ -288,23 +297,32 @@ function EntryEditor({
           aria-label={t('knowledge.question')}
           value={question}
           placeholder={t('knowledge.question')}
-          onFocus={() => setEditing('question')}
+          onFocus={() => {
+            startedFrom.current = entry.updatedAt
+            setEditing('question')
+          }}
           onChange={(e) => setQuestion(e.target.value)}
           onBlur={() => {
             setEditing(null)
-            if (question !== entry.question) save.mutate({ question })
+            if (question !== entry.question) {
+              save.mutate({ patch: { question }, base: startedFrom.current })
+            }
           }}
         />
       ) : null}
       <Textarea
+        data-testid="entry-body"
         aria-label={t('knowledge.answer')}
         rows={entry.question === null ? 8 : 4}
         value={body}
-        onFocus={() => setEditing('body')}
+        onFocus={() => {
+          startedFrom.current = entry.updatedAt
+          setEditing('body')
+        }}
         onChange={(e) => setBody(e.target.value)}
         onBlur={() => {
           setEditing(null)
-          if (body !== entry.body) save.mutate({ body })
+          if (body !== entry.body) save.mutate({ patch: { body }, base: startedFrom.current })
         }}
       />
       <div className="flex items-center gap-3">
@@ -312,7 +330,9 @@ function EntryEditor({
           <input
             type="checkbox"
             checked={entry.enabled}
-            onChange={(e) => save.mutate({ enabled: e.target.checked })}
+            onChange={(e) =>
+              save.mutate({ patch: { enabled: e.target.checked }, base: entry.updatedAt })
+            }
           />
           {t('knowledge.enabled')}
         </label>
