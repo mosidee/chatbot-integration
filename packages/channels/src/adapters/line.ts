@@ -40,12 +40,6 @@ function clientFor(config: LineConfig): messagingApi.MessagingApiClient {
   return new messagingApi.MessagingApiClient({ channelAccessToken: config.channelAccessToken })
 }
 
-function blobClientFor(config: LineConfig): messagingApi.MessagingApiBlobClient {
-  return new messagingApi.MessagingApiBlobClient({
-    channelAccessToken: config.channelAccessToken,
-  })
-}
-
 /** A LINE event only concerns us when it comes from a single user, not a group or room. */
 function userIdOf(source: webhook.Source | undefined): string | null {
   if (!source) return null
@@ -449,13 +443,26 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
     }
   },
 
-  async fetchMedia(reference: string, config: LineConfig) {
+  /**
+   * A plain request rather than the SDK's blob client, which cannot be cancelled. LINE's
+   * content endpoint sometimes stalls — 107 seconds for one photo on 2026-09-24 — and the
+   * customer's answer waits on this download, so the caller must be able to give up on an
+   * attempt and start a fresh one.
+   */
+  async fetchMedia(reference: string, config: LineConfig, options?: { signal?: AbortSignal }) {
     const messageId = reference.startsWith('line:') ? reference.slice('line:'.length) : reference
-    const blob = await blobClientFor(config).getMessageContent(messageId)
-    const buffer = await new Response(blob as unknown as ReadableStream).arrayBuffer()
+    const response = await fetch(
+      `https://api-data.line.me/v2/bot/message/${encodeURIComponent(messageId)}/content`,
+      {
+        headers: { authorization: `Bearer ${config.channelAccessToken}` },
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+    )
+    if (!response.ok) throw new Error(`LINE content fetch failed with ${response.status}`)
+    const buffer = await response.arrayBuffer()
     const data = new Uint8Array(new ArrayBuffer(buffer.byteLength))
     data.set(new Uint8Array(buffer))
-    return { data, mime: 'application/octet-stream' }
+    return { data, mime: response.headers.get('content-type') ?? 'application/octet-stream' }
   },
 }
 

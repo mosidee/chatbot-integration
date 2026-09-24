@@ -452,9 +452,9 @@ export const messengerChannelAdapter: ChannelAdapter<MessengerConfig> = {
     }
   },
 
-  async fetchMedia(reference: string) {
+  async fetchMedia(reference: string, _config: unknown, options?: { signal?: AbortSignal }) {
     // The webhook hands over a signed CDN URL; no token is needed, and it expires.
-    const response = await fetch(reference)
+    const response = await fetch(reference, options?.signal ? { signal: options.signal } : {})
     if (!response.ok) throw new Error(`Media fetch failed with ${response.status}`)
 
     const buffer = await response.arrayBuffer()

@@ -600,3 +600,9 @@ Co-Authored-By: Claude <model> <noreply@anthropic.com>
   its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
   the source row, since two concurrent swaps could not see each other's new entry and left
   the document indexed twice.
+- **Every inbound media download has a deadline** (`MEDIA_ATTEMPT_MS`, 15 s, two attempts),
+  handed to the adapter as a signal and enforced by a race besides. LINE's content endpoint
+  sometimes stalls instead of failing: one photo held the answer for 107 s, the reply token
+  expired and the answer went as a billed push. LINE media is fetched with a plain request
+  because the SDK's blob client cannot be cancelled. The S3 client has connection and
+  request timeouts for the same reason.

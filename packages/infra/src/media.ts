@@ -20,6 +20,14 @@ import { safeKeySegment } from './media-serving'
 
 const MAX_BYTES = 25 * 1024 * 1024
 
+/**
+ * How long one download attempt may take. A photo normally arrives in about a second; LINE's
+ * content endpoint occasionally stalls instead of failing, and with no limit one photo held
+ * the customer's answer for 107 seconds — long enough that the free reply token expired and
+ * the answer went out as a billed push.
+ */
+export const MEDIA_ATTEMPT_MS = 15_000
+
 export type MediaResolution = {
   message: NormalizedMessage
   downloaded: number
@@ -41,6 +49,8 @@ export async function resolveInboundMedia(
      * same objects again rather than leaving the first attempt's copies behind unreferenced.
      */
     eventKey?: string
+    /** Per-attempt limit; tests shorten it. */
+    attemptMs?: number
   },
 ): Promise<MediaResolution> {
   if (
@@ -64,8 +74,8 @@ export async function resolveInboundMedia(
       if (attachment.storageKey || !attachment.sourceUrl) return attachment
 
       try {
-        const fetched = await withRetry(() =>
-          fetchMedia(attachment.sourceUrl as string, input.config as never),
+        const fetched = await withRetry(input.attemptMs ?? MEDIA_ATTEMPT_MS, (signal) =>
+          fetchMedia(attachment.sourceUrl as string, input.config as never, { signal }),
         )
 
         if (fetched.data.byteLength > MAX_BYTES) {
@@ -101,12 +111,31 @@ export async function resolveInboundMedia(
   return { message: { ...message, attachments }, downloaded, failed }
 }
 
-/** One retry: platform blob endpoints are occasionally slow rather than broken. */
-async function withRetry<T>(run: () => Promise<T>): Promise<T> {
+/**
+ * Two attempts, each with its own deadline: platform blob endpoints are occasionally slow
+ * rather than broken, and a fresh connection usually succeeds where a stalled one would not.
+ * The deadline is enforced here as well as handed to the adapter, so one that ignores the
+ * signal still cannot hold the turn.
+ */
+async function withRetry<T>(
+  attemptMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const attempt = () => {
+    const signal = AbortSignal.timeout(attemptMs)
+    return Promise.race([
+      run(signal),
+      new Promise<never>((_, reject) => {
+        signal.addEventListener('abort', () =>
+          reject(new Error(`download took longer than ${attemptMs} ms`)),
+        )
+      }),
+    ])
+  }
   try {
-    return await run()
+    return await attempt()
   } catch {
-    return run()
+    return attempt()
   }
 }
 

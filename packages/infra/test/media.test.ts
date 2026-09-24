@@ -144,6 +144,64 @@ describe('resolveInboundMedia', () => {
     expect(result.downloaded).toBe(1)
   })
 
+  /**
+   * LINE's content endpoint sometimes stalls rather than failing. With no limit, one photo
+   * held the customer's answer for 107 seconds; now a stalled attempt is abandoned and a
+   * fresh one made.
+   */
+  test('abandons a stalled attempt and retries, even when the adapter ignores the signal', async () => {
+    const { store } = memoryBlobStore()
+    const { logger } = collectingLogger()
+    let attempts = 0
+    let abortedFirst = false
+    const started = Date.now()
+
+    const result = await resolveInboundMedia(imageMessage('line:stalls'), {
+      workspaceId: 'ws-1',
+      channelType: 'line',
+      attemptMs: 50,
+      adapter: {
+        fetchMedia: async (_reference, _config, options) => {
+          attempts += 1
+          if (attempts === 1) {
+            options?.signal?.addEventListener('abort', () => {
+              abortedFirst = true
+            })
+            // Never settles, like a connection that stopped sending.
+            return new Promise(() => {})
+          }
+          return { data: bytes([9]), mime: 'image/jpeg' }
+        },
+      },
+      config: {},
+      blob: store,
+      logger,
+    })
+
+    expect(attempts).toBe(2)
+    expect(abortedFirst).toBe(true)
+    expect(result.downloaded).toBe(1)
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+
+  test('gives up after two stalled attempts and keeps the message', async () => {
+    const { store } = memoryBlobStore()
+    const { logger, warnings } = collectingLogger()
+
+    const result = await resolveInboundMedia(imageMessage('line:gone-quiet'), {
+      workspaceId: 'ws-1',
+      channelType: 'line',
+      attemptMs: 30,
+      adapter: { fetchMedia: () => new Promise(() => {}) },
+      config: {},
+      blob: store,
+      logger,
+    })
+
+    expect(result.failed).toBe(1)
+    expect(warnings).toContain('could not download inbound media')
+  })
+
   test('refuses media above the size limit', async () => {
     const { store } = memoryBlobStore()
     const { logger } = collectingLogger()
