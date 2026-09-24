@@ -22,6 +22,12 @@ import { NoSlotConfiguredError } from '../ai/types'
 export type EmbedResult = {
   embeddings: number[][]
   model: string
+  /**
+   * The space these vectors belong to. Stored beside them and matched at query time, so a
+   * fallback model, or a slot switched to another model, never has its vectors compared
+   * with ones they are not comparable to.
+   */
+  space: string
   usedFallback: boolean
 }
 
@@ -120,7 +126,13 @@ export async function embedTexts(
   options: { maxRetries?: number } = {},
 ): Promise<EmbedResult> {
   if (values.length === 0) {
-    return { embeddings: [], model: slot.primary?.model ?? '', usedFallback: false }
+    const model = slot.primary?.model ?? ''
+    return {
+      embeddings: [],
+      model,
+      space: embeddingSpace(model, slot.params.sendDimensions !== false),
+      usedFallback: false,
+    }
   }
 
   const targets: { target: SlotTarget; usedFallback: boolean }[] = []
@@ -136,7 +148,12 @@ export async function embedTexts(
     try {
       const embeddings = await attempt(target, values, dimensions, maxRetries, sendDimensions)
       assertDimensions(embeddings, dimensions, target.model, sendDimensions)
-      return { embeddings, model: target.model, usedFallback }
+      return {
+        embeddings,
+        model: target.model,
+        space: embeddingSpace(target.model, sendDimensions),
+        usedFallback,
+      }
     } catch (error) {
       lastError = error
     }
@@ -161,4 +178,13 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   }
   const denominator = Math.sqrt(normA) * Math.sqrt(normB)
   return denominator === 0 ? 0 : dot / denominator
+}
+
+/**
+ * Name the space a model's vectors live in. The model, and whether it was asked for a size:
+ * the same model answering natively and answering truncated to a size are different spaces.
+ * Not the provider: one model served by two gateways is still one space.
+ */
+export function embeddingSpace(model: string, sendDimensions: boolean): string {
+  return `${model}|${sendDimensions ? 'dims' : 'native'}`
 }

@@ -407,6 +407,13 @@ export const conversations = pgTable(
      * re-enter the review queue or slip out of it.
      */
     reviewedAt: ts('reviewed_at'),
+    /**
+     * The last message already folded into the customer's summary and recall. A
+     * conversation is permanent and reopens, so each summary takes what came after this
+     * rather than the first two hundred messages again, which never reached a long thread's
+     * end. An id, not a time: ids are time-ordered and compare exactly.
+     */
+    summarizedThroughMessageId: text('summarized_through_message_id'),
     reviewedByUserId: text('reviewed_by_user_id').references(() => user.id, {
       onDelete: 'set null',
     }),

@@ -53,13 +53,7 @@ export async function indexEntry(
   //
   // Without an embedding provider the chunks are still stored, so keyword retrieval works;
   // the embedding column stays null and a later re-index fills it in.
-  let embeddings: number[][] = []
-  let model: string | null = null
-  if (embedSlot) {
-    const embedded = await embedTexts(embedSlot, pieces, dimensions)
-    embeddings = embedded.embeddings
-    model = embedded.model
-  }
+  const { embeddings, model, space } = await embedPieces(embedSlot, pieces, dimensions)
 
   // Replace atomically, so retrieval never sees an entry mid-rewrite.
   await db.transaction(async (tx) => {
@@ -75,11 +69,89 @@ export async function indexEntry(
         text,
         embedding: embeddings[index] ?? null,
         embeddingModel: model,
+        embeddingSpace: space,
       })),
     )
   })
 
   return { chunks: pieces.length, model, skipped: false }
+}
+
+/**
+ * Embed pieces of text, or report that there is nothing to embed with.
+ *
+ * Without an embedding provider the chunks are still stored, so keyword retrieval works;
+ * the embedding column stays null and a later re-index fills it in.
+ */
+async function embedPieces(
+  embedSlot: SlotConfig | null,
+  pieces: string[],
+  dimensions: number,
+): Promise<{ embeddings: number[][]; model: string | null; space: string | null }> {
+  if (!embedSlot || pieces.length === 0) return { embeddings: [], model: null, space: null }
+  const embedded = await embedTexts(embedSlot, pieces, dimensions)
+  return { embeddings: embedded.embeddings, model: embedded.model, space: embedded.space }
+}
+
+/**
+ * Replace a file source's content with freshly parsed text, keeping the old index until the
+ * new one is ready.
+ *
+ * Re-ingesting used to delete the old entries first, and the cascade took their chunks with
+ * them before the new text had been embedded: an embedding outage mid-reindex left the
+ * document answering nothing. Everything slow happens first; the swap is one transaction.
+ */
+export async function replaceFileSource(
+  db: Database,
+  input: { workspaceId: string; sourceId: string; language: Language; body: string },
+  embedSlot: SlotConfig | null,
+  dimensions = EMBEDDING_DIMENSIONS,
+): Promise<{ chunks: number }> {
+  const pieces = chunkQa(null, input.body)
+  const { embeddings, model, space } = await embedPieces(embedSlot, pieces, dimensions)
+
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.sourceId, input.sourceId),
+          eq(schema.knowledgeEntries.workspaceId, input.workspaceId),
+        ),
+      )
+    const entryId = newId()
+    await tx.insert(schema.knowledgeEntries).values({
+      id: entryId,
+      workspaceId: input.workspaceId,
+      sourceId: input.sourceId,
+      variantGroup: entryId,
+      language: input.language,
+      question: null,
+      body: input.body,
+    })
+    if (pieces.length > 0) {
+      await tx.insert(schema.knowledgeChunks).values(
+        pieces.map((text, index) => ({
+          id: newId(),
+          workspaceId: input.workspaceId,
+          sourceId: input.sourceId,
+          entryId,
+          language: input.language,
+          ord: index,
+          text,
+          embedding: embeddings[index] ?? null,
+          embeddingModel: model,
+          embeddingSpace: space,
+        })),
+      )
+    }
+    await tx
+      .update(schema.knowledgeSources)
+      .set({ status: 'ready', error: null, updatedAt: new Date() })
+      .where(eq(schema.knowledgeSources.id, input.sourceId))
+  })
+
+  return { chunks: pieces.length }
 }
 
 /** Index every entry of a source and record the outcome on the source row. */
@@ -245,6 +317,7 @@ export async function indexConversationText(
       text,
       embedding: embedded.embeddings[index] ?? null,
       embeddingModel: embedded.model,
+      embeddingSpace: embedded.space,
     })),
   )
 

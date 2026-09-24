@@ -66,6 +66,11 @@ export function createTurnRetrieval(
     hasKnowledge: boolean
     /** When set, knowledge comes from that platform instead of our Postgres. */
     externalRetrieval?: ExternalRetrievalConfig | null
+    /**
+     * The oldest message the model is already shown. Recall skips this conversation only
+     * from here on, so an earlier episode of a permanent conversation can be recalled.
+     */
+    activeWindowStart?: Date | null
   },
 ): TurnRetrieval {
   const retriever = input.externalRetrieval
@@ -98,6 +103,7 @@ export function createTurnRetrieval(
           customerId: input.customerId,
           query,
           excludeConversationId: input.conversationId,
+          excludeSince: input.activeWindowStart ?? null,
           limit: 5,
         },
         input.embedSlot,

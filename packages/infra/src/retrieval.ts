@@ -76,10 +76,9 @@ export function createPostgresRetriever(
              OR ${input.channelType ?? null}::text = ANY(e.channel_types))
       `
 
-      const [dense, keyword, embeddingModel] = await Promise.all([
+      const [{ rows: dense, model: embeddingModel }, keyword] = await Promise.all([
         denseSearch(db, input.workspaceId, query, candidates, restrict, options, dimensions),
         keywordSearch(db, input.workspaceId, query, candidates, restrict),
-        Promise.resolve(options.embedSlot?.primary?.model ?? null),
       ])
 
       const fused = fuse(
@@ -162,19 +161,23 @@ async function denseSearch(
   restrict: ReturnType<typeof sql>,
   options: PostgresRetrieverOptions,
   dimensions: number,
-): Promise<ChunkRow[]> {
-  if (!options.embedSlot) return []
+): Promise<{ rows: ChunkRow[]; model: string | null }> {
+  if (!options.embedSlot) return { rows: [], model: null }
 
   let vector: number[] | undefined
+  let space: string
+  let model: string
   try {
     const embedded = await embedTexts(options.embedSlot, [query], dimensions)
     vector = embedded.embeddings[0]
+    space = embedded.space
+    model = embedded.model
   } catch {
     // A dead embedding provider degrades retrieval to keyword-only rather than failing the
     // customer's turn.
-    return []
+    return { rows: [], model: null }
   }
-  if (!vector) return []
+  if (!vector) return { rows: [], model }
 
   const literal = `[${vector.join(',')}]`
 
@@ -186,12 +189,16 @@ async function denseSearch(
     LEFT JOIN knowledge_entries e ON e.id = c.entry_id
     WHERE c.workspace_id = ${workspaceId}
       AND c.embedding IS NOT NULL
+      -- Only vectors from the query's own space are comparable with it. A fallback model
+      -- answering the query, or a slot switched to another model before a reindex, finds
+      -- nothing here and retrieval leans on keywords, rather than ranking by noise.
+      AND c.embedding_space = ${space}
       AND (e.id IS NULL OR (true ${restrict}))
     ORDER BY c.embedding <=> ${literal}::vector
     LIMIT ${candidates}
   `)
 
-  return [...result].map((row) => ({ ...row, score: Number(row.score) }))
+  return { rows: [...result].map((row) => ({ ...row, score: Number(row.score) })), model }
 }
 
 async function keywordSearch(
@@ -241,6 +248,8 @@ export async function searchPastConversations(
     query: string
     limit?: number
     excludeConversationId?: string | null
+    /** Excluded only from here on; earlier parts of that conversation stay recallable. */
+    excludeSince?: Date | null
   },
   embedSlot: SlotConfig | null,
   dimensions = EMBEDDING_DIMENSIONS,
@@ -249,9 +258,11 @@ export async function searchPastConversations(
   if (query.length === 0 || !embedSlot) return []
 
   let vector: number[] | undefined
+  let space: string
   try {
     const embedded = await embedTexts(embedSlot, [query], dimensions)
     vector = embedded.embeddings[0]
+    space = embedded.space
   } catch {
     return []
   }
@@ -259,6 +270,7 @@ export async function searchPastConversations(
 
   const literal = `[${vector.join(',')}]`
   const exclude = input.excludeConversationId ?? null
+  const since = input.excludeSince ? input.excludeSince.toISOString() : null
 
   const result = await db.execute<{
     conversation_id: string
@@ -274,7 +286,13 @@ export async function searchPastConversations(
     WHERE workspace_id = ${input.workspaceId}
       AND customer_id = ${input.customerId}
       AND embedding IS NOT NULL
-      AND (${exclude}::text IS NULL OR conversation_id <> ${exclude}::text)
+      AND embedding_space = ${space}
+      -- The conversation in progress is excluded only from where its visible window begins:
+      -- a conversation is permanent, and what it said in earlier episodes is exactly what
+      -- recall is for. Without a start, the whole conversation is excluded as before.
+      AND (${exclude}::text IS NULL
+           OR conversation_id <> ${exclude}::text
+           OR (${since}::timestamptz IS NOT NULL AND created_at < ${since}::timestamptz))
     ORDER BY embedding <=> ${literal}::vector
     LIMIT ${input.limit ?? 5}
   `)

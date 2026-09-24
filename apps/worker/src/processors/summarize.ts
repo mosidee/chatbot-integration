@@ -15,7 +15,7 @@ import {
   workspaceIsWorkable,
   workspaceProviderFetch,
 } from '@ci/infra'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, desc, eq, gt } from 'drizzle-orm'
 
 /**
  * Rewrite a customer's rolling summary, and index the conversation for recall.
@@ -71,7 +71,10 @@ export async function processSummarize(
   // conversation would fold their words into this customer's summary, which is the leak
   // this product refuses, so it is refused here rather than trusted from the queue.
   const owned = await db
-    .select({ id: schema.conversations.id })
+    .select({
+      id: schema.conversations.id,
+      summarizedThrough: schema.conversations.summarizedThroughMessageId,
+    })
     .from(schema.conversations)
     .where(
       and(
@@ -89,12 +92,29 @@ export async function processSummarize(
     return
   }
 
-  const messageRows = await db
-    .select()
-    .from(schema.messages)
-    .where(eq(schema.messages.conversationId, job.conversationId))
-    .orderBy(asc(schema.messages.createdAt))
-    .limit(200)
+  /**
+   * What came after the last summary, newest two hundred of it.
+   *
+   * The previous summary is an input, so only the new part of the conversation needs
+   * reading. Selecting the first two hundred every time meant a long, reopened conversation
+   * was summarised from its opening for ever and its latest exchanges never reached memory.
+   */
+  const through = owned[0]?.summarizedThrough ?? null
+  const messageRows = (
+    await db
+      .select()
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.workspaceId, job.workspaceId),
+          eq(schema.messages.conversationId, job.conversationId),
+          ...(through ? [gt(schema.messages.id, through)] : []),
+        ),
+      )
+      .orderBy(desc(schema.messages.id))
+      .limit(200)
+  ).reverse()
+  const newestId = messageRows.at(-1)?.id ?? null
 
   const relevant = messageRows.filter((m) => m.content.kind !== 'event')
   if (relevant.length === 0) return
@@ -144,10 +164,10 @@ export async function processSummarize(
            * merging them in put a paragraph about somebody's plan in the same list as their
            * phone number.
            *
-           * Still merged under what is already there: a person correcting a detail should
-           * outrank the model re-deriving it.
+           * Newer facts win. Only the summariser writes here, so what is already there is an
+           * older reading of the same customer, and a plan they changed should read as changed.
            */
-          notes: { ...result.summary.facts, ...customer.notes },
+          notes: { ...customer.notes, ...result.summary.facts },
           summaryUpdatedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -169,16 +189,19 @@ export async function processSummarize(
         customerId: customer.id,
         error: result.trace.error,
       })
+      // Not advanced past messages the summary never took in; the next resolve tries again.
+      return
     }
   }
 
   // Index for recall. Only the customer's own words and what was said back to them; a
   // digest, not a transcript, so recall surfaces topics rather than pleasantries.
+  /**
+   * Recall grows with the conversation rather than being rebuilt: each summary indexes only
+   * what it just read, so nothing is deleted, and a failed embedding call leaves the earlier
+   * episodes answering rather than an empty index.
+   */
   if (embedSlot) {
-    await db
-      .delete(schema.conversationEmbeddings)
-      .where(eq(schema.conversationEmbeddings.conversationId, job.conversationId))
-
     const digest = turns
       .filter((t) => t.role === 'customer' || t.role === 'ai' || t.role === 'human')
       .map((t) => `${t.role === 'customer' ? 'ลูกค้า/Customer' : 'Support'}: ${t.text}`)
@@ -198,5 +221,17 @@ export async function processSummarize(
       conversationId: job.conversationId,
       chunks: indexed,
     })
+  }
+
+  if (newestId) {
+    await db
+      .update(schema.conversations)
+      .set({ summarizedThroughMessageId: newestId })
+      .where(
+        and(
+          eq(schema.conversations.id, job.conversationId),
+          eq(schema.conversations.workspaceId, job.workspaceId),
+        ),
+      )
   }
 }

@@ -193,6 +193,8 @@ export async function processAiTurn(
     workspaceId: job.workspaceId,
     customerId: conversation.customerId,
     conversationId: job.conversationId,
+    // Recall may reach this conversation's own earlier episodes, just not what is on screen.
+    activeWindowStart: recentMessages[0]?.createdAt ?? null,
     language: customer.primaryLanguage ?? settings.defaultLanguage,
     channelType: context.channel.type,
     embedSlot,
