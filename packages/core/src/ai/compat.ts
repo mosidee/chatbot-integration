@@ -218,7 +218,7 @@ export function createCompatibleFetch(baseFetch: FetchLike = fetch): typeof fetc
     const contentType = response.headers.get('content-type') ?? ''
     if (!contentType.includes('event-stream')) return response
 
-    const text = await response.text()
+    const text = await readBounded(response)
     const recovered = recoverJsonBody(text)
 
     if (recovered === null) {
@@ -243,4 +243,32 @@ export function createCompatibleFetch(baseFetch: FetchLike = fetch): typeof fetc
   // cast, so the shim stays a drop-in replacement.
   compatible.preconnect = (baseFetch as Partial<typeof fetch>).preconnect ?? (() => {})
   return compatible as typeof fetch
+}
+
+/** Past this a non-streaming answer is not an answer; the gateway is misbehaving. */
+const MAX_REPAIR_BYTES = 8 * 1024 * 1024
+
+/**
+ * Read a body, refusing to hold more than `MAX_REPAIR_BYTES` of it.
+ *
+ * The repair has to buffer the whole event stream to reassemble it, and a gateway that
+ * streams without end would otherwise grow the worker's memory until it fell over.
+ */
+async function readBounded(response: Response): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return ''
+  const decoder = new TextDecoder()
+  let size = 0
+  let text = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > MAX_REPAIR_BYTES) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`The provider sent more than ${MAX_REPAIR_BYTES} bytes for one answer`)
+    }
+    text += decoder.decode(value, { stream: true })
+  }
+  return text + decoder.decode()
 }

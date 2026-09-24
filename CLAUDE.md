@@ -373,11 +373,11 @@ without spending money.
   naming it with a button that opens the link; Messenger carries it natively. The card's
   `altText` carries the link too, because a client too old for Flex sees only that. Neither platform's image or file carries a
   caption, so an agent's note is sent as its own message first rather than dropped.
-- The conversation panel loads the **most recent** thirty messages and widens the window as
-  somebody scrolls up. It used to take the first two hundred, which showed a long thread's
-  opening and hid everything an agent needed. Paging widens the window rather than walking a
-  cursor backwards, so a reply arriving while somebody reads history cannot open a gap in
-  the middle of what they are looking at.
+- The conversation panel keeps the **most recent** thirty messages live and fetches older
+  pages by cursor (`GET /conversations/:id?before=<message id>`) as somebody scrolls up —
+  and only on the way up: opening a thread lands at its end instantly, because a smooth
+  scroll from the top passed every older-page trigger and loaded the whole history. It
+  used to widen one window to a cap of 500, which left a long thread's opening unreachable.
 - Finding or creating a conversation happens under a row lock on the channel identity, and
   the identity insert tolerates a conflict. Inbound runs ten jobs at a time, so two messages
   typed in quick succession are two jobs: without both, one burst of typing became two
@@ -448,7 +448,9 @@ without spending money.
 - **Destructive actions use `ConfirmButton`, never `window.confirm`.** A native dialog blocks
   the page, cannot be styled, is dismissed by reflex, and hangs a browser test with no dialog
   handler. Where there is no button to arm — a select — confirm inline, as the self-demotion
-  panel in `Admin.tsx` does.
+  panel in `Admin.tsx` does. `ConfirmButton` ignores a confirm within 400 ms of arming, which
+  is a double-click, so a browser test uses `confirmTwice()` from `e2e/helpers.ts`; erasing
+  a customer is a separate step naming them, not a second click.
 - **Settings and the inbox keep their tab in the address** (`/settings?tab=general|channels|
   models|integrations`, `/?tab=open|waiting|review|resolved`). A browser test must go to the
   tab its control lives on, or the control is not rendered. Integrations is admins only.
@@ -458,14 +460,68 @@ without spending money.
 - **`display:flex` beats the `hidden` attribute,** which only sets `display:none` in the
   user-agent stylesheet. An element styled as flex needs `[hidden] { display: none }` — the
   widget's typing dots showed from page load without it.
-- **The widget's own strings are Thai only** (greeting, offline, send failed, suspended). The
-  line saying who is answering (`stateText`) comes from the API in the visitor's language.
-  Known and not yet fixed.
+- **The widget's own words are in `COPY` in `apps/widget/src/app.ts`, Thai and English.**
+  The language is `data-lang` on the embed tag, else the workspace's language from the
+  session, else Thai. The line saying who is answering (`stateText`) comes from the API in
+  the visitor's language.
+- **`loader.js` must not share a module with the chat app.** It is embedded with a classic
+  `<script>`; a shared chunk turns it into a module whose `import` a host page cannot run.
+  That is why `launcher-colour.ts` duplicates `readableOn` from `contrast.ts`.
 - **Internal notes are interleaved with messages in the thread, clamped to the loaded
   window.** The endpoint windows messages but not notes, so a note older than the oldest
   loaded message is held back until the window reaches it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
+- **Storage keys are judged by `isWorkspaceKey`, never `startsWith`.** A prefix check
+  accepted `workspaceA/../workspaceB/file`, which the filesystem store resolves into another
+  tenant's directory. Every read, signature and deletion uses the canonical check.
+- **The restricted fetch connects to the address it checked** (`pinnedRequest`, Node
+  `https.request` with a pinned `lookup`, `agent: false`). A pooled agent skips `lookup`
+  and would reconnect wherever the pool first went, which reopens the DNS race.
+- **The widget shows only delivered replies and pages by `coalesce(sent_at, created_at)`.**
+  A reply withheld by a takeover (`canceled`) or still `queued` never reaches the visitor;
+  paging by creation time would skip a reply sent after a later row moved the cursor.
+- **Messages have `canceled` and `uncertain` statuses.** `canceled`: withheld because a
+  colleague took over. `uncertain`: the platform did not answer (`UncertainDeliveryError`),
+  so it may have arrived; the outbound job never resends either.
+- **An adapter that sends one message as several requests reports each** (`startAt`,
+  `onUnitSent` on `SendContext`); the outbound job checkpoints units in `sent_parts` for a
+  non-text message. LINE pushes carry `X-Line-Retry-Key` from the message id and part, and
+  a 409 on it means an earlier attempt delivered.
+- **Delete rows that name stored files and queue the files in one transaction**
+  (`queueBlobDeletions`), then `drainBlobDeletions`. A failed removal stays queued; the
+  nightly retention job retries it and queues agent uploads never sent after a day.
+- **Membership uniqueness (`member_org_user_uq`) lives in migration 0012, not in
+  `schema/auth.ts`,** because `bun run auth:generate` rewrites that file. Inserts into
+  `member` use `onConflictDoNothing()`.
+- **A reset link carries `issuer_scope`.** A workspace-issued one is re-checked at
+  redemption with `accountReach`; widening the account since issue refuses it with 409.
+- **A socket re-proves itself on `auth.changed`.** Publish it (to each of the person's
+  workspaces) whenever something narrows somebody's access; the socket server closes what
+  no longer qualifies with 4401/4403, and the console does not retry those codes.
+- **Internal ingestion writes an event id into a body that has none** (a fingerprint of the
+  body). Two identical simulator messages to the same customer without an `eventId` are
+  therefore one event; a test that means two sends gives each its own id or text.
+- **Every stored vector has an `embedding_space`** (`model|dims` or `model|native`), and
+  dense search and recall compare only within the query's space. A new embedding writer
+  stores `embedded.space` from `embedTexts`.
+- **Summaries are incremental** from `conversations.summarized_through_message_id`; recall
+  rows are appended, never rebuilt, and recall excludes the current conversation only from
+  the start of the visible window.
+- **`ProviderProfile.revision` is the provider's `updatedAt`.** The model caches rebuild a
+  client when it changes; a builder of profiles sets it, or a rotated key lingers.
+- **The console asks `can(me, capability)` (`apps/web/src/lib/capabilities.ts`)** before
+  offering an action or firing a query a role will be refused. Viewers get read-only notes.
+- **Modals use `Dialog` from `ui.tsx`** (focus in, trap, Escape, inert `#root`, focus back).
+- **`useSaveState` returns a sequence from `onMutate`;** pass `(data, variables, context)`
+  through when wrapping `onSuccess`/`onError`, or an older save's outcome can overwrite a
+  newer one.
+- **Browser tests that embed the widget serve a host page from `127.0.0.1`** against the
+  widget on `localhost`, with Chrome's `LocalNetworkAccessChecks` disabled in
+  `playwright.config.ts`; a public-looking hostname cannot load a loopback script at all. A
+  phone-width host page needs a viewport tag, or the phone lays it out at 980px.
+- **Playwright projects are selected by tag:** untagged tests run on desktop Chromium,
+  `@mobile` on a Pixel 7, `@theme` in dark mode and Thai.
 
 ## Adding things
 
@@ -509,7 +565,8 @@ to the web `WorkspaceSettings` type, and set it in `DEFAULT_SETTINGS` in
 
 ## Pull requests
 
-Feature branches into `main`. CI runs lint, typecheck, migrations, tests and the web build.
+Feature branches into `main`. CI runs lint, typecheck, migrations, tests, the web build, the
+browser tests, and builds both release images and requires them to start healthy.
 End commit messages with:
 
 ```

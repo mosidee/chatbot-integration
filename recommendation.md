@@ -1,51 +1,70 @@
 # Repository recommendations
 
-Reviewed: 2026-09-22
+Reviewed against the working tree on **2026-09-24**; status updated the same day after the fixes landed.
 
-The highest-value changes are to close the public widget identity bypass and global-account password-reset exposure, then make human takeover and message delivery reliable under concurrency and retries. I would address those before adding channels, models, or more console features.
+The product has a useful foundation for a Thai/English support team: a compact inbox, human takeover, knowledge management, and a lightweight customer widget. The next pass should make everyday work dependable: show failed actions, preserve drafts, make every conversation reachable, recover missed updates, and complete the widget experience. A visual redesign is lower value than those corrections.
 
-The existing package boundaries are useful: keep the channel adapters, pure conversation state machine, shared validation, and Postgres-based retrieval. The problems below call for targeted changes to authorization, persistence, and lifecycle handling; a framework or database migration would add work without addressing them.
+This file holds the engineering findings, with their numbers preserved and a status for each. The UX/UI audit that accompanied them is in [docs/UX-AUDIT.md](docs/UX-AUDIT.md).
 
-## Status (updated 2026-09-24)
+## Scope and confidence
 
-| Finding | Status |
-| --- | --- |
-| 1, 2, 6, 7, 8, 9, 14 | Fixed in the hardening milestone |
-| 3 | Fixed by serving policy rather than a separate origin; see the note under #3 |
-| 4 | Fixed, except the DNS check-then-connect race from ADR 0004, which remains open |
-| 5 | Fixed |
-| 10–13, 15–24 | Open |
+This was a repository-wide **source audit**, covering all console routes and shared UI components, the widget app/loader/styles, API authorization and response paths, worker workflows, channel adapters, shared/domain/infrastructure packages, schema and migrations, browser-test coverage, deployment configuration, and product/architecture documentation. Backend review focused on behavior visible to customers and operators and on rechecking the existing 24 findings. Generated migration snapshots and dependency lockfiles were not audited line by line; secrets, dependencies, runtime data, and generated assets were excluded.
 
-## Scope and validation
+No authenticated browser session, screenshots, screen-reader session, database integration suite, production image build, or live provider delivery was run. Layout concerns below are source-level risks requiring visual validation, not observed screenshots. Existing tests were inspected, not rerun. The previous document's typecheck/lint/320-test results belong to the earlier review and are **not evidence of validation in this audit**.
 
-This was a repository-wide static review covering the API, worker, web console, widget, shared packages, database schema and migrations, tests, configuration, deployment files, and documentation. Generated migration snapshots and dependency metadata were inspected structurally. Installed dependencies, local secrets, runtime data, and generated build artifacts were outside the source review. External claims in the research and platform-setup documents were not independently reverified.
+Two in-memory checks were run with synthetic values and no external service calls (both defects are fixed since; see finding 15 and U10):
 
-Checks run without changing source files:
+- Importing the current `signPayload` and signing a Thai/emoji subject throws `The string contains invalid characters.`
+- Applying the widget's current color-selection calculation to `#808080` selects white, producing approximately **3.95:1** contrast. Its automatic foreground selection is therefore not sufficient for a 4.5:1 normal-text design target.
 
-| Check | Result |
-| --- | --- |
-| `bun run typecheck` | Passed |
-| `bun run lint` | Passed; one informational template-literal suggestion in `e2e/tenant-admin.spec.ts` |
-| `bun test packages/core/test packages/channels/test packages/shared/test packages/db/test` | 320 passed, 0 failed; 860 expectations across 24 files |
-| Small in-memory probes using synthetic inputs | Confirmed unsigned web-adapter acceptance and preservation of supplied verified identity, rejection of internal widget requests with a nonempty origin allowlist, custom credential forwarding across redirects, reuse of a cached model after credential changes, and failure to sign Thai JWT claims |
+“Resolved in source” means the original defect has a corresponding implementation, not a certification of production behavior. “Partial” means a useful fix exists but part of the original finding remains. Proposed acceptance checks are future work unless explicitly described above as executed.
 
-The probes did not call real external services. Database/Redis integration tests, browser tests, production-image builds, migrations, and live provider delivery were not run. Findings involving those systems are based on code paths, with proposed regression tests below. Passing isolated tests does not validate the concurrent and cross-boundary behaviors identified here.
+## Status of every finding (2026-09-24)
 
-Only this recommendations file was added at review time; see the status table above for what has since been fixed.
+Fixed in source means the defect has a corresponding implementation and a regression test
+named below; it is not a certification of production behaviour. Residual items are stated
+rather than rounded away.
 
-## Recommended order
-
-| Priority | Meaning | Work |
+| Finding | Status | What was done, and what remains |
 | --- | --- | --- |
-| P0 | Fix before exposing the deployment to untrusted users or tenants | 1–2: identity injection and global-account takeover |
-| P1 | Fix before relying on unattended production operation | 3–16: media/egress isolation, takeover, retries, privacy, deletion, and widget failures |
-| P2 | Next engineering iteration | 17–24: credential refresh, live authorization, retrieval, pagination, reporting, and deployment verification |
+| 1. Public web/simulator identity injection | Fixed | Public route serves only signature-verifying adapters; widget and simulator use `ingestInternal`; proved identity travels outside the body. |
+| 2. Global password recovery | Fixed | Links carry `issuer_scope`; a workspace-issued reset is refused at redemption once the account reaches another workspace, administers the platform, or has left (`apps/api/test/invitations.test.ts`). |
+| 3. Uploaded active content | Fixed by serving policy; separate origin deferred | `mediaServingHeaders` on both routes (attachment for active types, `nosniff`, sandbox CSP); uploads accept raster images by exact type and check magic bytes. A separate media origin needs a second hostname. |
+| 4. Provider/retrieval egress | Fixed | Every tenant-typed URL goes through the restricted client; private gateways approved per tenant by a platform admin; connections go to the address the check approved (`pinnedRequest`), closing the DNS race (`packages/infra/test/pinned-transport.test.ts`). |
+| 5. Redirect credential forwarding | Fixed | Header allowlist across origins; cross-origin 307/308 with a body refused. |
+| 6. Attachment ownership | Fixed | `isWorkspaceKey` judges keys canonically (no `..`, `.`, empty segments, backslashes) at every read, association, signature and deletion; the public media route re-checks signed keys. |
+| 7. Authoritative human takeover | Fixed; serialisation residual | Learned fields and tags are written only while the AI still owns the conversation; the reply is committed under a row lock, so a takeover is either seen or waits; outbound re-checks the mode and records `canceled`. Two turns for two different customer messages are still not serialised against each other. |
+| 8. Outbox and durable steps | Fixed; external write keys residual | Transactional outbox; stable event ids for internal ingestion; widget client message ids; inbound media keyed by event. A retried model call that asks for different write arguments still gets a new idempotency key. |
+| 9. Delivery and multipart | Fixed; Messenger idempotency deferred | Unit checkpoints inside one message, every platform id kept, LINE `X-Line-Retry-Key`, `uncertain` status never resent blindly. Messenger offers no idempotency key. |
+| 10. Fallback attempt isolation | Fixed | A scratchpad per attempt; only the winning attempt's intents count (`packages/core/test/agent.test.ts`). |
+| 11. Turn deadlines and final failure | Fixed | Per-attempt deadlines (slot `timeoutMs`) inside a 150 s turn deadline; bounded repair buffer; an AI turn that fails its last attempt hands off. |
+| 12. Redaction and retention breadth | Partial | Raw events keep only the body, are emptied once processed, go with the customer's identity on erasure and are pruned by retention. A redaction inventory of traces, drafts, notes, summaries and OCR text is not done. |
+| 13. Resumable blob deletion | Fixed | `blob_deletions` queued in the deleting transaction for retention, customer erasure and knowledge sources; nightly drain; abandoned uploads swept after a day; `.mime` sidecars removed. |
+| 14. Last-admin and membership uniqueness | Fixed | Checks and mutations share transactions; `member_org_user_uq` (in migration 0012, since `auth.ts` is generated); acceptance is conflict-safe. |
+| 15. Widget origins and Unicode | Fixed | UTF-8 token signing; embedding enforced by CSP `frame-ancestors` per channel; the iframe's own session request is accepted (`e2e/widget-embed.spec.ts`). |
+| 16. Widget attachments and history | Fixed | Only delivered replies are shown (a reply withheld by a takeover used to appear); files signed at read time from storage keys; cursor on when a row became visible (`messages.sent_at`). |
+| 17. Provider cache refresh | Fixed | Profiles carry a revision (`updatedAt`); caches rebuild on change. |
+| 18. Live socket authorisation | Fixed | Origin check; re-validation on `auth.changed`/`workspace.status` and every five minutes; typing scoped to workspace and role; no join race; client refetches on reconnect and stops on 4401/4403. |
+| 19. Embedding-space identity | Fixed | `embedding_space` stored and matched on dense search and recall. |
+| 20. Index replacement | Fixed; revision check residual | File reindex and recall embed first and swap in one transaction; transient failures retried. Two reindexes of one source racing are not revision-checked. |
+| 21. Persistent-thread memory | Fixed | Newest notes; incremental summaries from a cursor; new facts win; recall excludes only the visible window. |
+| 22. Pagination and bounded reads | Fixed | Total order and offset paging with load-more; lateral previews; history by cursor without a cap. Offset paging can repeat or skip a row that moves while paging a live queue. |
+| 23. Reporting semantics | Fixed; accounting scope stated | Answered and response times count delivered replies; workspace timezone. Cost excludes failed primary attempts and embedding/rerank usage, and the dashboard says so. |
+| 24. Deployment images and failure states | Fixed; restore rehearsal not done | Worker manifest; CI builds both images and requires them healthy; MinIO pinned by digest; console failure states (see the UX audit). A backup restore rehearsal has not been performed. |
 
-Implement the changes in small groups: authorization boundaries first; durable workflow and concurrency second; media/privacy/widget correctness third; retrieval and operational improvements fourth. Add the regression tests alongside each fix rather than undertaking a separate general test rewrite.
+## UX/UI recommendations
+
+Moved to [docs/UX-AUDIT.md](docs/UX-AUDIT.md), with the status of every item.
+
+## Original engineering findings — preserved context
+
+The numbered findings below retain their original problem descriptions and acceptance criteria for traceability. Some describe **pre-hardening behavior that no longer exists**. Read the current status immediately under each heading and the verification table above before treating a paragraph as a present defect. Existing implementation notes for 3–5 are retained as historical notes, not new runtime validation.
 
 ## P0 — Authorization boundaries
 
 ### 1. Stop accepting web and simulator payloads through the public webhook route
+
+**Status (2026-09-24):** Fixed; retain regression coverage.
 
 **Evidence:** [webhooks.ts](apps/api/src/routes/webhooks.ts), [ingest.ts](packages/infra/src/ingest.ts), [web-channel.ts](packages/channels/src/adapters/web-channel.ts), [test-channel.ts](packages/channels/src/adapters/test-channel.ts), [repo.ts](packages/infra/src/repo.ts), [identity.ts](packages/infra/src/identity.ts).
 
@@ -59,6 +78,8 @@ A public widget channel ID is available in the embed code. A caller can therefor
 
 ### 2. Separate workspace membership administration from global account recovery
 
+**Status (2026-09-24):** Fixed: issuer scope re-checked at redemption.
+
 **Evidence:** [admin.ts](apps/api/src/routes/admin.ts), `POST /members/:userId/reset-link`; [invitations.ts](apps/api/src/routes/invitations.ts), password-reset acceptance and `setPassword`; [auth schema](packages/db/src/schema/auth.ts); [seed.ts](packages/db/src/seed.ts).
 
 A workspace admin can mint and receive a usable password-reset link for any member of that workspace. Redeeming it changes the member’s global account password and signs the redeemer in. Users and credentials are shared across workspaces. A tenant admin can consequently take over a member’s access to other tenants; if that member is a platform admin, the exposure extends to platform administration. The seed makes the initial platform admin a workspace member, so this is a relevant configuration.
@@ -71,6 +92,8 @@ A workspace admin can mint and receive a usable password-reset link for any memb
 
 ### 3. Isolate uploaded active content from the console’s origin
 
+**Status (2026-09-24):** Fixed by serving policy and content checks; a separate origin is deferred.
+
 **Evidence:** [uploads.ts](apps/api/src/routes/uploads.ts), [media.ts](apps/api/src/routes/media.ts), [app.ts](apps/api/src/app.ts).
 
 The upload allowlist accepts `text/*` and `image/*`, including HTML and SVG, and trusts the submitted MIME type. Both authenticated uploads and signed media links serve the stored MIME type inline on the application’s origin. Opening a malicious HTML/SVG attachment can execute script with that origin’s privileges, including authenticated API requests. An HTTP-only cookie alone does not prevent those requests.
@@ -79,9 +102,11 @@ The upload allowlist accepts `text/*` and `image/*`, including HTML and SVG, and
 
 **Acceptance test:** Upload HTML and script-bearing SVG, then open their authenticated and signed URLs as a privileged operator. They must not execute with the console’s origin or issue authorized console requests.
 
-**Status — fixed, 2026-09-24, without a separate origin.** Both routes serve through `mediaServingHeaders` (`packages/infra/src/media-serving.ts`), whatever path the file arrived by (agent upload, inbound LINE/Messenger media, knowledge document). Raster images, audio, video and PDF are inline. Everything else, including HTML and SVG, is `Content-Disposition: attachment`. Every response is `nosniff`. All but PDF carry `Content-Security-Policy: default-src 'none'; …; sandbox`, so anything rendered anyway runs in an opaque origin with no script. PDF is left unsandboxed because Chrome refuses to render a sandboxed PDF, and its viewer does not run in our origin. Uploads accept raster images by exact type (SVG and HTML are refused with 415), and the storage key keeps only a sanitised extension or name, which also closes a path segment injection through the file name. Tests: `packages/infra/test/media-serving.test.ts` and `apps/api/test/uploads.test.ts`. A separate media origin remains the stronger design if the deployment ever gets a second hostname.
+**Earlier implementation note — serving-policy mitigation, 2026-09-24.** Both routes serve through `mediaServingHeaders` (`packages/infra/src/media-serving.ts`), whatever path the file arrived by (agent upload, inbound LINE/Messenger media, knowledge document). Raster images, audio, video and PDF are inline. Everything else, including HTML and SVG, is `Content-Disposition: attachment`. Every response is `nosniff`. All but PDF carry `Content-Security-Policy: default-src 'none'; …; sandbox`, so anything rendered anyway runs in an opaque origin with no script. PDF is left unsandboxed because Chrome refuses to render a sandboxed PDF, and its viewer does not run in our origin. Uploads accept raster images by exact type (SVG and HTML are refused with 415), and the storage key keeps only a sanitised extension or name, which also closes a path segment injection through the file name. Tests: `packages/infra/test/media-serving.test.ts` and `apps/api/test/uploads.test.ts`. A separate media origin remains the stronger design if the deployment ever gets a second hostname.
 
 ### 4. Apply the tenant egress boundary to providers and external retrieval too
+
+**Status (2026-09-24):** Fixed, including the DNS check-then-connect race (pinned connections).
 
 **Evidence:** [settings.ts](apps/api/src/routes/settings.ts), [registry.ts](packages/core/src/ai/registry.ts), [retrieval-external.ts](packages/infra/src/retrieval-external.ts), [egress.ts](packages/infra/src/egress.ts), [ADR 0004](docs/adr/0004-restricted-egress-for-tenant-tools.md).
 
@@ -93,13 +118,15 @@ ADR 0004 also acknowledges a DNS check/connection race. Close that gap before tr
 
 **Acceptance test:** Provider discovery, chat, embedding, and each external-retrieval adapter refuse loopback, private IPv4/IPv6, metadata addresses, and redirects to them. Test approved private gateways through the explicit operator policy.
 
-**Status — fixed, 2026-09-24, except the DNS race.**
+**Implementation note, 2026-09-24.**
 - **What goes through the guard:** model calls, embeddings, rerank, `/models` discovery, model verification and all three external-retrieval adapters use the same restricted client as tools (`workspaceProviderFetch`). `ProviderProfile.fetch` and `ExternalRetrievalConfig.fetch` are required, so no builder can fall back to the global `fetch`.
-- **How a private gateway is approved:** only a platform admin can approve one, per tenant, in `workspaces.private_egress_origins`. It is a column, not a setting, because tenant admins write settings, and it is edited from the Platform page. The match is on the exact origin, and a redirect from an approved origin is checked again. Migration 0011 approved each tenant's already-configured origins once, so that upgrading did not cut off the live gateway.
+- **How a private gateway is approved:** only a platform admin can approve one, per tenant, in `workspaces.private_egress_origins`. It is a column, not a setting, because tenant admins write settings, and it is edited from the Platform page. The match is on the exact origin, and a redirect from an approved origin is checked again. Migration 0011 approved each tenant's already-configured plain-http and IP-literal origins once, so that upgrading did not cut off the live gateway.
 - **Tests:** "approved origins" in `packages/infra/test/egress.test.ts`, and "approved private endpoints" in `apps/api/test/platform.test.ts`.
-- **Still open:** the check-then-connect DNS race described in ADR 0004. Closing it needs an egress proxy or a transport that connects to the validated address while keeping SNI.
+- **Closed later the same day:** the check-then-connect DNS race. `pinnedRequest` connects to the address the check approved while TLS still verifies the hostname.
 
 ### 5. Do not forward custom tool credentials across origins
+
+**Status (2026-09-24):** Fixed; retain cross-origin redirect regression coverage.
 
 **Evidence:** [egress.ts](packages/infra/src/egress.ts), `CREDENTIAL_HEADERS` and `strippedHeaders`; [http-tool.ts](packages/core/src/ai/http-tool.ts).
 
@@ -109,12 +136,14 @@ Tools support a custom authentication header, but redirect handling strips only 
 
 **Acceptance test:** Cross-origin 301/302/303/307/308 responses never disclose custom credentials or sensitive bodies. Same-origin behavior remains intentional and tested.
 
-**Status — fixed, 2026-09-24.**
+**Earlier implementation note — resolved in source, 2026-09-24.**
 - **Headers:** on a cross-origin hop, only an allowlist of headers that identify nobody is forwarded: `accept`, `accept-encoding`, `accept-language`, `content-type` and `user-agent`.
 - **Bodies:** a cross-origin 307 or 308 that would resend a body is refused. 301, 302 and 303 become a GET with no body.
 - **Tests:** a table test in `packages/infra/test/egress.test.ts` covers all five codes, both cross-origin and same-origin.
 
 ### 6. Validate attachment ownership at every storage boundary
+
+**Status (2026-09-24):** Fixed: canonical key validation at every boundary.
 
 **Evidence:** [message schemas](packages/shared/src), [conversations.ts](apps/api/src/routes/conversations.ts), [simulator.ts](apps/api/src/routes/simulator.ts), [media.ts](packages/infra/src/media.ts), [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [retention.ts](packages/infra/src/retention.ts).
 
@@ -126,6 +155,8 @@ Attachment input accepts a `storageKey` without establishing ownership. Inbound 
 
 ### 7. Make human takeover authoritative throughout an AI turn
 
+**Status (2026-09-24):** Fixed; turns for different messages are not serialised.
+
 **Evidence:** [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [outbound.ts](apps/worker/src/processors/outbound.ts), [effect-ports.ts](packages/infra/src/effect-ports.ts), [worker startup](apps/worker/src/index.ts).
 
 The AI processor checks `aiMaySend` before the model call. It does not revalidate conversation ownership before executing pending writes or committing the reply. The outbound processor checks workspace status but not whether an AI message is still permitted by the conversation’s current mode. A human takeover during inference or queue delay can therefore be followed by AI actions and an AI send. Concurrent AI jobs can also answer overlapping context because jobs are not serialized per conversation or tied to a stable input version.
@@ -135,6 +166,8 @@ The AI processor checks `aiMaySend` before the model call. It does not revalidat
 **Acceptance test:** Pause a model, take over the conversation, then release it: no new AI reply or tool write is committed. Repeat with an already queued reply. Send a burst of messages with multiple workers and verify intentional, ordered responses without duplicate turns.
 
 ### 8. Introduce a transactional outbox and durable step identities
+
+**Status (2026-09-24):** Fixed for event ids, widget sends and inbound media; external write keys residual.
 
 **Evidence:** [ingest.ts](packages/infra/src/ingest.ts), [inbound.ts](apps/worker/src/processors/inbound.ts), [effect-ports.ts](packages/infra/src/effect-ports.ts), [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [platform.ts](packages/infra/src/platform.ts).
 
@@ -151,6 +184,8 @@ Several workflows commit database state and then enqueue required work separatel
 
 ### 9. Separate delivery success from notification success and track multipart sends
 
+**Status (2026-09-24):** Fixed; Messenger idempotency unavailable.
+
 **Evidence:** [outbound.ts](apps/worker/src/processors/outbound.ts), [LINE adapter](packages/channels/src/adapters/line.ts), [Messenger adapter](packages/channels/src/adapters/messenger.ts).
 
 The outbound processor sends the message, marks it `sent`, and publishes the UI update inside one `try`. If publishing fails, the catch marks the already-sent message `failed` and throws, allowing a retry to resend it. Its early return covers `sent` and `delivered` but omits `read`. Split messages and attachment sends have no durable per-part checkpoint, and only the last platform ID is retained. LINE reply-token read/clear is also not an atomic claim.
@@ -160,6 +195,8 @@ The outbound processor sends the message, marks it `sent`, and publishes the UI 
 **Acceptance test:** Fail publication after a successful send and verify no resend. Retry a `read` message. Fail part two after part one succeeds and verify part one is not knowingly resent. Run concurrent sends against one LINE reply token.
 
 ### 10. Isolate side effects between primary and fallback model attempts
+
+**Status (2026-09-24):** Fixed.
 
 **Evidence:** [agent.ts](packages/core/src/ai/agent.ts), `createScratchpad` outside `runWithFallback`; [tools.ts](packages/core/src/ai/tools.ts).
 
@@ -171,6 +208,8 @@ The primary and fallback share one mutable scratchpad. A primary attempt can que
 
 ### 11. Bound model work and provide recovery after terminal job failure
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [agent.ts](packages/core/src/ai/agent.ts), [vision.ts](packages/core/src/ai/vision.ts), [embed.ts](packages/core/src/rag/embed.ts), [compat.ts](packages/core/src/ai/compat.ts), [worker startup](apps/worker/src/index.ts).
 
 The model paths have retry counts but lack an application-owned overall deadline propagated through inference and body consumption. A hung request need not throw, so fallback may never start and worker capacity can remain occupied. The compatibility transport also buffers response text. Failures outside the agent’s handled model-error path can exhaust job retries with logging but no customer-facing recovery or handoff.
@@ -180,6 +219,8 @@ The model paths have retry counts but lack an application-owned overall deadline
 **Acceptance test:** Use a provider that never completes headers or its body. The turn must finish within its budget, release worker capacity, and fall back or hand off once. Exercise configuration/decryption/database errors before the main model call too.
 
 ### 12. Extend redaction and retention beyond the message table
+
+**Status (2026-09-24):** Partial: raw events handled; wider redaction inventory open.
 
 **Evidence:** [ingest.ts](packages/infra/src/ingest.ts), [repo.ts](packages/infra/src/repo.ts), [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [summarize.ts](apps/worker/src/processors/summarize.ts), [retention.ts](packages/infra/src/retention.ts), [app schema](packages/db/src/schema/app.ts).
 
@@ -191,6 +232,8 @@ The model paths have retry counts but lack an application-owned overall deadline
 
 ### 13. Make all blob deletion resumable, including orphaned uploads
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [retention.ts](packages/infra/src/retention.ts), [retention worker](apps/worker/src/processors/retention.ts), [knowledge.ts](packages/infra/src/knowledge.ts), [blob-fs.ts](packages/infra/src/blob-fs.ts).
 
 Conversation retention and customer erasure collect keys, delete database rows, then attempt blob removal. A failed removal loses its durable reference; repeating the operation cannot rediscover the deleted rows. Customer erasure reports `mediaFailed` without making the job fail for retry. Knowledge source deletion removes rows but does not delete its original object. Uploaded files that never become message/source attachments are outside the current erasure manifests. The filesystem implementation also leaves MIME sidecar files behind on removal.
@@ -201,6 +244,8 @@ Conversation retention and customer erasure collect keys, delete database rows, 
 
 ### 14. Keep last-admin checks and mutations in the same transaction
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [admin.ts](apps/api/src/routes/admin.ts), `wouldStrandWorkspace` and the member update/delete routes; [platform.ts](apps/api/src/routes/platform.ts); [auth schema](packages/db/src/schema/auth.ts).
 
 The workspace guard uses a transaction and row locks to calculate whether a change strands the workspace, but the actual update/delete happens after that transaction returns. The lock has already been released. Concurrent requests can both pass and remove/demote the final administrators. Review the equivalent platform-admin removal flow under the same rule. Membership rows also lack a database uniqueness constraint on `(organizationId, userId)`.
@@ -210,6 +255,8 @@ The workspace guard uses a transaction and row locks to calculate whether a chan
 **Acceptance test:** Concurrently demote/remove two remaining admins; exactly one request may succeed. Concurrent acceptance of invitations for one user must produce one membership. Test the platform-admin invariant separately.
 
 ### 15. Fix widget origin enforcement and Unicode token signing
+
+**Status (2026-09-24):** Fixed.
 
 **Evidence:** [widget routes](apps/api/src/routes/widget.ts), [web-channel.ts](packages/channels/src/adapters/web-channel.ts), [widget loader](apps/widget/src/loader.ts), [jwt.ts](packages/channels/src/jwt.ts), [identity documentation](docs/IDENTITY-VERIFICATION.md).
 
@@ -224,6 +271,8 @@ Two independent failures affect the supported widget flow:
 
 ### 16. Deliver widget attachments and history from durable, authorized state
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [widget routes](apps/api/src/routes/widget.ts), [outbound.ts](apps/worker/src/processors/outbound.ts), [media-links.ts](packages/infra/src/media-links.ts), [widget app](apps/widget/src/app.ts).
 
 The outbound processor generates signed attachment URLs only in a temporary message passed to the adapter. It does not persist those URLs. Widget polling expects `sourceUrl` already present in stored content and drops attachments without it, so uploads stored by key can disappear from the visitor’s view. Polling also exposes outbound rows without filtering delivery state. Its timestamp-only cursor can skip equal-timestamp messages, and filtering internal events after the 100-row limit can prevent progress through a page containing only events.
@@ -236,6 +285,8 @@ The outbound processor generates signed attachment URLs only in a temporary mess
 
 ### 17. Refresh cached providers when credentials or headers change
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [registry.ts](packages/core/src/ai/registry.ts), [embed.ts](packages/core/src/rag/embed.ts), [settings.ts](apps/api/src/routes/settings.ts).
 
 Chat model caching keys on provider ID/base URL/model; embedding caching keys on provider ID/base URL. Neither includes the provider’s credential or headers. Updating a key can leave a long-running worker using the old credential indefinitely. A direct probe confirmed that changing only the key returns the same model instance.
@@ -245,6 +296,8 @@ Chat model caching keys on provider ID/base URL/model; embedding caching keys on
 **Acceptance test:** Warm both caches, rotate the provider credential/headers, and verify the next intended request uses the new configuration without restarting the worker.
 
 ### 18. Revalidate live socket authorization and handle reconnects centrally
+
+**Status (2026-09-24):** Fixed.
 
 **Evidence:** [ws.ts](apps/api/src/ws.ts), [client ws.ts](apps/web/src/lib/ws.ts), [Layout.tsx](apps/web/src/components/Layout.tsx), [Inbox.tsx](apps/web/src/routes/Inbox.tsx).
 
@@ -256,6 +309,8 @@ Socket authorization happens at open. Existing sockets remain in a workspace aft
 
 ### 19. Treat embedding identity as part of the index contract
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [embed.ts](packages/core/src/rag/embed.ts), [retrieval.ts](packages/infra/src/retrieval.ts), [knowledge.ts](packages/infra/src/knowledge.ts), [knowledge schema](packages/db/src/schema/knowledge.ts).
 
 The dimension check is useful but insufficient: two different embedding models can produce 1024-dimensional vectors that occupy unrelated spaces. Embedding fallback and model changes can mix those vectors, while retrieval does not constrain comparisons by the stored embedding model identity.
@@ -265,6 +320,8 @@ The dimension check is useful but insufficient: two different embedding models c
 **Acceptance test:** Index with one model, switch/fall back to a different same-dimension model, and verify incompatible vectors are not compared. Add a small Thai/English retrieval evaluation set covering exact account/product terms, paraphrases, channel restrictions, and tenant/customer isolation.
 
 ### 20. Preserve the last usable knowledge index during replacement
+
+**Status (2026-09-24):** Fixed; concurrent reindex revisions residual.
 
 **Evidence:** [knowledge-ingest.ts](apps/worker/src/processors/knowledge-ingest.ts), [knowledge.ts](packages/infra/src/knowledge.ts), [summarize.ts](apps/worker/src/processors/summarize.ts).
 
@@ -276,6 +333,8 @@ The dimension check is useful but insufficient: two different embedding models c
 
 ### 21. Make memory match the permanent-conversation model
 
+**Status (2026-09-24):** Fixed.
+
 **Evidence:** [repo.ts](packages/infra/src/repo.ts), [summarize.ts](apps/worker/src/processors/summarize.ts), [rag-context.ts](packages/infra/src/rag-context.ts).
 
 Conversation resolution/reopening reuses the same conversation, but summarization selects the earliest 200 messages. Once the conversation is longer than that, later exchanges are never included by that query. Past-conversation retrieval excludes the entire current conversation, which also excludes previous resolved interactions on the same persistent thread. Turn context selects the earliest 20 internal notes, so later notes cease entering the model’s context.
@@ -285,6 +344,8 @@ Conversation resolution/reopening reuses the same conversation, but summarizatio
 **Acceptance test:** Resolve, reopen, and continue past 200 messages. A new fact and a note added after the first 20 notes must reach the next relevant context/summary; an older resolved interaction on the same channel must remain recallable without leaking another customer’s data.
 
 ### 22. Implement bounded inbox queries and complete pagination
+
+**Status (2026-09-24):** Fixed (offset paging over a total order).
 
 **Evidence:** [conversations.ts](apps/api/src/routes/conversations.ts), [Inbox.tsx](apps/web/src/routes/Inbox.tsx), [message paging tests](e2e/message-paging.spec.ts).
 
@@ -296,6 +357,8 @@ The list defaults to 50 conversations without a complete load-more flow. Its `be
 
 ### 23. Make operational reporting reflect delivery and complete AI work
 
+**Status (2026-09-24):** Fixed; cost scope stated.
+
 **Evidence:** [agent.ts](packages/core/src/ai/agent.ts), [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [dashboard.ts](packages/infra/src/dashboard.ts), [Dashboard.tsx](apps/web/src/routes/Dashboard.tsx).
 
 AI traces can label an answer `sent` before outbound delivery completes. Chat accounting reads `result.usage`, which does not represent all steps of a multistep tool turn; failed primary attempts and auxiliary vision/retrieval work also need explicit accounting if totals are presented as total cost. Response-time calculations based on message creation can count queued/failed attempts as replies.
@@ -305,6 +368,8 @@ AI traces can label an answer `sent` before outbound delivery completes. Chat ac
 **Acceptance test:** A reply whose delivery fails does not improve response-time/success metrics. A multistep primary-plus-fallback fixture produces the expected usage accounting. Test a date boundary in the workspace timezone.
 
 ### 24. Build the actual deployment images in CI and polish failure states
+
+**Status (2026-09-24):** Fixed; restore rehearsal not done.
 
 **Evidence:** [worker Dockerfile](apps/worker/Dockerfile), [API Dockerfile](apps/api/Dockerfile), [CI workflow](.github/workflows/ci.yml), [deployment guide](docs/DEPLOY.md), [console routes](apps/web/src/routes).
 

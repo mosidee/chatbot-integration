@@ -9,9 +9,14 @@ embeds, and a chat application that runs inside an iframe.
   data-channel="<web channel id>"
   data-colour="#2563eb"
   data-title="แชทกับเรา"
+  data-lang="th"
   defer
 ></script>
 ```
+
+`data-lang` (`th` or `en`) chooses the language of the widget's own words — its greeting,
+buttons and error lines. Without it the workspace's default language is used. Text on the
+brand colour is black or white, whichever reads better on it.
 
 The channel id comes from **Settings → Channels**, on the web channel. The loader adds a
 launcher in the corner and nothing else until somebody clicks it.
@@ -28,6 +33,10 @@ like any other, so it is a test of the whole path rather than of the appearance.
 Everything a customer types lives on our origin, not the host page's. The host application
 cannot read the conversation, and we cannot read the host page. It also means the widget's
 own requests are same-origin, so there is no cross-origin configuration to get wrong.
+
+The loader must stay a classic script, because that is how host pages embed it. It may not
+import anything the chat app also imports: the build would put the shared code in a chunk
+and turn `loader.js` into a module whose `import` a host page cannot run.
 
 ## Identifying a logged-in user
 
@@ -88,8 +97,11 @@ guessed id reaches nothing.
 ## Restricting who may embed it
 
 Leave the allowed origins empty and any site may embed the widget, which suits development.
-List them in the channel's configuration for production and the session endpoint refuses any
-other origin.
+List them in the channel's configuration for production. The rule is enforced at the frame:
+the widget page is served with `Content-Security-Policy: frame-ancestors 'self' <origins>`,
+so a browser refuses to render it inside any other site. The session request comes from
+inside the iframe, on our own origin, and is accepted; a host page calling the session
+endpoint directly is still held to the list.
 
 ## Polling, not sockets
 
@@ -121,12 +133,25 @@ starts a new one rather than going quiet.
 - `sender` says who wrote each message; `system` is the product itself, such as the holding
   message sent on a handoff. `from` is kept for a loader cached on a host page from before
   `sender` existed.
+- Only what reached the visitor: inbound messages, and replies whose status is `sent`,
+  `delivered` or `read`. A reply still queued, or one withheld because a colleague took over,
+  is never shown.
+- `at` is when a row became part of the visitor's conversation — when a reply was sent,
+  not when it was written — and `since` pages by it. A reply that is sent after a later row
+  has moved the cursor still arrives. `at` is rounded to milliseconds, so a row may come back
+  twice; the widget drops repeats by id.
+- Attachments are signed links made at read time from the stored file, valid for
+  `MEDIA_LINK_TTL_DAYS`; a history reopened later gets fresh links.
 - Without `since`, the newest thirty messages; with it, up to a hundred after that instant,
   oldest first. Internal events are never returned.
 
-A 401 starts a new session. A 403 with `code: "workspace_suspended"`, or a 404, shuts the
-widget with a message and disables the box; repeated failed polls show an offline line. Those
-few messages are the widget's own and are Thai only for now.
+A 401 starts a new session, retried with backoff if that fails. A 403 with
+`code: "workspace_suspended"`, or a 404, shuts the widget with a message and disables the box;
+repeated failed polls show an offline line; a start that failed offers **Try again**. After a
+minute of waiting on the AI the dots give way to a line saying it is taking longer.
+
+`POST /api/widget/:channel/messages` takes `{ text, clientMessageId }`. The id is chosen by
+the browser once per message; a request retried after a lost response is stored once.
 
 ## Talking to the host page
 

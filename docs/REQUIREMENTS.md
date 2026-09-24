@@ -41,6 +41,10 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 27 | Closing quiet conversations | A conversation **closes itself** after the customer has been quiet for `autoResolveAfterHours` (default 24, off when empty) — only when the AI is answering and our side spoke last. A sweep every 15 minutes, not a timer per conversation | Resolving is what folds a conversation into the customer's summary, so one the customer walked away from was never remembered. Waiting and colleague-owned conversations are owed somebody's reply and are never closed. A sweep reads the truth each time; per-conversation timers would need cancelling on every reply, and a missed cancel closes a live conversation |
 | 28 | Who may open the network | Every URL a tenant admin types — tools, model providers, embeddings, rerank, external retrieval — goes through the restricted client. A private or plain-http origin is reachable only when a **platform admin** approves it **for that tenant** (`workspaces.private_egress_origins`, from the Platform page) | Since tenants have their own admins, the provider form was a tenant's way to make the server fetch any internal address; the `/models` button read the answer back. A self-hosted gateway on a private address is still legitimate, but approving one is an exception to the rule, and the rule cannot let the party it restrains grant it. See ADR 0004 |
 | 29 | Serving stored files | Every stored file goes out through one policy: raster images, audio, video and PDF inline; everything else as a download; always `nosniff`; a script-free CSP `sandbox` on all but PDF. Uploads accept raster images by exact type, never SVG or HTML | Files are served on the console's own origin, with whatever type their sender claimed. An SVG or HTML file opened inline ran as the console, with the signed-in agent's session. A separate media origin is the stronger design and waits on the deployment having a second hostname |
+| 30 | Only delivered replies count | The widget shows, and the dashboard counts, a reply only once the platform took it (`sent`, `delivered`, `read`, with `messages.sent_at`). A reply withheld by a takeover is `canceled`; one the platform may or may not have is `uncertain` and never resent automatically | A takeover that withheld a reply still showed it on the web, and a failed reply still improved "answered" and first-response time. Resending an uncertain message can show a customer the same words twice, which is worse than a person checking |
+| 31 | Who may see and do what, in the console | One capability map (`can(me, …)`) decides what is offered and which requests are made; viewers get read-only notes. The API remains the guard | A viewer was offered a composer, take-over and editors that the API refused, and Settings fired admin-only requests for every role |
+| 32 | Failure is said where it happened | Every load and action that can fail shows its failure beside the control, with a retry, and keeps what was typed. Drafts are kept per conversation | Failed sends, takeovers and loads were silent or read as "empty", and switching conversations threw away a half-written reply |
+| 33 | The widget speaks the visitor's language | The widget's own words are Thai or English, from the embed tag or the workspace | Its greeting and errors were Thai beside English replies |
 
 Pilot success metrics: share of conversations fully handled by AI with no negative rating and no repeat question within 24 h; median first-response time.
 
@@ -369,7 +373,8 @@ for the widget, an explicit Save on the identity card, a remembered result for t
 test button, a currency setting (USD is fixed), a note recorded with a suspension, refusing
 to delete a provider that task slots still use, and widget polish (greeting from the embed
 tag, drawn launcher icons, an open/close animation). Known bugs: an agent's reply does not
-update `last_message_at`, which skews inbox order; the widget's own messages are Thai only.
+update `last_message_at`, which skews inbox order. (The widget's own messages being Thai only
+was fixed with the review; see below.)
 
 **Security-review fixes** (2026-09-24, deployed). `recommendation.md` is an external review of
 2026-09-22 with 24 findings and a status table kept up to date. The hardening milestone fixed
@@ -383,8 +388,33 @@ update `last_message_at`, which skews inbox order; the widget's own messages are
 - **#5, tool credentials following a redirect to another host**: only headers that identify
   nobody cross origins, and a cross-origin 307/308 carrying a body is refused.
 
-Still open from that review: 10–13 and 15–24, among them Thai text breaking widget token
-signing (#15) and the model cache ignoring changed credentials (#17).
+**The rest of the review, and its UX audit** (2026-09-24, same day). A second pass rewrote
+`recommendation.md` into a verification table and added a UX/UI audit (now
+[UX-AUDIT.md](UX-AUDIT.md)). Every item was worked through in nine phases:
+
+- **Security:** reset links re-checked at redemption; canonical storage keys everywhere;
+  unique memberships; UTF-8 token signing and `frame-ancestors` for the widget; the widget no
+  longer shows replies a takeover withheld; sockets re-validate; the DNS race closed by
+  connecting to the checked address; upload bytes checked against their type.
+- **The AI turn:** takeover respected up to a locked commit; fallback attempts isolated;
+  per-attempt and whole-turn deadlines, and a handoff when a turn fails for good; provider
+  caches refresh on credential change; replayed events stored once.
+- **Delivery and data:** resumable multi-request sends, LINE retry keys, `canceled` and
+  `uncertain` statuses; file deletion queued in `blob_deletions`; raw events minimised and
+  erased with the customer.
+- **Retrieval and memory:** embedding spaces, embed-first reindexing, incremental summaries,
+  newest notes, recall of earlier episodes.
+- **Scale and reporting:** total-order paging, lateral previews, cursor history; answered
+  and response times count delivered replies, in the workspace timezone.
+- **Console and widget:** decisions 30–33, and every UX item — failure states, drafts,
+  reachability, scroll anchoring, reconnect, roles, keyboard and dialogs, delivery states,
+  save ordering, setup checklist, dashboard definitions, contrast, the widget in English.
+- **Release:** both images built and started in CI; MinIO pinned by digest.
+
+What remains is listed in the status table of `recommendation.md` and `UX-AUDIT.md`: a
+separate media origin, a redaction inventory beyond raw events, serialising turns across
+messages, conversation search, per-record revision conflicts, a restore rehearsal, and a
+manual screen-reader pass.
 
 ## 3.10 M5 design intent
 
