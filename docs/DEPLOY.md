@@ -3,8 +3,8 @@
 One VPS running Docker, with Nginx Proxy Manager terminating TLS. The same images run on
 Fly.io, Cloud Run, Kubernetes or Cloudflare Containers when traffic justifies moving.
 
-The stack is five long-running containers, `api`, `worker`, `postgres`, `redis` and `minio`,
-plus `minio-init`, which creates the bucket once and exits. The API also serves the built
+The stack is four long-running containers, `api`, `worker`, `postgres` and `redis`. Media
+is stored in a Cloudflare R2 bucket outside the stack (ADR 0008). The API also serves the built
 console and the widget, so one hostname fronts the whole product.
 
 ## Prerequisites
@@ -59,7 +59,26 @@ SEED_ADMIN_PASSWORD=<a strong password you will change>
 rejects requests from origins it does not know, so a mismatch makes sign-in fail with
 "Forbidden" while everything else looks fine.
 
-Leave the `S3_*` values alone. The compose file points them at the bundled MinIO.
+Media goes to R2. Create a private bucket (`wrangler r2 bucket create chatbot-media
+--location apac`), then an R2 API token with **Object Read & Write** on that bucket only, and
+set:
+
+```
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_BUCKET=chatbot-media
+S3_ACCESS_KEY_ID=<the token's access key id>
+S3_SECRET_ACCESS_KEY=<the token's secret access key>
+S3_FORCE_PATH_STYLE=true
+S3_PUBLIC_URL=/api/v1/uploads
+```
+
+The bucket needs no public access: media leaves through the API's signed links.
+
+A host that still holds the MinIO images can keep media on its own disk instead: add
+`COMPOSE_PROFILES=minio` and `S3_ENDPOINT=http://minio:9000` to `.env`. MinIO is no longer
+published, so a new server cannot take this route. **The pilot VPS ran this way until its
+switch to R2; until that switch, its `.env` must carry `COMPOSE_PROFILES=minio`.**
 
 Then:
 
@@ -154,7 +173,7 @@ gateway off; review that list after deploying it. A provider that stops answerin
 
 ```bash
 curl -s https://chat.example.com/healthz   # {"status":"ok","db":true,"redis":true}
-docker compose ps                          # five up, minio-init exited, api and worker healthy
+docker compose ps                          # four up, api and worker healthy
 docker compose logs -f worker              # jobs completing
 ```
 
@@ -263,8 +282,8 @@ What matters is Postgres and `APP_SECRET_KEY`.
 docker compose exec -T postgres pg_dump -U ci chatbot_integration | gzip > backup-$(date +%F).sql.gz
 ```
 
-Media lives in the `miniodata` volume. Back it up once customers start sending images, since
-the platform links those were fetched from expire.
+Media lives in R2, which Cloudflare keeps durable; it is not in these dumps. If you need a
+copy you control, `rclone sync` the bucket somewhere else on a schedule.
 
 ## Scaling beyond one box
 

@@ -10,7 +10,6 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://ci:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/chatbot_integration
       REDIS_URL: redis://redis:6379
-      S3_ENDPOINT: http://minio:9000
     ports: ["3000:3000"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -30,7 +29,6 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://ci:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/chatbot_integration
       REDIS_URL: redis://redis:6379
-      S3_ENDPOINT: http://minio:9000
     depends_on:
       # The API applies migrations on start, so the worker waits for it to be healthy.
       api: { condition: service_healthy }
@@ -66,7 +64,13 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional bundled object storage, started only with `--profile minio` (or
+  # COMPOSE_PROFILES=minio in .env), for an installation that keeps media on its own server.
+  # Storage is otherwise wherever S3_ENDPOINT in .env points; production uses Cloudflare R2
+  # (ADR 0008). MinIO no longer publishes these images anywhere public, so this profile only
+  # works on a host that already holds them.
   minio:
+    profiles: [minio]
     image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
@@ -76,6 +80,7 @@ services:
     volumes: ["miniodata:/data"]
 
   minio-init:
+    profiles: [minio]
     image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     depends_on: [minio]
     restart: on-failure

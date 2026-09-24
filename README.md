@@ -83,7 +83,7 @@ more.
 Then bring up the infrastructure and the schema:
 
 ```bash
-bun run infra:up      # Postgres with pgvector, Redis, MinIO
+bun run infra:up      # Postgres with pgvector and Redis; media goes to ./.data/media
 bun run db:migrate    # creates the extensions, then applies migrations
 bun run db:seed       # a workspace, an admin user, a simulator channel and a web channel
 bun run build:widget  # the API serves the widget from disk; without this its routes 404

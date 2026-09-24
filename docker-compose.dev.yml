@@ -29,7 +29,11 @@ services:
       timeout: 5s
       retries: 20
 
+  # Optional: `docker compose -f docker-compose.dev.yml --profile minio up -d`, on a machine
+  # that still holds the images (MinIO stopped publishing them in September 2026). The
+  # default local store is the filesystem (`S3_ENDPOINT=file://./.data/media`, ADR 0002).
   minio:
+    profiles: [minio]
     image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
@@ -40,6 +44,7 @@ services:
     volumes: ["miniodata:/data"]
 
   minio-init:
+    profiles: [minio]
     image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     depends_on: [minio]
     restart: on-failure
