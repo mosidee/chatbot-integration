@@ -2,7 +2,7 @@ import { slugify } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Card, ConfirmButton, CopyOnce, Input, Spinner } from '../components/ui'
+import { Button, Card, ConfirmButton, CopyOnce, Input, Spinner, Textarea } from '../components/ui'
 import { ApiError, api, type PlatformAdmin, type Tenant } from '../lib/api'
 
 /**
@@ -192,6 +192,10 @@ function TenantsCard({
               </Button>
             ) : null}
           </div>
+
+          {tenant.status === 'deleting' ? null : (
+            <EgressOrigins tenant={tenant} onChanged={onChanged} onError={onError} />
+          )}
 
           {tenant.status === 'deleting' ? null : showDelete[tenant.id] ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -411,5 +415,90 @@ function AccountRecoveryCard({
         </Button>
       </div>
     </Card>
+  )
+}
+
+/**
+ * The private addresses one tenant's providers may reach.
+ *
+ * Here and not in the tenant's own settings: a tenant admin types provider URLs, so the
+ * exception to the egress rule has to be granted by somebody the tenant is not.
+ */
+function EgressOrigins({
+  tenant,
+  onChanged,
+  onError,
+}: {
+  tenant: Tenant
+  onChanged: () => void
+  onError: (error: unknown) => void
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState<string | null>(null)
+
+  const save = useMutation({
+    mutationFn: (origins: string[]) =>
+      api.platform.updateTenant(tenant.id, { privateEgressOrigins: origins }),
+    onSuccess: () => {
+      setDraft(null)
+      onChanged()
+    },
+    onError,
+  })
+
+  const origins = tenant.privateEgressOrigins
+
+  return draft === null ? (
+    <div className="flex flex-wrap items-center gap-2 text-[12px]">
+      <span className="text-[var(--text-muted)]">{t('platform.egress')}:</span>
+      <span
+        data-testid={`tenant-egress-${tenant.slug}`}
+        className="min-w-0 flex-1 break-all font-mono"
+      >
+        {origins.length > 0 ? origins.join(', ') : t('platform.egressNone')}
+      </span>
+      <Button
+        size="sm"
+        variant="ghost"
+        data-testid={`tenant-egress-edit-${tenant.slug}`}
+        onClick={() => setDraft(origins.join('\n'))}
+      >
+        {t('platform.egressEdit')}
+      </Button>
+    </div>
+  ) : (
+    <div className="space-y-1.5">
+      <p className="text-[12px] text-[var(--text-muted)]">{t('platform.egressHint')}</p>
+      <Textarea
+        aria-label={t('platform.egress')}
+        data-testid={`tenant-egress-input-${tenant.slug}`}
+        rows={3}
+        className="font-mono text-[12px]"
+        placeholder="http://10.0.0.5:8080"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+      />
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          data-testid={`tenant-egress-save-${tenant.slug}`}
+          disabled={save.isPending}
+          onClick={() =>
+            save.mutate(
+              draft
+                .split(/[\s,]+/)
+                .map((line) => line.trim())
+                .filter(Boolean),
+            )
+          }
+        >
+          {t('common.save')}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
+          {t('common.cancel')}
+        </Button>
+      </div>
+    </div>
   )
 }

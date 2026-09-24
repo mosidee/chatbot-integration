@@ -436,6 +436,11 @@ const th = {
     recoveryHint:
       'ออกลิงก์ตั้งรหัสผ่านใหม่ให้บัญชีที่ผู้ดูแลพื้นที่ทำงานออกให้ไม่ได้ คือบัญชีที่อยู่มากกว่าหนึ่งพื้นที่ทำงาน หรือเป็นผู้ดูแลระบบ',
     issueReset: 'ออกลิงก์',
+    egress: 'ที่อยู่ภายในที่อนุญาต',
+    egressHint:
+      'ที่อยู่ส่วนตัวหรือ http ที่ผู้ให้บริการ AI และระบบค้นคืนภายนอกของพื้นที่ทำงานนี้เรียกได้ เช่น gateway ในเครือข่ายของคุณ บรรทัดละหนึ่งที่อยู่ ผู้ดูแลพื้นที่ทำงานตั้งเองไม่ได้',
+    egressNone: 'ไม่มี',
+    egressEdit: 'แก้ไข',
   },
   invite: {
     joinTitle: 'เข้าร่วม',
@@ -941,6 +946,11 @@ const en: typeof th = {
     recoveryHint:
       'Issue a password reset link for an account a workspace admin may not: anyone in more than one workspace, and every platform admin.',
     issueReset: 'Issue link',
+    egress: 'Approved private endpoints',
+    egressHint:
+      "Private or plain-http origins this workspace's AI providers and external retrieval may reach, such as a gateway on your own network. One per line. The workspace's own admins cannot set this.",
+    egressNone: 'None',
+    egressEdit: 'Edit',
   },
   invite: {
     joinTitle: 'Join',

@@ -1,4 +1,4 @@
-import { verifyMediaToken } from '@ci/infra'
+import { mediaServingHeaders, verifyMediaToken } from '@ci/infra'
 import Elysia from 'elysia'
 import type { ApiContext } from '../context'
 
@@ -39,9 +39,10 @@ export function mediaRoutes(ctx: ApiContext) {
 
     try {
       const object = await runtime.blob.get(key)
-      return new Response(new Blob([object.data], { type: object.mime }), {
+      return new Response(new Blob([object.data]), {
         headers: {
-          'content-type': object.mime,
+          // The same policy as the console's own route: this one is public and on our origin.
+          ...mediaServingHeaders(object.mime),
           /**
            * Public because the link is the credential and it expires; a platform's fetcher
            * and its CDN are entitled to keep the copy for as long as the link lives.

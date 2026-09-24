@@ -11,6 +11,7 @@ function provider(id: string): ProviderProfile {
     headers: {},
     supportsTools: true,
     supportsVision: false,
+    fetch: (input, init) => globalThis.fetch(input, init),
   }
 }
 

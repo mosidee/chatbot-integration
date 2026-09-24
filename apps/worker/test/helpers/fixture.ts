@@ -262,6 +262,7 @@ export async function createFixture(options: {
               headers: {},
               supportsTools: false,
               supportsVision: false,
+              fetch: runtime.providerFetch([]),
             },
             model: 'mock-embed-model',
           }

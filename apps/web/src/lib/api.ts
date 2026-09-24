@@ -377,6 +377,7 @@ export type Tenant = {
   slug: string
   status: WorkspaceStatus
   memberCount: number
+  privateEgressOrigins: string[]
   createdAt: string
 }
 
@@ -731,8 +732,10 @@ export const api = {
         '/v1/platform/tenants',
         body,
       ),
-    updateTenant: (id: string, body: { name?: string; slug?: string }) =>
-      patch<{ ok: true }>(`/v1/platform/tenants/${id}`, body),
+    updateTenant: (
+      id: string,
+      body: { name?: string; slug?: string; privateEgressOrigins?: string[] },
+    ) => patch<{ ok: true }>(`/v1/platform/tenants/${id}`, body),
     suspend: (id: string) => post<{ status: string }>(`/v1/platform/tenants/${id}/suspend`),
     unsuspend: (id: string) => post<{ status: string }>(`/v1/platform/tenants/${id}/unsuspend`),
     deleteTenant: (id: string, slug: string) =>

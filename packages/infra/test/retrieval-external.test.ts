@@ -45,6 +45,7 @@ describe('Dify adapter', () => {
       baseUrl: stub.url,
       apiKey: 'k',
       datasetId: 'ds-1',
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     const result = await retriever.retrieve({ workspaceId: 'ws', query: 'ราคา' })
 
@@ -62,6 +63,7 @@ describe('Dify adapter', () => {
       baseUrl: stub.url,
       apiKey: 'k',
       datasetId: 'ds-1',
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     await retriever.retrieve({ workspaceId: 'ws', query: 'how much' })
 
@@ -94,6 +96,7 @@ describe('RAGFlow adapter', () => {
       baseUrl: stub.url,
       apiKey: null,
       datasetId: 'kb-1',
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     const result = await retriever.retrieve({ workspaceId: 'ws', query: 'anything' })
 
@@ -114,6 +117,7 @@ describe('generic adapter', () => {
       baseUrl: stub.url,
       apiKey: null,
       datasetId: null,
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     const result = await retriever.retrieve({ workspaceId: 'ws', query: 'q' })
     expect(result.chunks[0]).toMatchObject({ text: 'Some answer', sourceTitle: 'Docs' })
@@ -126,6 +130,7 @@ describe('generic adapter', () => {
       baseUrl: stub.url,
       apiKey: null,
       datasetId: null,
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     expect((await retriever.retrieve({ workspaceId: 'ws', query: 'q' })).chunks).toHaveLength(0)
   })
@@ -139,6 +144,7 @@ describe('failure handling', () => {
       baseUrl: stub.url,
       apiKey: null,
       datasetId: null,
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     const result = await retriever.retrieve({ workspaceId: 'ws', query: 'q' })
     expect(result.chunks).toHaveLength(0)
@@ -152,6 +158,7 @@ describe('failure handling', () => {
       baseUrl: 'http://localhost:1',
       apiKey: null,
       datasetId: null,
+      fetch: (input, init) => globalThis.fetch(input, init),
       timeoutMs: 500,
     })
     const result = await retriever.retrieve({ workspaceId: 'ws', query: 'q' })
@@ -165,6 +172,7 @@ describe('failure handling', () => {
       baseUrl: stub.url,
       apiKey: null,
       datasetId: null,
+      fetch: (input, init) => globalThis.fetch(input, init),
     })
     await retriever.retrieve({ workspaceId: 'ws', query: '   ' })
     expect(stub.requests).toHaveLength(0)

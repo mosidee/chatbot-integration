@@ -32,6 +32,7 @@ function provider(baseUrl: string, id = 'r1'): ProviderProfile {
     headers: {},
     supportsTools: false,
     supportsVision: false,
+    fetch: (input, init) => globalThis.fetch(input, init),
   }
 }
 

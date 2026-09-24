@@ -7,7 +7,9 @@ import {
   loadAiConfig,
   loadWorkspaceSettings,
   resolveExternalRetrieval,
+  safeKeySegment,
   usableSlot,
+  workspaceProviderFetch,
 } from '@ci/infra'
 import { channelTypeSchema, languageSchema } from '@ci/shared'
 import { and, desc, eq, sql } from 'drizzle-orm'
@@ -134,7 +136,8 @@ export function knowledgeRoutes(ctx: ApiContext) {
           if (!(file instanceof File)) return status(422, { error: 'Expected a file field' })
           if (file.size > 25 * 1024 * 1024) return status(413, { error: 'File exceeds 25MB' })
 
-          const storageKey = `${workspaceId}/knowledge/${newId()}-${file.name}`
+          // The name is the sender's: reduced so it cannot add a path segment to the key.
+          const storageKey = `${workspaceId}/knowledge/${newId()}-${safeKeySegment(file.name)}`
           const bytes = new Uint8Array(await file.arrayBuffer())
           await runtime.blob.put(storageKey, bytes, file.type || 'application/octet-stream')
 
@@ -302,16 +305,19 @@ export function knowledgeRoutes(ctx: ApiContext) {
         '/search',
         async ({ workspaceId, body }) => {
           const settings = await loadWorkspaceSettings(db, workspaceId)
+          const providerFetch = await workspaceProviderFetch(runtime, workspaceId)
           const aiConfig = await loadAiConfig(
             db,
             workspaceId,
             env.APP_SECRET_KEY,
             settings.modelPrices,
+            providerFetch,
           )
           // The same source a real turn would use, so the box tests what customers get.
           const external = await resolveExternalRetrieval(
             settings.externalRetrieval,
             env.APP_SECRET_KEY,
+            providerFetch,
           )
           const retriever = external
             ? createExternalRetriever(external)

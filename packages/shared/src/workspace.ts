@@ -135,9 +135,28 @@ export const createTenantBodySchema = z.object({
 })
 export type CreateTenantBody = z.infer<typeof createTenantBodySchema>
 
+/**
+ * One origin a platform admin approves for a tenant's model providers and external
+ * retrieval although it is private or plain http. Normalised to the bare origin, so a path
+ * pasted along with it approves the machine's port and nothing more specific or wider.
+ */
+export const egressOriginSchema = z
+  .string()
+  .trim()
+  .transform((value, ctx) => {
+    try {
+      const url = new URL(value)
+      if (url.protocol === 'http:' || url.protocol === 'https:') return url.origin
+    } catch {}
+    ctx.addIssue({ code: 'custom', message: `"${value}" is not an http(s) origin` })
+    return z.NEVER
+  })
+
 export const updateTenantBodySchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   slug: workspaceSlugSchema.optional(),
+  /** Platform admins only, by virtue of the route; no tenant role can reach it. */
+  privateEgressOrigins: z.array(egressOriginSchema).max(10).optional(),
 })
 export type UpdateTenantBody = z.infer<typeof updateTenantBodySchema>
 

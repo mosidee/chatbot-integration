@@ -1,11 +1,15 @@
 import dns from 'node:dns'
 import net from 'node:net'
 import type { FetchLike } from '@ci/core'
+import { type Database, schema } from '@ci/db'
+import { eq } from 'drizzle-orm'
 
 /**
- * Restricted egress for tenant-defined tools.
+ * Restricted egress for every URL a tenant can type.
  *
- * A tenant who can type a URL has a request origin inside our network. The worker shares a
+ * Tools, model providers and external retrieval all qualify: since tenants have their own
+ * admins, none of them is operator-controlled any more. A tenant who can type a URL has a
+ * request origin inside our network. The worker shares a
  * Docker network with Postgres, Redis and MinIO, and the model gateway answers on a private
  * address, so a tool aimed at an internal host would be fetched and its answer read out to
  * a customer. See decision 20 in docs/REQUIREMENTS.md and ADR 0004.
@@ -137,13 +141,26 @@ const defaultLookup: LookupFn = async (hostname) => {
   return result.map((r) => ({ address: r.address, family: r.family }))
 }
 
-/** Headers that authenticate us to one host and must not travel to another. */
-const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization'])
+/**
+ * The only headers that may follow a redirect to another origin.
+ *
+ * An allowlist, not a list of credential headers to strip. A tool's credential can travel
+ * in any header its tenant names — `x-api-key`, `x-auth-token`, something invented — and a
+ * denylist of `authorization` and `cookie` handed all of those to whatever host the endpoint
+ * redirected to. Nothing here can identify or authorise the caller.
+ */
+const CROSS_ORIGIN_SAFE_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'content-type',
+  'user-agent',
+])
 
-function strippedHeaders(headers: HeadersInit | undefined): Record<string, string> {
+function crossOriginHeaders(headers: HeadersInit | undefined): Record<string, string> {
   const kept: Record<string, string> = {}
   for (const [name, value] of new Headers(headers ?? {}).entries()) {
-    if (!CREDENTIAL_HEADERS.has(name.toLowerCase())) kept[name] = value
+    if (CROSS_ORIGIN_SAFE_HEADERS.has(name.toLowerCase())) kept[name] = value
   }
   return kept
 }
@@ -153,18 +170,33 @@ export type RestrictedFetchOptions = {
   allowPrivate?: boolean
   lookup?: LookupFn
   /**
+   * Origins a platform admin has approved for one tenant, reached even on a private address
+   * or over plain http. A model gateway on the operator's own network is the case this
+   * exists for. Matched on the whole origin — scheme, host and port — so approving a
+   * gateway approves nothing else on that machine.
+   */
+  allowedOrigins?: readonly string[]
+  /**
    * The underlying fetch. Injected so a test can assert what happens between hops without
    * depending on a real server or on DNS answering the way the test needs.
    */
   transport?: FetchLike
 }
 
-async function assertAllowed(url: URL, allowPrivate: boolean, lookup: LookupFn): Promise<void> {
-  if (url.protocol !== 'https:' && !(allowPrivate && url.protocol === 'http:')) {
-    throw new EgressRefusedError(`only https is allowed, and ${url.protocol}// was requested`)
-  }
+async function assertAllowed(
+  url: URL,
+  allowPrivate: boolean,
+  allowedOrigins: ReadonlySet<string>,
+  lookup: LookupFn,
+): Promise<void> {
   if (url.username || url.password) {
     throw new EgressRefusedError('credentials in the URL are not allowed')
+  }
+  // Approved by a platform admin, not by the tenant: it may be private, and it may be http.
+  if (allowedOrigins.has(url.origin)) return
+
+  if (url.protocol !== 'https:' && !(allowPrivate && url.protocol === 'http:')) {
+    throw new EgressRefusedError(`only https is allowed, and ${url.protocol}// was requested`)
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, '')
@@ -209,19 +241,34 @@ async function assertAllowed(url: URL, allowPrivate: boolean, lookup: LookupFn):
  */
 export function createRestrictedFetch(options: RestrictedFetchOptions = {}): FetchLike {
   const allowPrivate = options.allowPrivate ?? false
+  const allowedOrigins = new Set(options.allowedOrigins ?? [])
   const lookup = options.lookup ?? defaultLookup
   const transport: FetchLike = options.transport ?? ((input, init) => fetch(input, init))
 
   return async function restrictedFetch(input, init) {
+    // A Request carries its own method, headers and body. Reading only its URL would send
+    // a POST as a bare GET, so they are lifted into the init, which then wins as it would
+    // in `fetch` itself.
+    let request: RequestInit = { ...init }
+    if (input instanceof Request) {
+      request = {
+        method: input.method,
+        headers: input.headers,
+        ...(input.body ? { body: await input.arrayBuffer() } : {}),
+        signal: input.signal,
+        ...init,
+      }
+    }
+
     let url = new URL(
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
     )
     const origin = url.origin
-    let current: RequestInit = { ...init }
+    let current = request
     let remaining = MAX_REDIRECTS
 
     for (;;) {
-      await assertAllowed(url, allowPrivate, lookup)
+      await assertAllowed(url, allowPrivate, allowedOrigins, lookup)
 
       const response = await transport(url.toString(), { ...current, redirect: 'manual' })
       const location = response.headers.get('location')
@@ -240,21 +287,48 @@ export function createRestrictedFetch(options: RestrictedFetchOptions = {}): Fet
       // Following a redirect by hand means doing by hand what `fetch` would otherwise do
       // for us, and the two things it does are the two things that matter here.
       //
-      // A credential is scoped to the host it was configured for. Replaying the headers
-      // verbatim would hand a tenant's API key to whatever their endpoint redirected to,
-      // which may be an expired domain or somebody else's server.
-      if (next.origin !== origin) {
-        current = { ...current, headers: strippedHeaders(current.headers) }
-      }
-
       // 303 means "go and GET this instead", and 301 and 302 are treated the same way by
       // every client in practice. Replaying a write's body to the new location is how one
       // request becomes two applied operations.
-      if (response.status === 303 || response.status === 301 || response.status === 302) {
+      const becomesGet =
+        response.status === 303 || response.status === 301 || response.status === 302
+      if (becomesGet) {
         current = { ...current, method: 'GET', body: undefined }
+      }
+
+      // A credential is scoped to the host it was configured for, and so is the body. Only
+      // headers that identify nobody travel to another origin, and a 307 or 308 — which
+      // replays the body by definition — is refused rather than handing an account's data
+      // to an expired domain or somebody else's server.
+      if (next.origin !== origin) {
+        if (!becomesGet && current.body != null) {
+          throw new EgressRefusedError(
+            `refusing to resend a request body to another origin (${next.origin}) on a ${response.status}`,
+          )
+        }
+        current = { ...current, headers: crossOriginHeaders(current.headers) }
       }
 
       url = next
     }
   }
+}
+
+/**
+ * The client a tenant's model providers and external retrieval go through.
+ *
+ * Reads the origins a platform admin approved for this workspace, and nothing a tenant
+ * wrote: the list lives on `workspaces.private_egress_origins`, which no tenant route
+ * touches. Everything else a provider URL names is held to the same rule as a tool's.
+ */
+export async function workspaceProviderFetch(
+  runtime: { db: Database; providerFetch: (allowedOrigins: readonly string[]) => FetchLike },
+  workspaceId: string,
+): Promise<FetchLike> {
+  const rows = await runtime.db
+    .select({ origins: schema.workspaces.privateEgressOrigins })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId))
+    .limit(1)
+  return runtime.providerFetch(rows[0]?.origins ?? [])
 }

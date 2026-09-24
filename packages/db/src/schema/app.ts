@@ -214,6 +214,15 @@ export const workspaces = pgTable('workspaces', {
    * requested, which is what keeps new work from arriving while the job runs.
    */
   status: workspaceStatusEnum('status').default('active').notNull(),
+  /**
+   * Origins this tenant's model providers and external retrieval may reach although they
+   * are private or plain http — a self-hosted gateway on the operator's network.
+   *
+   * A column rather than a key in `settings`, because a tenant admin writes `settings` and
+   * this is exactly what a tenant admin must not be able to grant themselves. Only the
+   * platform route writes it. Tools never use it.
+   */
+  privateEgressOrigins: text('private_egress_origins').array().default([]).notNull(),
   createdAt: ts('created_at').defaultNow().notNull(),
   updatedAt: ts('updated_at').defaultNow().notNull(),
 })

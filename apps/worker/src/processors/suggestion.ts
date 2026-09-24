@@ -13,6 +13,7 @@ import {
   usableSlot,
   workspaceHasKnowledge,
   workspaceIsWorkable,
+  workspaceProviderFetch,
 } from '@ci/infra'
 
 /**
@@ -37,7 +38,14 @@ export async function processSuggestion(
   const workspace = await workspaceIsWorkable(db, job.workspaceId, logger, 'suggestion')
   if (!workspace) return
   const settings = workspace.settings
-  const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
+  const providerFetch = await workspaceProviderFetch(runtime, job.workspaceId)
+  const aiConfig = await loadAiConfig(
+    db,
+    job.workspaceId,
+    env.APP_SECRET_KEY,
+    settings.modelPrices,
+    providerFetch,
+  )
 
   // Falls back to the chat slot so suggestions work before anyone configures a cheaper one.
   const slot = usableSlot(aiConfig, 'suggestion_for_human') ?? usableSlot(aiConfig, 'agent_chat')
@@ -62,6 +70,7 @@ export async function processSuggestion(
     externalRetrieval: await resolveExternalRetrieval(
       settings.externalRetrieval,
       env.APP_SECRET_KEY,
+      providerFetch,
     ),
     hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
   })

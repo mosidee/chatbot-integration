@@ -42,7 +42,7 @@ async function callRerank(
   signal: AbortSignal,
 ): Promise<RerankedItem[]> {
   const url = `${target.provider.baseUrl.replace(/\/$/, '')}/rerank`
-  const response = await fetch(url, {
+  const response = await target.provider.fetch(url, {
     method: 'POST',
     signal,
     headers: {

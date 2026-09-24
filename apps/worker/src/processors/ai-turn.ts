@@ -34,6 +34,7 @@ import {
   usableSlot,
   workspaceHasKnowledge,
   workspaceIsWorkable,
+  workspaceProviderFetch,
 } from '@ci/infra'
 import type { HandoffReason } from '@ci/shared'
 import { and, desc, eq } from 'drizzle-orm'
@@ -151,7 +152,14 @@ export async function processAiTurn(
     return mode !== undefined && aiMaySend(mode)
   }
 
-  const aiConfig = await loadAiConfig(db, job.workspaceId, env.APP_SECRET_KEY, settings.modelPrices)
+  const providerFetch = await workspaceProviderFetch(runtime, job.workspaceId)
+  const aiConfig = await loadAiConfig(
+    db,
+    job.workspaceId,
+    env.APP_SECRET_KEY,
+    settings.modelPrices,
+    providerFetch,
+  )
   // Both delivery modes use agent_chat: in ai_supervised the AI is still answering, the
   // answer is just held for a human to approve.
   const chatSlot = usableSlot(aiConfig, 'agent_chat')
@@ -188,6 +196,7 @@ export async function processAiTurn(
     externalRetrieval: await resolveExternalRetrieval(
       settings.externalRetrieval,
       env.APP_SECRET_KEY,
+      providerFetch,
     ),
     hasKnowledge: await workspaceHasKnowledge(db, job.workspaceId),
   })

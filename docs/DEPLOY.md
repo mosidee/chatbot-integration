@@ -141,6 +141,15 @@ product fetch an internal service and read the answer out to a customer. See
 A tenant whose own API is not reachable over public HTTPS cannot be served by a tool. That
 is the intended trade, and the test button in settings reports the refusal plainly.
 
+The same rule covers **model providers and external retrieval**, because a tenant admin
+types those URLs too. A self-hosted gateway on a private address or plain http is reachable
+only once a platform admin approves its origin for that tenant: Platform page → the tenant's
+row → *Approved private endpoints*, one origin per line (`http://10.0.0.5:8080`). Only
+the scheme, host and port are kept, and only that tenant may use it. Migration 0011 approved
+every tenant's already-configured plain-http and IP-literal provider origins once so upgrading does not cut a working
+gateway off; review that list after deploying it. A provider that stops answering with
+"not a public address" or "only https" in its error needs this approval, not a code change.
+
 ## Checks after deploying
 
 ```bash

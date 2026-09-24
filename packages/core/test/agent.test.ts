@@ -38,6 +38,7 @@ function provider(baseUrl: string, overrides: Partial<ProviderProfile> = {}): Pr
     headers: {},
     supportsTools: true,
     supportsVision: true,
+    fetch: (input, init) => globalThis.fetch(input, init),
     ...overrides,
   }
 }

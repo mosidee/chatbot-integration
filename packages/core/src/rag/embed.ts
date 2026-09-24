@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { embed, embedMany } from 'ai'
 import { createCompatibleFetch } from '../ai/compat'
+import type { FetchLike } from '../ai/http-tool'
 import type { SlotConfig, SlotTarget } from '../ai/types'
 import { NoSlotConfiguredError } from '../ai/types'
 
@@ -23,11 +24,17 @@ export type EmbedResult = {
   usedFallback: boolean
 }
 
-const cache = new Map<string, ReturnType<typeof createOpenAICompatible>>()
+/** Per transport, so a provider built for one client is never handed out for another. */
+let cache = new WeakMap<FetchLike, Map<string, ReturnType<typeof createOpenAICompatible>>>()
 
 function providerFor(target: SlotTarget) {
   const key = `${target.provider.id}:${target.provider.baseUrl}`
-  let provider = cache.get(key)
+  let providers = cache.get(target.provider.fetch)
+  if (!providers) {
+    providers = new Map()
+    cache.set(target.provider.fetch, providers)
+  }
+  let provider = providers.get(key)
   if (!provider) {
     provider = createOpenAICompatible({
       name: target.provider.name,
@@ -35,15 +42,15 @@ function providerFor(target: SlotTarget) {
       apiKey: target.provider.apiKey ?? undefined,
       headers: target.provider.headers,
       // Repairs gateways that frame a non-streaming answer as an event stream.
-      fetch: createCompatibleFetch(),
+      fetch: createCompatibleFetch(target.provider.fetch),
     })
-    cache.set(key, provider)
+    providers.set(key, provider)
   }
   return provider
 }
 
 export function clearEmbeddingCache(): void {
-  cache.clear()
+  cache = new WeakMap()
 }
 
 function assertDimensions(

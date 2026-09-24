@@ -1,4 +1,4 @@
-import type { PriceTable, ProviderProfile, SlotConfig } from '@ci/core'
+import type { FetchLike, PriceTable, ProviderProfile, SlotConfig } from '@ci/core'
 import { type Database, decryptJson, decryptSecret, schema } from '@ci/db'
 import type { AiTask } from '@ci/shared'
 import { eq } from 'drizzle-orm'
@@ -20,6 +20,8 @@ export async function loadAiConfig(
   workspaceId: string,
   secretKey: string,
   prices: PriceTable,
+  /** `Runtime.providerFetch`: the base URLs were typed by a tenant admin. */
+  fetch: FetchLike,
 ): Promise<WorkspaceAiConfig> {
   const [providerRows, slotRows] = await Promise.all([
     db.select().from(schema.providers).where(eq(schema.providers.workspaceId, workspaceId)),
@@ -39,6 +41,7 @@ export async function loadAiConfig(
         : {},
       supportsTools: row.supportsTools,
       supportsVision: row.supportsVision,
+      fetch,
     })
   }
 
