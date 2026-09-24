@@ -167,6 +167,24 @@ export function redactText(
   return { text, findings }
 }
 
+/**
+ * Mask every string inside a value bound for storage, however deeply it is nested.
+ *
+ * For what is not a message but still holds what a customer said: a trace's prompt and tool
+ * results, a draft, a note, a summary, the facts the summariser drew out. Keys are left
+ * alone; only values are text somebody typed.
+ */
+export function redactDeep<T>(value: T, options: RedactionOptions = DEFAULT_REDACTION): T {
+  if (!options.cardNumbers && !options.thaiNationalId) return value
+  const walk = (node: unknown): unknown => {
+    if (typeof node === 'string') return redactText(node, options).text
+    if (Array.isArray(node)) return node.map(walk)
+    if (node instanceof Date || node === null || typeof node !== 'object') return node
+    return Object.fromEntries(Object.entries(node).map(([key, inner]) => [key, walk(inner)]))
+  }
+  return walk(value) as T
+}
+
 /** Apply redaction to every text-bearing field of a normalised message. */
 export function redactMessage(
   message: NormalizedMessage,

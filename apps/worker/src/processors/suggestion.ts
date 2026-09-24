@@ -1,4 +1,11 @@
-import { type AgentTurnInput, type EffectPorts, type Logger, runAgentTurn } from '@ci/core'
+import {
+  type AgentTurnInput,
+  type EffectPorts,
+  type Logger,
+  redactDeep,
+  redactText,
+  runAgentTurn,
+} from '@ci/core'
 import { newId, schema } from '@ci/db'
 import type { JobMeta, Runtime, SuggestionJob } from '@ci/infra'
 import {
@@ -123,6 +130,7 @@ export async function processSuggestion(
     bound: boundIdentityFor(context, settings),
     turnKey: meta?.jobId ?? `suggestion-${job.conversationId}`,
     logger,
+    redaction: settings.redaction,
     toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
     ...(retrieval.enabled.knowledge ? { searchKnowledge: retrieval.searchKnowledge } : {}),
     ...(retrieval.enabled.pastConversations
@@ -130,7 +138,13 @@ export async function processSuggestion(
       : {}),
   })
 
-  const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)
+  const traceId = await recordTrace(
+    db,
+    job.workspaceId,
+    job.conversationId,
+    result.trace,
+    settings.redaction,
+  )
   if (!result.text) return
 
   const suggestionId = newId()
@@ -138,8 +152,8 @@ export async function processSuggestion(
     id: suggestionId,
     workspaceId: job.workspaceId,
     conversationId: job.conversationId,
-    messageText: result.text,
-    chunks: result.trace.retrieved,
+    messageText: redactText(result.text, settings.redaction).text,
+    chunks: redactDeep(result.trace.retrieved, settings.redaction),
     aiTraceId: traceId,
     status: 'pending',
   })

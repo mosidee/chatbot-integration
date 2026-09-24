@@ -64,6 +64,9 @@ path: an optional workspace in scope is the ambient tenant this codebase refuses
 
 **Redact before you persist.** Card numbers and Thai national IDs are masked before anything
 reaches the database or a model. `storeMessage` does this; do not write message rows by hand.
+Text that is not a message is masked where it is written: `recordTrace` takes the workspace's
+redaction rules as a required argument, and drafts, notes, summaries, summariser facts, field
+updates and vision descriptions go through `redactText`/`redactDeep` from `@ci/core`.
 
 **Credentials are write-only.** Provider keys and channel config are encrypted with
 AES-256-GCM and decrypted at the moment of use. API responses expose `hasKey`, never the key.

@@ -1,5 +1,5 @@
 import { getAdapter } from '@ci/channels'
-import type { EffectContext, EffectPorts, Logger } from '@ci/core'
+import { type EffectContext, type EffectPorts, type Logger, redactText } from '@ci/core'
 import { type Database, decryptJson, type Executor, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
@@ -164,12 +164,14 @@ export function createEffectPorts(
     },
 
     async addInternalNote(ctx, body) {
+      // A handoff note can quote the customer, and the model writes it, not the customer.
+      const { redaction } = await loadWorkspaceSettings(db, ctx.workspaceId)
       await executor.insert(schema.internalNotes).values({
         id: newId(),
         workspaceId: ctx.workspaceId,
         conversationId: ctx.conversationId,
         authorType: 'ai',
-        body,
+        body: redactText(body, redaction).text,
       })
     },
 

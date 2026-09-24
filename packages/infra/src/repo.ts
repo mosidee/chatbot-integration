@@ -1,6 +1,6 @@
 import type { ChannelAdapter, InboundEvent } from '@ci/channels'
 import type { Logger } from '@ci/core'
-import { type RedactionOptions, redactMessage } from '@ci/core'
+import { type RedactionOptions, redactDeep, redactMessage, redactText } from '@ci/core'
 import { type Database, defaultWorkspaceSettings, type Executor, newId, schema } from '@ci/db'
 import type { WorkspaceSettings } from '@ci/db/schema/app'
 import type {
@@ -656,7 +656,8 @@ export async function addInternalNote(
     conversationId: input.conversationId,
     authorType: input.authorType,
     authorUserId: input.authorUserId ?? null,
-    body: input.body,
+    body: redactText(input.body, (await loadWorkspaceSettings(db, input.workspaceId)).redaction)
+      .text,
   })
   return id
 }
@@ -681,6 +682,12 @@ export async function recordTrace(
     outcome: 'sent' | 'draft' | 'handoff' | 'error'
     error: string | null
   },
+  /**
+   * Required, so no caller can forget it. A trace holds the whole prompt, every tool result
+   * and what was retrieved: the customer's messages were masked on the way in, but a tenant
+   * tool's answer or a description of a photographed card were not.
+   */
+  redaction: RedactionOptions,
 ): Promise<string> {
   const id = newId()
   await db.insert(schema.aiTraces).values({
@@ -692,15 +699,15 @@ export async function recordTrace(
     providerName: trace.providerName,
     model: trace.model,
     usedFallback: trace.usedFallback,
-    prompt: trace.prompt,
-    toolCalls: trace.toolCalls,
-    retrieved: trace.retrieved,
+    prompt: redactDeep(trace.prompt, redaction),
+    toolCalls: redactDeep(trace.toolCalls, redaction),
+    retrieved: redactDeep(trace.retrieved, redaction),
     tokensIn: trace.tokensIn,
     tokensOut: trace.tokensOut,
     latencyMs: trace.latencyMs,
     costEstimate: trace.costEstimate === null ? null : String(trace.costEstimate),
     outcome: trace.outcome,
-    error: trace.error,
+    error: trace.error === null ? null : redactText(trace.error, redaction).text,
   })
   return id
 }

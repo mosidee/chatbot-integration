@@ -414,6 +414,58 @@ describe('the AI and human loop', () => {
     expect(messages.filter((m) => m.senderType === 'ai')).toHaveLength(0)
   })
 
+  /**
+   * `storeMessage` masks what the customer sent. What the AI writes about them — a handoff
+   * note, a draft, the arguments of a tool call kept in the trace — never passed through it.
+   */
+  test('card numbers the AI writes are masked in notes, traces and drafts', async () => {
+    const card = '4242424242424242'
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          {
+            name: 'handoff_to_human',
+            arguments: { reason: 'customer_requested', note: `Card on file ${card}.` },
+          },
+        ],
+      },
+      { kind: 'text', text: 'ขอโอนสายนะคะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    await customerSays(f, 'ขอคุยกับเจ้าหน้าที่')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    const notes = await f.runtime.db
+      .select({ body: schema.internalNotes.body })
+      .from(schema.internalNotes)
+      .where(eq(schema.internalNotes.conversationId, conversation.id))
+    expect(notes.map((n) => n.body).join(' ')).toContain('••••4242')
+    expect(JSON.stringify(notes)).not.toContain(card)
+
+    const traces = await f.runtime.db
+      .select()
+      .from(schema.aiTraces)
+      .where(eq(schema.aiTraces.conversationId, conversation.id))
+    expect(traces.length).toBeGreaterThan(0)
+    expect(JSON.stringify(traces)).not.toContain(card)
+
+    const drafting = mock([{ kind: 'text', text: `ยืนยันบัตร ${card} ค่ะ` }])
+    const g = await fixture({
+      providerBaseUrl: drafting.url,
+      settings: { defaultMode: 'ai_supervised' },
+    })
+    await customerSays(g, 'question')
+    await runQueuedWork(g)
+    const suggestions = await g.runtime.db
+      .select({ text: schema.suggestions.messageText })
+      .from(schema.suggestions)
+      .where(eq(schema.suggestions.workspaceId, g.workspaceId))
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]?.text).not.toContain(card)
+  })
+
   test('card numbers are masked before they reach the database or the model', async () => {
     const provider = mock([{ kind: 'text', text: 'ขอบคุณค่ะ' }])
     const f = await fixture({ providerBaseUrl: provider.url })

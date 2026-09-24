@@ -7,6 +7,8 @@ import {
   type EffectPorts,
   type ImageInput,
   type Logger,
+  redactDeep,
+  redactText,
   runAgentTurn,
   transition,
 } from '@ci/core'
@@ -268,6 +270,7 @@ export async function processAiTurn(
     bound,
     turnKey: writeKey,
     logger,
+    redaction: settings.redaction,
     toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
     // Offered only where it can actually be honoured. `draft` is excluded because that
     // path ends at a suggestion for a person to approve and never reaches the code below
@@ -284,7 +287,13 @@ export async function processAiTurn(
       : {}),
   })
 
-  const traceId = await recordTrace(db, job.workspaceId, job.conversationId, result.trace)
+  const traceId = await recordTrace(
+    db,
+    job.workspaceId,
+    job.conversationId,
+    result.trace,
+    settings.redaction,
+  )
 
   /**
    * The second check: before anything this turn learned is written to the customer.
@@ -312,7 +321,7 @@ export async function processAiTurn(
     db,
     job.workspaceId,
     conversation.customerId,
-    result.customerFieldUpdates,
+    redactDeep(result.customerFieldUpdates, settings.redaction),
   )
   // A newly learned phone or account id may be one we already hold under another name.
   // This only proposes; joining the two records is a person's decision, never ours.
@@ -412,8 +421,8 @@ export async function processAiTurn(
       id: suggestionId,
       workspaceId: job.workspaceId,
       conversationId: job.conversationId,
-      messageText: result.text,
-      chunks: result.trace.retrieved,
+      messageText: redactText(result.text, settings.redaction).text,
+      chunks: redactDeep(result.trace.retrieved, settings.redaction),
       aiTraceId: traceId,
       status: 'pending',
     })
