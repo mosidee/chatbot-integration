@@ -1,0 +1,1 @@
+CREATE INDEX "outbox_job_id_idx" ON "outbox" USING btree ("job_id");

@@ -3278,3 +3278,129 @@ describe('the review, phase B', () => {
     expect(inbound).toHaveLength(1)
   })
 })
+
+/**
+ * Every customer message queues its own turn. Two lines typed in quick succession used to
+ * run two turns side by side, and the customer read two answers, the second often
+ * contradicting the first. The newer turn sees both messages, so it alone answers.
+ */
+describe('a customer who writes again before the AI has answered', () => {
+  type TurnJob = {
+    workspaceId: string
+    conversationId: string
+    deliver: 'send' | 'draft'
+    triggerMessageId?: string
+  }
+
+  const byTrigger = (a: TurnJob, b: TurnJob) =>
+    (a.triggerMessageId ?? '') < (b.triggerMessageId ?? '') ? -1 : 1
+
+  /** The outbox is one table, so a relay can carry turns an earlier test left behind. */
+  const turnsOf = async (f: Fixture) =>
+    (await drainQueue<TurnJob>(f, f.queues.ai_turn))
+      .filter((job) => job.workspaceId === f.workspaceId)
+      .sort(byTrigger)
+
+  const runTurn = (f: Fixture, job: TurnJob) =>
+    processAiTurn(f.runtime, portsFor(f), f.runtime.logger, job, {
+      jobId: `ai-turn-${job.triggerMessageId}`,
+    })
+
+  test('gets one answer, from the turn that saw both messages', async () => {
+    const provider = mock([{ kind: 'text', text: 'ราคาเริ่มต้น 990 บาท และทดลองใช้ได้ 14 วันค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'ราคาเท่าไหร่คะ')
+    await customerSays(f, 'แล้วมีทดลองใช้ไหมคะ')
+    const [older, newer] = await turnsOf(f)
+    if (!older || !newer) throw new Error('expected a turn for each message')
+
+    // The older turn steps aside before paying for a model call.
+    await runTurn(f, older)
+    expect(provider.requests).toHaveLength(0)
+
+    await runTurn(f, newer)
+    const conversation = await onlyConversation(f)
+    const replies = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'ai')
+    expect(replies).toHaveLength(1)
+
+    // And it answered with both questions in front of it.
+    const prompt = JSON.stringify(provider.requests[0])
+    expect(prompt).toContain('ราคาเท่าไหร่คะ')
+    expect(prompt).toContain('แล้วมีทดลองใช้ไหมคะ')
+  })
+
+  test('a message arriving while the model is answering stops the older reply', async () => {
+    const inner = mock([
+      { kind: 'text', text: 'คำตอบที่ไม่ควรถูกส่ง' },
+      { kind: 'text', text: 'คำตอบสำหรับทั้งสองข้อความค่ะ' },
+    ])
+    let f: Fixture | null = null
+    let interrupted = false
+    // Stands in front of the mock and has the customer write again during the first call.
+    const proxy = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        if (!interrupted && f && new URL(request.url).pathname.endsWith('/chat/completions')) {
+          interrupted = true
+          await customerSays(f, 'ขอเพิ่มอีกข้อค่ะ')
+        }
+        const url = new URL(request.url)
+        return fetch(`${inner.url}${url.pathname}`, {
+          method: request.method,
+          headers: request.headers,
+          body: await request.text(),
+        })
+      },
+    })
+    try {
+      f = await fixture({ providerBaseUrl: `http://localhost:${proxy.port}` })
+      await customerSays(f, 'สมัครยังไงคะ')
+      const [first] = await turnsOf(f)
+      if (!first) throw new Error('no AI turn was queued')
+
+      await runTurn(f, first)
+      const conversation = await onlyConversation(f)
+      expect(
+        (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'ai'),
+      ).toHaveLength(0)
+
+      const [second] = await turnsOf(f)
+      if (!second) throw new Error('the second message queued no turn')
+      await runTurn(f, second)
+      const replies = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'ai')
+      expect(replies.map((m) => m.text)).toEqual(['คำตอบสำหรับทั้งสองข้อความค่ะ'])
+    } finally {
+      proxy.stop(true)
+    }
+  })
+
+  test('a newer message that has no turn of its own does not silence the older one', async () => {
+    const provider = mock([{ kind: 'text', text: 'ตอบให้แล้วค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    await customerSays(f, 'ช่วยด้วยค่ะ')
+    const [queued] = await turnsOf(f)
+    if (!queued) throw new Error('no AI turn was queued')
+
+    // A colleague holds the conversation while the customer writes again, so that message
+    // queues a suggestion rather than a turn, and then hands it back to the AI.
+    const conversation = await onlyConversation(f)
+    await humanAction(f, conversation.id, {
+      type: 'human_take_over',
+      at: new Date(),
+      userId: f.userId,
+    })
+    await customerSays(f, 'ยังอยู่ไหมคะ')
+    expect(await turnsOf(f)).toHaveLength(0)
+    await humanAction(f, conversation.id, {
+      type: 'human_return_to_ai',
+      at: new Date(),
+      note: null,
+    })
+
+    await runTurn(f, queued)
+    const replies = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'ai')
+    expect(replies).toHaveLength(1)
+  })
+})

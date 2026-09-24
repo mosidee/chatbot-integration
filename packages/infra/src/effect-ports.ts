@@ -50,8 +50,9 @@ export function createEffectPorts(
      * The job id is that message, which is what makes a retry of the same turn the same
      * job rather than a second answer. It is deliberately not the conversation: collapsing
      * a burst would drop whichever message arrived while a turn was running, and leaving a
-     * customer unanswered is worse than answering them twice. Interleaved replies are the
-     * accepted cost, and the turn re-reads the conversation before it acts.
+     * customer unanswered is worse than answering them twice. Instead the older turn steps
+     * aside when it finds a newer message with its own turn owed (`newerTurnOwed` in the
+     * AI-turn processor), and the newer turn, which sees both, answers.
      *
      * Where no triggering message exists — a verification a customer just completed — the
      * caller supplies its own key, because there is still exactly one turn owed.
