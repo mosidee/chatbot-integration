@@ -1,4 +1,5 @@
 import './styles.css'
+import { readableOn } from './contrast'
 
 /**
  * The chat itself, inside the iframe.
@@ -57,6 +58,52 @@ const colour = params.get('colour')
 if (colour) applyAccent(colour)
 
 /**
+ * Every word the widget says for itself, in both languages the product speaks.
+ *
+ * It used to be Thai only, beside replies the API was already writing in English for an
+ * English-speaking visitor. The language comes from the embed tag (`data-lang`), then from
+ * the workspace's own language once the session says what it is, then Thai.
+ */
+const COPY = {
+  th: {
+    title: 'ช่วยเหลือ',
+    close: 'ปิด',
+    greeting: 'สวัสดีค่ะ พิมพ์คำถามได้เลยนะคะ',
+    placeholder: 'พิมพ์ข้อความ...',
+    message: 'ข้อความ',
+    send: 'ส่ง',
+    suspended: 'ระบบแชทปิดให้บริการชั่วคราว',
+    notHere: 'ไม่สามารถใช้งานแชทจากหน้านี้ได้',
+    notConfigured: 'ยังไม่ได้ตั้งค่าแชท',
+    offline: 'ออฟไลน์ กำลังเชื่อมต่อใหม่...',
+    connectFailed: 'เชื่อมต่อไม่สำเร็จ',
+    retry: 'ลองอีกครั้ง',
+    sendFailed: 'ส่งไม่สำเร็จ กรุณาลองอีกครั้ง',
+    takingLonger: 'ใช้เวลานานกว่าปกติ เรายังดูแลอยู่ค่ะ',
+  },
+  en: {
+    title: 'Help',
+    close: 'Close',
+    greeting: 'Hello! Type your question below.',
+    placeholder: 'Type a message...',
+    message: 'Message',
+    send: 'Send',
+    suspended: 'Chat is temporarily unavailable',
+    notHere: 'Chat cannot be used from this page',
+    notConfigured: 'Chat has not been set up yet',
+    offline: 'Offline. Reconnecting...',
+    connectFailed: 'Could not connect',
+    retry: 'Try again',
+    sendFailed: 'Not sent. Please try again.',
+    takingLonger: 'This is taking longer than usual. We are still on it.',
+  },
+} as const
+type Lang = keyof typeof COPY
+const requestedLang = params.get('lang')
+let lang: Lang = requestedLang === 'en' || requestedLang === 'th' ? requestedLang : 'th'
+const copy = () => COPY[lang]
+
+/**
  * The brand colour, and a foreground that can be read on top of it.
  *
  * A tenant picks the colour from their own site, where it sits behind dark text; here it
@@ -73,9 +120,10 @@ function applyAccent(value: string): void {
   }) as [number, number, number]
   const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
   document.documentElement.style.setProperty('--accent', value)
+  // Whichever of black and white reads better; see contrast.ts for why not a threshold.
   document.documentElement.style.setProperty(
     '--accent-fg',
-    luminance > 0.45 ? '#111827' : '#ffffff',
+    readableOn(value) ?? (luminance > 0.18 ? '#000000' : '#ffffff'),
   )
 }
 
@@ -98,18 +146,21 @@ const root = document.getElementById('root') as HTMLElement
 root.innerHTML = `
   <div class="shell">
     <div class="header">
-      <span>ช่วยเหลือ</span>
-      <button type="button" id="close" aria-label="ปิด">✕</button>
+      <span id="title"></span>
+      <button type="button" id="close">✕</button>
     </div>
     <div class="thread" id="thread" role="log" aria-live="polite">
-      <p class="hint" id="hint">สวัสดีค่ะ พิมพ์คำถามได้เลยนะคะ</p>
+      <p class="hint" id="hint"></p>
       <div class="typing" id="typing" hidden aria-hidden="true"><span></span><span></span><span></span></div>
     </div>
     <p class="state" id="state" hidden role="status"></p>
-    <p class="error" id="error" hidden role="alert"></p>
+    <div class="error" id="error-box" hidden role="alert">
+      <span id="error"></span>
+      <button type="button" id="retry" hidden></button>
+    </div>
     <form class="composer" id="composer">
-      <textarea id="text" rows="1" maxlength="4000" autocomplete="off" placeholder="พิมพ์ข้อความ..." aria-label="ข้อความ"></textarea>
-      <button type="submit" id="send">ส่ง</button>
+      <textarea id="text" rows="1" maxlength="4000" autocomplete="off"></textarea>
+      <button type="submit" id="send"></button>
     </form>
   </div>
 `
@@ -118,10 +169,27 @@ const thread = document.getElementById('thread') as HTMLElement
 const hint = document.getElementById('hint') as HTMLElement
 const typing = document.getElementById('typing') as HTMLElement
 const stateLine = document.getElementById('state') as HTMLElement
+const errorBox = document.getElementById('error-box') as HTMLElement
 const errorLine = document.getElementById('error') as HTMLElement
+const retryButton = document.getElementById('retry') as HTMLButtonElement
 const form = document.getElementById('composer') as HTMLFormElement
 const input = document.getElementById('text') as HTMLTextAreaElement
 const send = document.getElementById('send') as HTMLButtonElement
+
+/** Put the current language's words in place. Run again when the language is learned. */
+function applyCopy(): void {
+  const words = copy()
+  document.documentElement.lang = lang
+  document.title = words.title
+  ;(document.getElementById('title') as HTMLElement).textContent = words.title
+  document.getElementById('close')?.setAttribute('aria-label', words.close)
+  hint.textContent = words.greeting
+  input.placeholder = words.placeholder
+  input.setAttribute('aria-label', words.message)
+  send.textContent = words.send
+  retryButton.textContent = words.retry
+}
+applyCopy()
 
 function close(): void {
   parent.postMessage({ type: 'chat-widget:close' }, '*')
@@ -169,9 +237,11 @@ function takePending(text: string): HTMLElement | null {
   return bubble
 }
 
-function showError(message: string | null): void {
+function showError(message: string | null, retry?: () => void): void {
   errorLine.textContent = message ?? ''
-  errorLine.hidden = message === null
+  errorBox.hidden = message === null
+  retryButton.hidden = !retry
+  retryButton.onclick = retry ? () => retry() : null
 }
 
 /** Stop taking messages nobody will answer, and say why. */
@@ -183,9 +253,15 @@ function shutDownWith(message: string): void {
   setTyping(false)
 }
 
+/** Whether the visitor is at the end of the thread, rather than reading back through it. */
+function nearBottom(): boolean {
+  return thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80
+}
+
 function setTyping(on: boolean): void {
+  const follow = nearBottom()
   typing.hidden = !on
-  if (on) thread.scrollTop = thread.scrollHeight
+  if (on && follow) thread.scrollTop = thread.scrollHeight
 }
 
 /**
@@ -215,6 +291,9 @@ function append(message: WidgetMessage, optimistic = false): void {
   }
 
   hint.hidden = true
+  // Measured before the bubble goes in: follow the conversation only if they were already
+  // at its end, or this is their own message. Reading back used to be yanked down.
+  const follow = optimistic || nearBottom()
 
   const bubble = document.createElement('div')
   const sender = message.sender ?? message.from
@@ -257,7 +336,7 @@ function append(message: WidgetMessage, optimistic = false): void {
 
   // The indicator belongs at the end of the thread, under whatever just arrived.
   thread.insertBefore(bubble, typing)
-  thread.scrollTop = thread.scrollHeight
+  if (follow) thread.scrollTop = thread.scrollHeight
 
   if (optimistic) {
     const waiting = pending.get(message.text) ?? []
@@ -296,7 +375,17 @@ async function startSession(): Promise<void> {
     if (await handleRefusal(response)) return
     throw new Error('session')
   }
-  session = ((await response.json()) as { session: string }).session
+  const body = (await response.json()) as { session: string; language?: string }
+  session = body.session
+  // The workspace's own language, unless the embed tag already chose one.
+  if (
+    !requestedLang &&
+    (body.language === 'en' || body.language === 'th') &&
+    body.language !== lang
+  ) {
+    lang = body.language
+    applyCopy()
+  }
 }
 
 /**
@@ -309,20 +398,45 @@ async function startSession(): Promise<void> {
 async function handleRefusal(response: Response): Promise<boolean> {
   if (response.status === 403) {
     const body = (await response.json().catch(() => ({}))) as { code?: string }
-    shutDownWith(
-      body.code === 'workspace_suspended' ? 'ระบบแชทปิดให้บริการชั่วคราว' : 'ไม่สามารถใช้งานแชทจากหน้านี้ได้',
-    )
+    shutDownWith(body.code === 'workspace_suspended' ? copy().suspended : copy().notHere)
     return true
   }
   if (response.status === 404) {
-    shutDownWith('ยังไม่ได้ตั้งค่าแชท')
+    shutDownWith(copy().notConfigured)
     return true
   }
   return false
 }
 
+/** When a lost session may next be renewed, and how many renewals have failed in a row. */
+let nextRenewAt = 0
+let renewFailures = 0
+
+/**
+ * Get a session back after it lapsed or a renewal failed.
+ *
+ * A renewal that threw used to leave `session` null for good: every later poll returned at
+ * once and the chat sat there looking quiet. It is retried with backoff instead, and the
+ * visitor is told the chat is reconnecting meanwhile.
+ */
+async function renew(): Promise<boolean> {
+  if (Date.now() < nextRenewAt) return false
+  try {
+    await startSession()
+    renewFailures = 0
+    return session !== null
+  } catch {
+    renewFailures += 1
+    nextRenewAt = Date.now() + Math.min(30_000, 1000 * 2 ** renewFailures)
+    showError(copy().offline)
+    return false
+  }
+}
+
 async function poll(): Promise<void> {
-  if (!session || shutDown) return
+  if (shutDown) return
+  if (!session && !(await renew())) return
+  if (!session) return
   const url = new URL(`/api/widget/${channel}/messages`, location.origin)
   if (since) url.searchParams.set('since', since)
 
@@ -333,7 +447,7 @@ async function poll(): Promise<void> {
     // The network, not the server. Only worth mentioning once it has happened twice:
     // a single dropped poll on a phone changing cell is not news.
     failedPolls += 1
-    if (failedPolls >= OFFLINE_AFTER) showError('ออฟไลน์ กำลังเชื่อมต่อใหม่...')
+    if (failedPolls >= OFFLINE_AFTER) showError(copy().offline)
     return
   }
 
@@ -341,13 +455,13 @@ async function poll(): Promise<void> {
     // The session expired while the widget sat open. Start a new one rather than going
     // quiet, which from the customer's side looks like the chat broke.
     session = null
-    await startSession()
+    await renew()
     return
   }
   if (!response.ok) {
     if (await handleRefusal(response)) return
     failedPolls += 1
-    if (failedPolls >= OFFLINE_AFTER) showError('ออฟไลน์ กำลังเชื่อมต่อใหม่...')
+    if (failedPolls >= OFFLINE_AFTER) showError(copy().offline)
     return
   }
 
@@ -363,7 +477,11 @@ async function poll(): Promise<void> {
     if (message.from === 'support') awaitingReplySince = null
   }
 
-  setState(body.state ?? 'ai', body.stateText ?? null)
+  const waitedSoFar = awaitingReplySince === null ? 0 : Date.now() - awaitingReplySince
+  // Past the typing budget, the dots stop and something true is said in their place.
+  const slow =
+    awaitingReplySince !== null && (body.state ?? 'ai') === 'ai' && waitedSoFar >= TYPING_MAX_MS
+  setState(body.state ?? 'ai', body.stateText ?? (slow ? copy().takingLonger : null))
 
   /**
    * Three dots only while an answer is actually owed.
@@ -385,17 +503,27 @@ function autogrow(): void {
 
 input.addEventListener('input', autogrow)
 input.addEventListener('keydown', (event) => {
-  // Enter sends, Shift+Enter is a new line: what every chat on the web does.
-  if (event.key === 'Enter' && !event.shiftKey) {
+  // Enter sends, Shift+Enter is a new line: what every chat on the web does. Not while a
+  // Thai or Japanese input method is composing, where Enter picks the candidate.
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault()
     form.requestSubmit()
   }
 })
 
+/**
+ * A send in flight. Enter calls `requestSubmit`, which does not care that the button is
+ * disabled, so without this a second Enter sent the message again.
+ */
+let sending = false
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault()
   const text = input.value.trim()
-  if (!text || !session || shutDown) return
+  if (!text || !session || shutDown || sending) return
+  sending = true
+  // One id for this message across any retry of its request, so the server stores it once.
+  const clientMessageId = crypto.randomUUID().replace(/-/g, '')
 
   input.value = ''
   autogrow()
@@ -411,11 +539,12 @@ form.addEventListener('submit', async (event) => {
   awaitingReplySince = Date.now()
   if (state === 'ai') setTyping(true)
 
+  let delivered = false
   try {
     const response = await fetch(`/api/widget/${channel}/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-widget-session': session },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, clientMessageId }),
     })
     if (!response.ok) {
       if (await handleRefusal(response)) {
@@ -426,22 +555,29 @@ form.addEventListener('submit', async (event) => {
       }
       throw new Error('send')
     }
-    await poll()
+    delivered = true
   } catch {
     // Remove the bubble that was drawn optimistically: leaving it would tell the customer
     // their message was sent when it was not.
     takePending(text)?.remove()
-    input.value = text
-    autogrow()
+    // Put it back only into an empty box: anything typed since is theirs too, and
+    // overwriting it lost the newer words to rescue the older ones.
+    if (!input.value) {
+      input.value = text
+      autogrow()
+    }
     awaitingReplySince = null
     setTyping(false)
-    showError('ส่งไม่สำเร็จ กรุณาลองอีกครั้ง')
+    showError(copy().sendFailed)
   } finally {
+    sending = false
     if (!shutDown) {
       send.disabled = false
       input.focus()
     }
   }
+  // Outside the try: a poll that fails after the send succeeded is not a failed send.
+  if (delivered) await poll().catch(() => {})
 })
 
 window.addEventListener('message', (event) => {
@@ -455,9 +591,11 @@ window.addEventListener('message', (event) => {
   if (data?.type === 'chat-widget:hidden') visible = false
 })
 
+let polling: ReturnType<typeof setInterval> | null = null
+
 async function main(): Promise<void> {
   if (!channel) {
-    shutDownWith('ยังไม่ได้ตั้งค่าแชท')
+    shutDownWith(copy().notConfigured)
     return
   }
 
@@ -479,15 +617,21 @@ async function main(): Promise<void> {
 
   if (shutDown) return
   if (!session) {
-    shutDownWith('เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+    // Not a dead end: the visitor can try again without reloading the host page, which
+    // they may not even know is what "try again" would have required.
+    showError(copy().connectFailed, () => {
+      showError(null)
+      void main()
+    })
     return
   }
 
+  showError(null)
   input.disabled = false
   send.disabled = false
   await poll()
   primed = true
-  setInterval(() => void poll().catch(() => {}), POLL_MS)
+  if (!polling) polling = setInterval(() => void poll().catch(() => {}), POLL_MS)
 }
 
 void main()
