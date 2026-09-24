@@ -427,6 +427,8 @@ export type Dashboard = {
   waitingNow: number
   feedback: { up: number; down: number; reasons: { reason: string; count: number }[] }
   reviewQueueNow: number
+  /** The timezone the days were counted in. */
+  timezone: string
 }
 
 export type ConversationFilters = {
@@ -604,6 +606,10 @@ export const api = {
       channelId: string,
       payload: { externalId: string; message: NormalizedMessage; displayName?: string },
     ) => post<{ received: boolean }>(`/v1/simulator/${channelId}/inbound`, payload),
+    conversationFor: (channelId: string, externalId: string) =>
+      get<{ conversationId: string | null }>(
+        `/v1/simulator/${channelId}/conversation?externalId=${encodeURIComponent(externalId)}`,
+      ),
   },
 
   traces: {

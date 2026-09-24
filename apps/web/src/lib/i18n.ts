@@ -36,6 +36,16 @@ const th = {
     forgotHint: 'ลืมรหัสผ่าน? ขอลิงก์ตั้งรหัสใหม่จากผู้ดูแลพื้นที่ทำงานของคุณ',
   },
   dashboard: {
+    whatIsCounted: 'นับอะไรบ้าง',
+    inTimezone: 'นับวันตามเวลา {{timezone}}',
+    definitions: {
+      conversations: 'บทสนทนาที่เริ่มในช่วงนี้ และข้อความจากลูกค้าในช่วงนี้ นับวันตามเวลาของพื้นที่ทำงาน',
+      answered:
+        'สัดส่วนรอบที่ AI ตอบแล้วข้อความถึงลูกค้าจริง เทียบกับรอบที่ AI ตอบหรือส่งต่อให้เจ้าหน้าที่ คำตอบที่ส่งไม่สำเร็จหรือถูกยกเลิกเพราะเจ้าหน้าที่รับเรื่องต่อไม่นับ',
+      handoffWait:
+        'มัธยฐานของเวลาตั้งแต่ AI ส่งต่อจนเจ้าหน้าที่ตอบและข้อความถึงลูกค้า ที่ยังไม่มีใครตอบแสดงแยก เวลาตอบครั้งแรกคือเวลาจากข้อความแรกของลูกค้าถึงคำตอบแรกที่ส่งถึงจริง',
+      cost: 'ประมาณการจากราคารุ่นที่ตั้งไว้ รวมเฉพาะการตอบและการอ่านรูป ไม่รวมการค้นหาความรู้และรอบที่ล้มเหลวก่อนสลับรุ่นสำรอง',
+    },
     title: 'ภาพรวม',
     days: 'วัน',
     conversations: 'บทสนทนา',
@@ -251,7 +261,21 @@ const th = {
     systemPrompt: 'คำสั่งระบบ',
     messages: 'บทสนทนาที่ส่งให้โมเดล',
   },
+  setup: {
+    title: 'ตั้งค่าให้พร้อมตอบลูกค้า',
+    steps: {
+      model: 'เลือกผู้ให้บริการและรุ่น AI สำหรับตอบลูกค้า',
+      channel: 'เชื่อมต่อช่องทาง LINE, Messenger หรือวิดเจ็ต',
+      knowledge: 'เพิ่มความรู้ให้ AI',
+      tryIt: 'ลองส่งข้อความทดสอบ แล้วเปิดบทสนทนาดู',
+    },
+    optional: 'ไม่บังคับ',
+    go: 'ไปตั้งค่า',
+    done: 'เสร็จแล้ว',
+    todo: 'ยังไม่ได้ทำ',
+  },
   simulator: {
+    openConversation: 'เปิดบทสนทนานี้',
     title: 'ทดลองแชท',
     description: 'ส่งข้อความเหมือนเป็นลูกค้า เพื่อทดสอบ AI โดยไม่ต้องใช้ LINE หรือ Facebook',
     customerName: 'ชื่อลูกค้า',
@@ -553,6 +577,17 @@ const en: typeof th = {
     forgotHint: 'Forgotten your password? Ask your workspace admin for a reset link.',
   },
   dashboard: {
+    whatIsCounted: 'What is counted',
+    inTimezone: 'Days in {{timezone}}',
+    definitions: {
+      conversations:
+        'Conversations started in the window, and customer messages received in it, by the workspace’s own days.',
+      answered:
+        'Share of AI turns whose reply actually reached the customer, out of turns the AI answered or handed to a person. Replies that failed, or were withheld because a colleague took over, do not count.',
+      handoffWait:
+        'Median time from the AI handing over to a colleague’s reply reaching the customer; handoffs nobody has answered yet are shown beside it. First response is from a customer’s first message to the first reply that was delivered.',
+      cost: 'An estimate from the model prices you set. Covers answers and image reading; knowledge search and attempts that failed before a fallback are not included.',
+    },
     title: 'Overview',
     days: 'days',
     conversations: 'Conversations',
@@ -770,7 +805,21 @@ const en: typeof th = {
     systemPrompt: 'System prompt',
     messages: 'Messages sent to the model',
   },
+  setup: {
+    title: 'Getting ready to answer customers',
+    steps: {
+      model: 'Choose a provider and model for answering',
+      channel: 'Connect LINE, Messenger or the web widget',
+      knowledge: 'Give the AI some knowledge',
+      tryIt: 'Send a test message and open the conversation',
+    },
+    optional: 'optional',
+    go: 'Set up',
+    done: 'done',
+    todo: 'not done yet',
+  },
   simulator: {
+    openConversation: 'Open this conversation',
     title: 'Simulator',
     description: 'Send messages as a customer to exercise the AI without LINE or Facebook.',
     customerName: 'Customer name',

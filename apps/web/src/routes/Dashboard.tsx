@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { SetupChecklist } from '../components/SetupChecklist'
 import { Card, cn, EmptyState, ErrorNote, Spinner } from '../components/ui'
 import { api, type Dashboard as DashboardData } from '../lib/api'
 
@@ -29,18 +30,31 @@ function Figure({
   label,
   value,
   hint,
+  definition,
   testId,
 }: {
   label: string
   value: string
   hint?: string
+  /**
+   * Exactly what is counted, over what and when. "Answered" and "first response" read as
+   * obvious and are not: they count delivered replies only, in the workspace's own days.
+   */
+  definition?: string
   testId: string
 }) {
+  const { t } = useTranslation()
   return (
     <div className="rounded-lg border border-[var(--border)] p-3" data-testid={testId}>
       <div className="text-[12px] text-[var(--text-muted)]">{label}</div>
       <div className="mt-0.5 text-xl font-semibold tabular-nums">{value}</div>
       {hint ? <div className="mt-0.5 text-[11px] text-[var(--text-muted)]">{hint}</div> : null}
+      {definition ? (
+        <details className="mt-1 text-[11px] text-[var(--text-muted)]">
+          <summary className="cursor-pointer">{t('dashboard.whatIsCounted')}</summary>
+          <p className="mt-1">{definition}</p>
+        </details>
+      ) : null}
     </div>
   )
 }
@@ -154,8 +168,13 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-4 pb-12">
-      <div className="flex items-center gap-3">
+      <SetupChecklist answered={data.totals.answered} />
+
+      <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-lg font-semibold">{t('dashboard.title')}</h1>
+        <span className="text-[11px] text-[var(--text-muted)]" data-testid="dashboard-timezone">
+          {t('dashboard.inTimezone', { timezone: data.timezone })}
+        </span>
         <div className="ml-auto flex gap-1">
           {WINDOWS.map((option) => (
             <button
@@ -182,12 +201,14 @@ export function Dashboard() {
           label={t('dashboard.conversations')}
           value={String(data.totals.conversations)}
           hint={`${data.totals.customerMessages} ${t('dashboard.customerMessages')}`}
+          definition={t('dashboard.definitions.conversations')}
         />
         <Figure
           testId="figure-answered"
           label={t('dashboard.answeredShare')}
           value={answeredShare === null ? '—' : `${answeredShare}%`}
           hint={`${data.totals.answered} / ${handled} ${t('dashboard.turns')}`}
+          definition={t('dashboard.definitions.answered')}
         />
         {/*
           The wait for a person, not the wait for a reply.
@@ -214,6 +235,7 @@ export function Dashboard() {
           ]
             .filter(Boolean)
             .join(' · ')}
+          definition={t('dashboard.definitions.handoffWait')}
         />
         <Figure
           testId="figure-cost"
@@ -229,6 +251,7 @@ export function Dashboard() {
               : t('dashboard.notPriced')
           }
           hint={`${data.totals.tokensIn + data.totals.tokensOut} ${t('dashboard.tokens')}`}
+          definition={t('dashboard.definitions.cost')}
         />
       </div>
 

@@ -326,7 +326,7 @@ export function Inbox() {
                       {ownerName(conversation.customer.assigneeUserId) ? (
                         <span
                           data-testid="conversation-owner"
-                          className="ml-auto shrink-0 rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]"
+                          className="ml-auto shrink-0 rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] text-[var(--text-muted)]"
                         >
                           {ownerName(conversation.customer.assigneeUserId)}
                         </span>
@@ -1274,7 +1274,7 @@ function Bubble({
         <p className="whitespace-pre-wrap break-words">{message.text}</p>
         <div
           className={cn(
-            'mt-0.5 flex items-center gap-1.5 text-[10px]',
+            'mt-0.5 flex items-center gap-1.5 text-[11px]',
             isCustomer ? 'text-[var(--text-muted)]' : 'text-white/70',
           )}
         >
@@ -1498,7 +1498,7 @@ function AiSidebar({
             which is the only visible proof that the two records became one. */}
         {detail.identities.length > 0 ? (
           <div className="mt-2">
-            <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+            <p className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
               {t('sidebar.identities')}
             </p>
             <ul data-testid="customer-identities">
@@ -1517,7 +1517,7 @@ function AiSidebar({
             what an agent scans to check they have the right person; these are context. */}
         {Object.entries(detail.customer?.notes ?? {}).length > 0 ? (
           <div className="mt-2">
-            <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+            <p className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
               {t('sidebar.aiNoted')}
             </p>
             <dl className="space-y-1 text-[13px]" data-testid="customer-notes">
