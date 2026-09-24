@@ -31,6 +31,12 @@ export function createBlobStore(config: BlobConfig): BlobStore & { client: S3Cli
     endpoint: config.endpoint,
     region: config.region,
     forcePathStyle: config.forcePathStyle,
+    /**
+     * Without these a stalled connection to the store holds whatever waits on it — an
+     * inbound photo, and the customer's answer behind it — until the socket gives up. The
+     * SDK retries a timed-out request itself.
+     */
+    requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 },
     credentials: {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
