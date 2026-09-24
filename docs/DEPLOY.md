@@ -200,6 +200,17 @@ touched, an agent's own words are left as they wrote them, and `content` keeps t
 original in every case. Safe to run twice: a row already converted does not change again. It can run at any time
 after the deploy, and a fresh installation never needs it.
 
+### Private model gateways after migration 0011
+
+Before 0011, provider and external-retrieval URLs were fetched without the egress guard.
+The migration approves each tenant's already-configured plain-http and IP-literal origins
+once, so a working gateway keeps answering. Review them afterwards on the Platform page
+under *Approved private endpoints*. A gateway typed as an https hostname that resolves
+privately was not grandfathered; approve it there, or its tenant's AI hands every
+conversation off.
+
+Take a `pg_dump` before deploying it, as for any migration that writes data.
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that

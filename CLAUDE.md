@@ -224,8 +224,8 @@ without spending money.
 - The e2e mock provider answers a phone number with a `set_customer_field` tool call, but
   only while no `tool` message is in the request. Without that guard the turn calls the tool
   forever and the harness gives up.
-- `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool reach loopback and private
-  addresses. Tests and local development need it; `createRuntime` **throws at startup** if
+- `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool — and a provider or external
+  retrieval URL — reach loopback and private addresses. Tests and local development need it; `createRuntime` **throws at startup** if
   it is set with `NODE_ENV=production`, because the worker shares a network with Postgres,
   Redis and MinIO. `playwright.config.ts` sets it for the servers it starts, which does not
   cover a dev server Playwright reuses: restart that one with the flag, or the tools spec

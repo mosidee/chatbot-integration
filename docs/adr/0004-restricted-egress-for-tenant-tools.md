@@ -1,6 +1,6 @@
 # 0004 — Restricted egress for tenant-defined tools
 
-Date: 2026-09-21
+Date: 2026-09-21, extended 2026-09-24 to providers and external retrieval
 Status: accepted
 
 ## Context
@@ -122,9 +122,14 @@ server. It is recorded here so that the next person to look does not assume it w
 ## Consequences
 
 - A tenant cannot reach our infrastructure through a tool, including via redirect.
-- A tenant with a genuinely private endpoint cannot use it. That is the intended trade, and
-  the settings test button reports the refusal in the tenant's own words rather than
+- A tenant with a genuinely private tool endpoint cannot use it. That is the intended trade,
+  and the settings test button reports the refusal in the tenant's own words rather than
   failing silently in front of a customer.
+- A tenant with a private model gateway needs a platform admin to approve its origin. The
+  `/models` button says so when that is the refusal. Every AI turn reads the list from the
+  workspace row, one indexed lookup.
+- `TOOL_EGRESS_ALLOW_PRIVATE` now opens providers as well as tools, which is what local
+  development and the test suites need, since their mock provider is on localhost.
 - Tests and local development need `TOOL_EGRESS_ALLOW_PRIVATE=true`; `playwright.config.ts`
   sets it for the servers it starts. A reused dev server started without it refuses the
   loopback endpoint, and the failure reads like a product bug, which the config comment

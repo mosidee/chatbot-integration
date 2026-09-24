@@ -45,9 +45,16 @@ called. Every write carries `idempotency-key`, built from the turn, the tool and
 arguments: the same operation asked for twice carries the same key however our retries
 reorder it, so honouring it means a retry cannot double-charge anybody.
 
-If your endpoint redirects, the credential is not carried to a different host and a `POST`
-becomes a `GET` without its body — the same rules a browser follows, and for the same
-reasons. Redirect within your own origin and both survive.
+If your endpoint redirects to a different origin, only `accept`, `accept-encoding`,
+`accept-language`, `content-type` and `user-agent` go with it: your credential never does,
+whichever header you put it in. A 301, 302 or 303 turns a `POST` into a `GET` without its
+body, and a 307 or 308 to another origin — which would resend the body — is refused and the
+call fails. Redirect within your own origin and headers and body both survive.
+
+The same egress rules apply to the AI providers and external retrieval your workspace
+configures. A provider on a private address or plain http, such as a gateway on your own
+network, has to be approved for your workspace by the platform operator; the model list in
+settings says so when that is why it failed.
 
 ## Reading and writing are different
 

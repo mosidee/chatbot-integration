@@ -27,10 +27,11 @@ Milestones one to six are delivered, and one to four are running in a pilot on t
 | Memory | Rolling per-customer summaries, plus recall over that customer's past conversations |
 | Console | Inbox with open and waiting badges, takeover, suggested replies, knowledge, tabbed settings, dashboard; usable on a phone |
 | Tools | Tenant-defined HTTP tools the AI can call, with restricted egress and proved identity |
+| Security | Every URL a tenant types goes through restricted egress; a private model gateway is approved per tenant by a platform admin. Stored files are served as downloads or inert media |
 | Quality | Thumbs and reasons on AI replies, and a review queue of conversations nobody has read |
 | Privacy | Card and national-ID redaction before storage, retention sweeps, erasure on request |
 | People | Invite a colleague with a single-use link, change roles, reset a password they lost |
-| Tenants | Create, suspend, restore and erase a whole workspace, from a page only a platform admin sees |
+| Tenants | Create, suspend, restore and erase a whole workspace, and approve its private endpoints, from a page only a platform admin sees |
 
 Milestone five added tools: an admin describes an endpoint of their own, and the AI can
 call it during a conversation. What the model fills in and what the system supplies are

@@ -31,7 +31,7 @@ Checks run without changing source files:
 
 The probes did not call real external services. Database/Redis integration tests, browser tests, production-image builds, migrations, and live provider delivery were not run. Findings involving those systems are based on code paths, with proposed regression tests below. Passing isolated tests does not validate the concurrent and cross-boundary behaviors identified here.
 
-Only this recommendations file was added; the proposed fixes are not implemented.
+Only this recommendations file was added at review time; see the status table above for what has since been fixed.
 
 ## Recommended order
 

@@ -1,6 +1,6 @@
 # chatbot-integration — Requirements and Feature List
 
-Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass. Edit freely; this is the source of truth for scope.
+Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass and the security-review fixes. Edit freely; this is the source of truth for scope.
 
 ## 1. Purpose
 
@@ -39,6 +39,8 @@ Pilot tenant: **salon-saas** (the operator's own SaaS). Pilot customers are salo
 | 25 | Asking for work | Work is promised as a row in **`outbox`**, written in the transaction that made it necessary, and a relay in the worker moves it to BullMQ. Nothing else touches a queue: `Runtime` carries none | Committing rows and then enqueueing is two systems with no transaction between them, and the gap lost work in four separate places — a customer's message stored but never answered, an AI reply written twice, a tenant stuck mid-deletion. The writer choosing the job id makes relaying and consuming both safe to repeat. See ADR 0006 |
 | 26 | The customer is told | A handoff always sends the customer a **holding message**, in the language of their last message; the waiting-human timer sends a **second, different** one. Both texts are the workspace's own, editable per language | "The AI never goes silent" was enforced from the inside: a turn ended in a reply or a handoff. A handoff told agents and said nothing to the person who asked, so from their side the thread simply stopped. Repeating one sentence minutes apart reads like a machine that has lost its place |
 | 27 | Closing quiet conversations | A conversation **closes itself** after the customer has been quiet for `autoResolveAfterHours` (default 24, off when empty) — only when the AI is answering and our side spoke last. A sweep every 15 minutes, not a timer per conversation | Resolving is what folds a conversation into the customer's summary, so one the customer walked away from was never remembered. Waiting and colleague-owned conversations are owed somebody's reply and are never closed. A sweep reads the truth each time; per-conversation timers would need cancelling on every reply, and a missed cancel closes a live conversation |
+| 28 | Who may open the network | Every URL a tenant admin types — tools, model providers, embeddings, rerank, external retrieval — goes through the restricted client. A private or plain-http origin is reachable only when a **platform admin** approves it **for that tenant** (`workspaces.private_egress_origins`, from the Platform page) | Since tenants have their own admins, the provider form was a tenant's way to make the server fetch any internal address; the `/models` button read the answer back. A self-hosted gateway on a private address is still legitimate, but approving one is an exception to the rule, and the rule cannot let the party it restrains grant it. See ADR 0004 |
+| 29 | Serving stored files | Every stored file goes out through one policy: raster images, audio, video and PDF inline; everything else as a download; always `nosniff`; a script-free CSP `sandbox` on all but PDF. Uploads accept raster images by exact type, never SVG or HTML | Files are served on the console's own origin, with whatever type their sender claimed. An SVG or HTML file opened inline ran as the console, with the signed-in agent's session. A separate media origin is the stronger design and waits on the deployment having a second hostname |
 
 Pilot success metrics: share of conversations fully handled by AI with no negative rating and no repeat question within 24 h; median first-response time.
 
@@ -132,6 +134,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [v1] Roles `admin` / `agent` / `viewer`; email+password. (Google sign-in is wired in the auth config and still has no control on the login page)
 - [M6] **People**: an admin invites a colleague with a single-use link, changes a role, renames somebody, removes a membership, and issues a password-reset link for a member who belongs to this workspace alone. Anyone who reaches further — a member of two tenants, or a platform admin — is recovered from the platform page instead, because a reset sets the password on a global account. The last admin can be neither demoted nor removed
 - [M6] **Platform**: a platform admin creates, renames, suspends, restores and deletes tenants, grants or revokes other platform admins, and issues a password-reset link for an account a workspace admin may not. Deleting asks for the slug to be typed
+- [review] **Approved private endpoints**, per tenant on the Platform page: the private or plain-http origins that tenant's AI providers and external retrieval may reach (decision 28)
 - [M6] Workspace switcher for anybody who belongs to more than one, and a locked screen naming the reason when the current workspace is suspended or being deleted
 - [M6] `/<slug>` opens that workspace, so a link to a tenant can be shared; a mistyped address gets a page that offers the way back rather than two bare words
 - [v1] Thai + English i18n; mobile-friendly responsive layout
@@ -152,6 +155,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [v1] CI: typecheck, lint, unit tests incl. webhook fixture replay
 - [M6] Tenant lifecycle: `active` / `suspended` / `deleting` on the workspace, enforced on every authenticated request, every webhook, the widget, the identity link and every queued job
 - [M6] Queued tenant erasure: rows by cascade, stored media by a list saved before the rows go, recorded in `platform_audit_log` and `workspace_erasures`, both of which outlive the tenant
+- [review] Restricted egress for every tenant-typed URL, private gateways approved per tenant by a platform admin (decision 28); stored files served as downloads or inert media (decision 29)
 - [later] Billing, Cloudflare Containers / Fly.io deployment recipes
 
 ## 3.9 Milestone status
@@ -367,6 +371,21 @@ to delete a provider that task slots still use, and widget polish (greeting from
 tag, drawn launcher icons, an open/close animation). Known bugs: an agent's reply does not
 update `last_message_at`, which skews inbox order; the widget's own messages are Thai only.
 
+**Security-review fixes** (2026-09-24, deployed). `recommendation.md` is an external review of
+2026-09-22 with 24 findings and a status table kept up to date. The hardening milestone fixed
+1, 2, 6–9 and 14. This round fixed:
+
+- **#3, stored files that could run as the console** (decision 29).
+- **#4, tenant-typed provider and retrieval URLs reaching internal addresses** (decision 28).
+  Migration 0011 approved each tenant's already-configured plain-http and IP-literal origins
+  once, so the pilot's gateway kept answering through the deploy. Still open: a name can
+  change its address between the check and the connection (ADR 0004).
+- **#5, tool credentials following a redirect to another host**: only headers that identify
+  nobody cross origins, and a cross-origin 307/308 carrying a body is refused.
+
+Still open from that review: 10–13 and 15–24, among them Thai text breaking widget token
+signing (#15) and the model cache ignoring changed credentials (#17).
+
 ## 3.10 M5 design intent
 
 Decisions 18 to 21 carry the short form; this is the reasoning that produced them, written
@@ -403,7 +422,9 @@ customer. Tenant-defined tools therefore go through a restricted client: HTTPS, 
 hostname resolved and the resolved address checked rather than the string, loopback,
 private, link-local and CGNAT ranges refused, and the check repeated on redirect. Operator
 provider configuration keeps the unrestricted client, because a self-hosted gateway on a
-private address is the legitimate case the restriction would otherwise break.
+private address is the legitimate case the restriction would otherwise break. *(Superseded
+by decision 28: provider URLs are typed by tenant admins since M6, so they are restricted
+too, and a private gateway is approved per tenant by a platform admin.)*
 
 **Three smaller rulings.** Defining a tool stores a credential and points our infrastructure
 at a host, so it is admin-only. A tool that writes records intent and fires after the turn,
