@@ -33,12 +33,12 @@ rather than rounded away.
 | 4. Provider/retrieval egress | Fixed | Every tenant-typed URL goes through the restricted client; private gateways approved per tenant by a platform admin; connections go to the address the check approved (`pinnedRequest`), closing the DNS race (`packages/infra/test/pinned-transport.test.ts`). |
 | 5. Redirect credential forwarding | Fixed | Header allowlist across origins; cross-origin 307/308 with a body refused. |
 | 6. Attachment ownership | Fixed | `isWorkspaceKey` judges keys canonically (no `..`, `.`, empty segments, backslashes) at every read, association, signature and deletion; the public media route re-checks signed keys. |
-| 7. Authoritative human takeover | Fixed; serialisation residual | Learned fields and tags are written only while the AI still owns the conversation; the reply is committed under a row lock, so a takeover is either seen or waits; outbound re-checks the mode and records `canceled`. Two turns for two different customer messages are still not serialised against each other. |
+| 7. Authoritative human takeover | Fixed | Learned fields and tags are written only while the AI still owns the conversation; the reply is committed under a row lock, so a takeover is either seen or waits; outbound re-checks the mode and records `canceled`. A turn steps aside when a newer customer message has its own turn owed — before the model call, after it and under the commit lock, the last only if none of its writes fired — so two quick messages get one answer (`apps/worker/test/loop.integration.test.ts`, migration 0015). |
 | 8. Outbox and durable steps | Fixed; external write keys residual | Transactional outbox; stable event ids for internal ingestion; widget client message ids; inbound media keyed by event. A retried model call that asks for different write arguments still gets a new idempotency key. |
 | 9. Delivery and multipart | Fixed; Messenger idempotency deferred | Unit checkpoints inside one message, every platform id kept, LINE `X-Line-Retry-Key`, `uncertain` status never resent blindly. Messenger offers no idempotency key. |
 | 10. Fallback attempt isolation | Fixed | A scratchpad per attempt; only the winning attempt's intents count (`packages/core/test/agent.test.ts`). |
 | 11. Turn deadlines and final failure | Fixed | Per-attempt deadlines (slot `timeoutMs`) inside a 150 s turn deadline; bounded repair buffer; an AI turn that fails its last attempt hands off. |
-| 12. Redaction and retention breadth | Partial | Raw events keep only the body, are emptied once processed, go with the customer's identity on erasure and are pruned by retention. A redaction inventory of traces, drafts, notes, summaries and OCR text is not done. |
+| 12. Redaction and retention breadth | Fixed | Raw events keep only the body, are emptied once processed, go with the customer's identity on erasure and are pruned by retention. Traces (prompt, tool calls, retrieved text, errors), drafts, AI and agent notes, summaries and their facts, field updates and vision descriptions are masked with the workspace's rules (`recordTrace` requires them; `redactDeep`). |
 | 13. Resumable blob deletion | Fixed | `blob_deletions` queued in the deleting transaction for retention, customer erasure and knowledge sources; nightly drain; abandoned uploads swept after a day; `.mime` sidecars removed. |
 | 14. Last-admin and membership uniqueness | Fixed | Checks and mutations share transactions; `member_org_user_uq` (in migration 0012, since `auth.ts` is generated); acceptance is conflict-safe. |
 | 15. Widget origins and Unicode | Fixed | UTF-8 token signing; embedding enforced by CSP `frame-ancestors` per channel; the iframe's own session request is accepted (`e2e/widget-embed.spec.ts`). |
@@ -46,7 +46,7 @@ rather than rounded away.
 | 17. Provider cache refresh | Fixed | Profiles carry a revision (`updatedAt`); caches rebuild on change. |
 | 18. Live socket authorisation | Fixed | Origin check; re-validation on `auth.changed`/`workspace.status` and every five minutes; typing scoped to workspace and role; no join race; client refetches on reconnect and stops on 4401/4403. |
 | 19. Embedding-space identity | Fixed | `embedding_space` stored and matched on dense search and recall. |
-| 20. Index replacement | Fixed; revision check residual | File reindex and recall embed first and swap in one transaction; transient failures retried. Two reindexes of one source racing are not revision-checked. |
+| 20. Index replacement | Fixed | File reindex and recall embed first and swap in one transaction; transient failures retried. An entry index re-checks the entry under a lock and stores nothing if it changed while embedding; file swaps lock the source row, so concurrent reindexes cannot index a document twice (`packages/infra/test/retrieval.integration.test.ts`). |
 | 21. Persistent-thread memory | Fixed | Newest notes; incremental summaries from a cursor; new facts win; recall excludes only the visible window. |
 | 22. Pagination and bounded reads | Fixed | Total order and offset paging with load-more; lateral previews; history by cursor without a cap. Offset paging can repeat or skip a row that moves while paging a live queue. |
 | 23. Reporting semantics | Fixed; accounting scope stated | Answered and response times count delivered replies; workspace timezone. Cost excludes failed primary attempts and embedding/rerank usage, and the dashboard says so. |
@@ -155,7 +155,7 @@ Attachment input accepts a `storageKey` without establishing ownership. Inbound 
 
 ### 7. Make human takeover authoritative throughout an AI turn
 
-**Status (2026-09-24):** Fixed; turns for different messages are not serialised.
+**Status (2026-09-24):** Fixed, including overlapping turns for quick successive messages.
 
 **Evidence:** [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [outbound.ts](apps/worker/src/processors/outbound.ts), [effect-ports.ts](packages/infra/src/effect-ports.ts), [worker startup](apps/worker/src/index.ts).
 
@@ -220,7 +220,7 @@ The model paths have retry counts but lack an application-owned overall deadline
 
 ### 12. Extend redaction and retention beyond the message table
 
-**Status (2026-09-24):** Partial: raw events handled; wider redaction inventory open.
+**Status (2026-09-24):** Fixed: raw events and the redaction inventory.
 
 **Evidence:** [ingest.ts](packages/infra/src/ingest.ts), [repo.ts](packages/infra/src/repo.ts), [ai-turn.ts](apps/worker/src/processors/ai-turn.ts), [summarize.ts](apps/worker/src/processors/summarize.ts), [retention.ts](packages/infra/src/retention.ts), [app schema](packages/db/src/schema/app.ts).
 
@@ -321,7 +321,7 @@ The dimension check is useful but insufficient: two different embedding models c
 
 ### 20. Preserve the last usable knowledge index during replacement
 
-**Status (2026-09-24):** Fixed; concurrent reindex revisions residual.
+**Status (2026-09-24):** Fixed, including concurrent reindexes.
 
 **Evidence:** [knowledge-ingest.ts](apps/worker/src/processors/knowledge-ingest.ts), [knowledge.ts](packages/infra/src/knowledge.ts), [summarize.ts](apps/worker/src/processors/summarize.ts).
 

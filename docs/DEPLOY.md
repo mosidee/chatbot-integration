@@ -229,6 +229,16 @@ All three add columns and write data, so take a `pg_dump` first.
 Nothing needs running by hand afterwards. The nightly retention job now also drains
 `blob_deletions` and queues agent uploads nobody sent after a day.
 
+### Migrations 0015 and 0016 (the second group)
+
+Both only add indexes and write no data: `outbox_job_id_idx`, which an AI turn uses to ask
+whether a newer customer message has its own turn owed, and `messages_text_trgm_idx`, for
+inbox search. On a large `messages` table the second takes a while to build and holds a lock
+that blocks writes to the table meanwhile; at the pilot's size it is instant.
+
+A message now reads `failed` only after the outbound job's last attempt. Rows that failed
+before the deploy keep that status and can be resent from the console.
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that
