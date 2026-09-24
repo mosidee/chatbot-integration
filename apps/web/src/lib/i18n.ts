@@ -83,6 +83,8 @@ const th = {
   inbox: {
     loadFailed: 'โหลดรายการสนทนาไม่สำเร็จ',
     loadMore: 'โหลดเพิ่ม',
+    search: 'ค้นหาชื่อ เบอร์โทร หรือข้อความ',
+    noMatches: 'ไม่พบบทสนทนาที่ตรงกันในแท็บนี้',
     image: 'รูปภาพ',
     deliveryQueued: 'รอส่ง',
     deliverySent: 'ส่งแล้ว',
@@ -629,6 +631,8 @@ const en: typeof th = {
   inbox: {
     loadFailed: 'The conversations could not be loaded',
     loadMore: 'Load more',
+    search: 'Search names, phone numbers or messages',
+    noMatches: 'No conversations on this tab match',
     image: 'Image',
     deliveryQueued: 'Waiting to send',
     deliverySent: 'Sent',
