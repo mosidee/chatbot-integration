@@ -44,6 +44,7 @@ import {
   type ToolTestResult,
   type WorkspaceSettings,
 } from '../lib/api'
+import { can } from '../lib/capabilities'
 
 const TASKS = [
   'agent_chat',
@@ -311,7 +312,7 @@ export function Settings() {
         ) : null}
 
         {/* Saved replies are an agent's own tool, so outside the admins-only fieldset. */}
-        {active === 'general' && me.data?.role !== 'viewer' ? <CannedResponsesCard /> : null}
+        {active === 'general' && can(me.data, 'reply') ? <CannedResponsesCard /> : null}
 
         {active === 'channels' ? (
           <ChannelsCard

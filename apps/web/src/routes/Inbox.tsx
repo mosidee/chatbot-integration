@@ -170,13 +170,23 @@ export function Inbox() {
    * It used to be the first fifty and nothing else: a busy day's fifty-first conversation
    * was counted in the badge and could not be opened from anywhere.
    */
+  /** What is typed, and what is searched for once typing pauses. */
+  const [search, setSearch] = useState('')
+  const [searchFor, setSearchFor] = useState('')
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchFor(search.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+  const q = searchFor.length >= 2 ? searchFor : undefined
+
   const conversations = useInfiniteQuery({
-    queryKey: ['conversations', statusFilter, modeFilter, reviewFilter],
+    queryKey: ['conversations', statusFilter, modeFilter, reviewFilter, q],
     queryFn: ({ pageParam }) =>
       api.conversations.list({
         status: statusFilter,
         mode: modeFilter,
         ...(reviewFilter ? { review: 'true' as const } : {}),
+        ...(q ? { q } : {}),
         offset: pageParam,
       }),
     initialPageParam: 0,
@@ -272,6 +282,18 @@ export function Inbox() {
           })}
         </div>
 
+        {/* Within the tab above: a resolved conversation is found on Resolved. */}
+        <div className="shrink-0 border-b border-[var(--border)] p-2">
+          <Input
+            type="search"
+            data-testid="inbox-search"
+            aria-label={t('inbox.search')}
+            placeholder={t('inbox.search')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
         <div className="min-h-0 flex-1 overflow-y-auto">
           {conversations.isLoading ? (
             <div className="p-4">
@@ -287,7 +309,7 @@ export function Inbox() {
               </Button>
             </div>
           ) : rows.length === 0 ? (
-            <EmptyState title={t('inbox.empty')} />
+            <EmptyState title={q ? t('inbox.noMatches') : t('inbox.empty')} />
           ) : (
             <ul>
               {rows.map((conversation) => (

@@ -439,6 +439,8 @@ export type ConversationFilters = {
   tag?: string
   /** Only what nobody has reviewed. A literal string: the server refuses anything else. */
   review?: 'true'
+  /** A name, identifier or phrase; two characters at least. */
+  q?: string
   limit?: number
   /** Where a page starts, from the previous page's `nextOffset`. */
   offset?: number

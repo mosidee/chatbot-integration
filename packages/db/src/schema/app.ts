@@ -18,6 +18,7 @@ import type {
   SenderType,
   ToolKind,
 } from '@ci/shared'
+import { sql } from 'drizzle-orm'
 import {
   boolean,
   index,
@@ -498,6 +499,8 @@ export const messages = pgTable(
     /** The review queue asks "is there an AI message here, and a human one?" per conversation. */
     index('messages_conversation_sender_idx').on(t.conversationId, t.senderType, t.createdAt),
     index('messages_workspace_idx').on(t.workspaceId),
+    /** Inbox search is a substring match, which a trigram index serves from three characters. */
+    index('messages_text_trgm_idx').using('gin', sql`${t.text} gin_trgm_ops`),
     // Postgres treats NULLs as distinct in a unique index, which is exactly what we want:
     // outbound messages have no platform id until the adapter sends them, so many rows
     // may hold NULL while inbound platform ids stay unique per conversation.

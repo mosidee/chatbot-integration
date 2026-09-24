@@ -125,6 +125,26 @@ export function conversationRoutes(ctx: ApiContext) {
           if (query.review) filters.push(inReviewQueue())
           if (query.before)
             filters.push(lt(schema.conversations.lastMessageAt, new Date(query.before)))
+          /**
+           * Search: the customer's name, one of their identifiers, or anything said in the
+           * conversation. A substring match rather than a similarity score, because an agent
+           * typing a phone number or an order reference wants the thread that contains it,
+           * and a trigram index serves ILIKE for three characters and more. The message
+           * lookup names the workspace as well as the conversation, like every other.
+           */
+          if (query.q) {
+            const pattern = `%${query.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+            filters.push(sql`(
+              ${schema.customers.displayName} ilike ${pattern}
+              or ${schema.customers.fields}::text ilike ${pattern}
+              or exists (
+                select 1 from ${schema.messages} m
+                where m.conversation_id = ${schema.conversations.id}
+                  and m.workspace_id = ${workspaceId}
+                  and m.text ilike ${pattern}
+              )
+            )`)
+          }
           const limit = query.limit ?? 50
           const offset = query.offset ?? 0
 
@@ -288,6 +308,8 @@ export function conversationRoutes(ctx: ApiContext) {
              * filter and nothing more.
              */
             before: z.string().optional(),
+            /** Name, identifier or message text to look for; see the filter above. */
+            q: z.string().trim().min(2).max(200).optional(),
             limit: z.coerce.number().int().min(1).max(100).optional(),
             /**
              * Where to start, from `nextOffset`. The order is total (id breaks every tie),
