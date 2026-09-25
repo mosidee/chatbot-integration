@@ -432,8 +432,13 @@ export async function processAiTurn(
       suggestionId,
     })
     await ports.notifyAgents(
-      { workspaceId: job.workspaceId, conversationId: job.conversationId },
+      {
+        workspaceId: job.workspaceId,
+        conversationId: job.conversationId,
+        ...(job.triggerMessageId ? { triggerMessageId: job.triggerMessageId } : {}),
+      },
       'draft_ready',
+      new Date(),
     )
     return
   }

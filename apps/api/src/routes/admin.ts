@@ -211,6 +211,17 @@ export function adminRoutes(ctx: ApiContext) {
               .returning({ id: schema.member.id })
             if (removed.length === 0) return { error: 'not_a_member' as const }
 
+            // Their devices stop hearing about this workspace's customers. Sending already
+            // checks membership; this keeps nothing behind that could start again.
+            await tx
+              .delete(schema.pushSubscriptions)
+              .where(
+                and(
+                  eq(schema.pushSubscriptions.workspaceId, workspaceId),
+                  eq(schema.pushSubscriptions.userId, params.userId),
+                ),
+              )
+
             await audit(tx, {
               workspaceId,
               actorUserId: user.id,

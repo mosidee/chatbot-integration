@@ -48,7 +48,7 @@ export async function applyEffects(
 
       case 'notify_agents':
         try {
-          await ports.notifyAgents(ctx, effect.reason)
+          await ports.notifyAgents(ctx, effect.reason, effect.at)
         } catch (error) {
           logger.warn('realtime notify failed', {
             conversationId: ctx.conversationId,

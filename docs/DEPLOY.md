@@ -88,6 +88,18 @@ LINE_MEDIA_PROXY_SECRET=<the same random secret, 32 characters or more>
 Without them LINE media is fetched directly. Set both or neither (the server refuses to start
 with one), and the URL must be https.
 
+Notifications on agents' phones and computers (ADR 0010) need a VAPID key pair. Generate it
+once, on the server, straight into the file so the private key is never shown:
+
+```bash
+docker compose run --rm --no-deps api bun run --silent packages/infra/src/push-keys.ts >> .env
+```
+
+Without the keys the console does not offer notifications. Set both or neither. Keep them:
+new keys strand every device already subscribed, and each person then has to turn
+notifications on again. `PUBLIC_WEB_URL` must be the https address people use, because push
+services see it as the sender and a home-screen app on iPhone needs https anyway.
+
 Any other S3-compatible store works the same way. The bundled MinIO was removed on
 2026-09-24 after MinIO stopped publishing its images (ADR 0008).
 
@@ -290,6 +302,13 @@ is later, so the inbox stops listing conversations an agent already answered as 
 writes data, so take a `pg_dump` first; a second run changes nothing. The LINE media Worker
 also changed with it (it marks LINE's own answers): redeploy it with `bunx wrangler deploy`
 from `workers/line-media`.
+
+### Migration 0018 (notifications)
+
+It adds `push_subscriptions` and writes no data. Add the VAPID keys (see *First deployment*)
+before the deploy, or notifications stay off until you do. Each person then turns them on
+from Settings → General on each device. On an iPhone or iPad the console has to be added to
+the Home Screen first, and turned on from the app that opens from the icon.
 
 ### Settings that arrive switched on
 

@@ -25,7 +25,11 @@ export type EffectContext = {
   turnKey?: string
 }
 
-export type NotifyReason = 'handoff' | 'draft_ready' | 'timeout'
+/**
+ * Why agents are being told. `customer_message` is a customer writing to a conversation a
+ * person holds or is waiting for; the AI's own conversations tell nobody.
+ */
+export type NotifyReason = 'handoff' | 'draft_ready' | 'timeout' | 'customer_message'
 
 /** Which holding message to send, in which language, and the instant that identifies it. */
 export type AcknowledgementInput = {
@@ -48,8 +52,13 @@ export type EffectPorts = {
   sendAcknowledgement(ctx: EffectContext, input: AcknowledgementInput): Promise<void>
   /** Write a note visible to agents only. */
   addInternalNote(ctx: EffectContext, body: string): Promise<void>
-  /** Best-effort realtime nudge to connected agents. Failures must not fail the job. */
-  notifyAgents(ctx: EffectContext, reason: NotifyReason): Promise<void>
+  /**
+   * Tell agents: a realtime nudge to open consoles and, where push is configured, a
+   * notification to their devices. Best effort; failures must not fail the job. Must be
+   * idempotent on `at` (with the trigger message, where there is one), like
+   * `sendAcknowledgement`: a replayed effect list must not notify twice.
+   */
+  notifyAgents(ctx: EffectContext, reason: NotifyReason, at: Date): Promise<void>
   scheduleWaitingHumanTimeout(ctx: EffectContext, minutes: number): Promise<void>
   cancelWaitingHumanTimeout(ctx: EffectContext): Promise<void>
   /** Queue a summary rewrite. The implementation resolves the customer from the conversation. */

@@ -111,6 +111,8 @@ jobs:
       - run: bun run db:seed
       # The browser tests embed the widget, which the API serves from disk.
       - run: bun run build:widget
+      # A throwaway key pair, so the console offers notifications for the tests to drive.
+      - run: bun run push:keys >> "$GITHUB_ENV"
       - run: bunx playwright install chromium --with-deps
       - run: bun run test:e2e
       - uses: actions/upload-artifact@v4

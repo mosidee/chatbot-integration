@@ -12,6 +12,7 @@ import { invitationRoutes } from './routes/invitations'
 import { knowledgeRoutes } from './routes/knowledge'
 import { mediaRoutes } from './routes/media'
 import { platformRoutes } from './routes/platform'
+import { pushRoutes } from './routes/push'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
 import { toolRoutes } from './routes/tools'
@@ -114,6 +115,7 @@ export function createApp(ctx: ApiContext) {
           .use(knowledgeRoutes(ctx))
           .use(traceRoutes(ctx))
           .use(uploadRoutes(ctx))
+          .use(pushRoutes(ctx))
           .use(webhookRoutes(ctx)),
       )
 
@@ -163,6 +165,26 @@ export function createApp(ctx: ApiContext) {
           if (env.NODE_ENV === 'production' && !isApi) {
             const root = `${process.cwd()}/apps/web/dist`
             const asset = Bun.file(`${root}${url.pathname}`)
+            /**
+             * The service worker is fetched fresh every time: a browser that cached it keeps
+             * running the old one, and on an iPhone's home screen there is nobody to clear
+             * it. Missing, it is a 404 rather than the shell — HTML registered as a worker
+             * fails in a way that looks like the browser's fault.
+             */
+            if (url.pathname === '/sw.js') {
+              if (!(await asset.exists())) return new Response('Not found', { status: 404 })
+              return new Response(asset, {
+                headers: {
+                  'content-type': 'text/javascript; charset=utf-8',
+                  'cache-control': 'no-cache',
+                },
+              })
+            }
+            if (url.pathname === '/manifest.webmanifest' && (await asset.exists())) {
+              return new Response(asset, {
+                headers: { 'content-type': 'application/manifest+json' },
+              })
+            }
             if (url.pathname !== '/' && (await asset.exists())) return new Response(asset)
 
             // Any other path is a client route; hand back the shell.

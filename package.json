@@ -29,7 +29,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "db:reset": "bun run scripts/db-reset.ts",
-    "conversations:merge": "bun run packages/infra/src/merge-conversations.ts"
+    "conversations:merge": "bun run packages/infra/src/merge-conversations.ts",
+    "push:keys": "bun run --silent packages/infra/src/push-keys.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
