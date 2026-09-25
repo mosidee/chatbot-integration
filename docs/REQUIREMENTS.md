@@ -1,6 +1,6 @@
 # chatbot-integration — Requirements and Feature List
 
-Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass, the security-review fixes, the second group of residuals, the move of media to Cloudflare R2 and the LINE media Worker. Edit freely; this is the source of truth for scope.
+Status: living document, first shaped 2026-09-20, last brought up to date 2026-09-24 after the UX pass, the security-review fixes, the second group of residuals, the audit's five residuals, the move of media to Cloudflare R2 and the LINE media Worker. Edit freely; this is the source of truth for scope.
 
 ## 1. Purpose
 
@@ -152,7 +152,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [later] Regression eval set run on knowledge change; alerting
 
 ### 3.8 Platform / ops
-- [v1] Bun workspaces monorepo: `apps/api`, `apps/worker`, `apps/web`, `apps/widget`, `packages/core` (framework-free domain), `packages/channels`, `packages/db`, `packages/infra`, `packages/shared`, `packages/config`
+- [v1] Bun workspaces monorepo: `apps/api`, `apps/worker`, `apps/web`, `apps/widget`, `packages/core` (framework-free domain), `packages/channels`, `packages/db`, `packages/infra`, `packages/shared`, `packages/config`; outside the workspaces, `workers/line-media` (a Cloudflare Worker, ADR 0009)
 - [v1] Docker Compose: api (also serves the console and the widget), worker, postgres+pgvector, redis; media in an S3-compatible bucket (R2) outside the stack; `.env.example`
 - [v1] Drizzle migrations; seed script for a workspace, admin user, test channel. [M6] The seed also grants the admin platform admin, since nothing in the running API can create an account
 - [v1] Stateless API, BullMQ queues, S3-compatible storage client, PgBouncer-ready connection handling
@@ -231,8 +231,8 @@ do not exist yet.
   wherever the worker runs, deletes conversations whose last message is older than the
   workspace's retention period, and the stored media with them. Age is measured from the last
   message, so a long conversation is kept until it goes quiet rather than from when it began.
-  (Caveat found later: an agent's reply does not update `last_message_at`, so the age runs
-  from the last customer or AI message.)
+  (Caveat found later: an agent's reply did not update `last_message_at`, so the age ran
+  from the last customer or AI message. Fixed by migration 0017: agent replies now move it.)
 - Erasure on request, which Thailand's PDPA gives a person a right to. An admin triggers it
   beside the conversation where the request arrived, and it removes every conversation,
   channel identity, summary and image belonging to that customer. The audit entry outlives
@@ -373,9 +373,9 @@ Left from that plan, not built: the agent's name in the widget, a phone-width br
 for the widget, an explicit Save on the identity card, a remembered result for the model
 test button, a currency setting (USD is fixed), a note recorded with a suspension, refusing
 to delete a provider that task slots still use, and widget polish (greeting from the embed
-tag, drawn launcher icons, an open/close animation). Known bugs: an agent's reply does not
-update `last_message_at`, which skews inbox order. (The widget's own messages being Thai only
-was fixed with the review; see below.)
+tag, drawn launcher icons, an open/close animation). (An agent's reply not updating
+`last_message_at`, which skewed inbox order, was fixed by migration 0017. The widget's own
+messages being Thai only was fixed with the review; see below.)
 
 **Security-review fixes** (2026-09-24, deployed). `recommendation.md` is an external review of
 2026-09-22 with 24 findings and a status table kept up to date. The hardening milestone fixed
@@ -421,10 +421,17 @@ stopped being published, to Cloudflare R2 (ADR 0008), and LINE media began comin
 Cloudflare Worker, because the pilot server's route to LINE's content servers ran at about
 14 KB/s (ADR 0009).
 
+**The audit's residuals, 2026-09-24.** Agent replies move `last_message_at` (migration 0017);
+settings conflicts are judged per field (`expected`, a 409 naming `fields`), so a colleague on
+another card is not a conflict; a LINE refusal through the Worker is final rather than retried;
+knowledge indexing is scoped by workspace; the Worker has tests under `bun run test`.
+
 What remains is listed in the status table of `recommendation.md` and `UX-AUDIT.md`: a
 separate media origin, a restore rehearsal, a manual screen-reader pass, Messenger
-idempotency, stable write keys when a retried model changes its arguments, and an "indexed and
-ready" state for knowledge. (Agent replies now update `last_message_at`: migration 0017.)
+idempotency, stable write keys when a retried model changes its arguments, an "indexed and
+ready" state for knowledge, offset paging that can repeat or skip a row moving while a live
+queue is paged, cost figures that leave out embedding and rerank usage, and a real-device
+soft-keyboard check.
 
 ## 3.10 M5 design intent
 
@@ -530,7 +537,7 @@ operator their webhook registration and a support conversation to get it back, f
 that is meant to be reversible in an afternoon.
 
 Dropping a queued AI turn is the one deliberate exception to the rule that a turn never ends
-in silence. Everywhere else, going quiet is the bug that rule exists to prevent. Here there
+in silence (a superseded turn stepping aside was added later, as a second). Everywhere else, going quiet is the bug that rule exists to prevent. Here there
 is no colleague to hand off to, because every agent in the tenant is locked out of the
 console too, and sending on behalf of a suspended operator is the worse outcome. It is
 commented as an exception at the call site so the next reader does not take it for the bug.

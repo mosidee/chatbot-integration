@@ -96,6 +96,8 @@ export function Settings() {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     staleTime: Number.POSITIVE_INFINITY,
+    // …but a page opened again starts from the server, not from what it showed last time.
+    gcTime: 0,
   })
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.settings.me(), staleTime: 300_000 })
   // Providers, slots and channels answer admins only. They used to be asked for by every
@@ -168,7 +170,8 @@ export function Settings() {
       if (error instanceof ApiError && error.status === 409) {
         setConflict(true)
         void workspace.refetch().then((result) => {
-          if (result.data) shown.current = result.data.settings
+          // A failed refetch hands back the old data; keep asking rather than adopt it.
+          if (result.isSuccess) shown.current = result.data.settings
           setGeneration((value) => value + 1)
         })
       }

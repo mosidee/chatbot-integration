@@ -95,24 +95,27 @@ export function knowledgeRoutes(ctx: ApiContext) {
       .post(
         '/sources',
         async ({ workspaceId, body, user }) => {
-          const sourceId = await createSource(db, {
-            workspaceId,
-            kind: body.question ? 'qa' : 'article',
-            title: body.title,
-            createdByUserId: user.id,
+          // The source, its entry and the promise to index it, in one commit: apart, a
+          // failure between them left a source stuck at pending that nothing would index.
+          const sourceId = await db.transaction(async (tx) => {
+            const id = await createSource(tx, {
+              workspaceId,
+              kind: body.question ? 'qa' : 'article',
+              title: body.title,
+              createdByUserId: user.id,
+            })
+            await createEntry(tx, {
+              workspaceId,
+              sourceId: id,
+              language: body.language,
+              question: body.question ?? null,
+              body: body.body,
+              tags: body.tags,
+              channelTypes: body.channelTypes,
+            })
+            await enqueueIngest(workspaceId, id, tx)
+            return id
           })
-
-          await createEntry(db, {
-            workspaceId,
-            sourceId,
-            language: body.language,
-            question: body.question ?? null,
-            body: body.body,
-            tags: body.tags,
-            channelTypes: body.channelTypes,
-          })
-
-          await enqueueIngest(workspaceId, sourceId)
           return { sourceId }
         },
         {
@@ -142,17 +145,19 @@ export function knowledgeRoutes(ctx: ApiContext) {
           const bytes = new Uint8Array(await file.arrayBuffer())
           await runtime.blob.put(storageKey, bytes, file.type || 'application/octet-stream')
 
-          const sourceId = await createSource(db, {
-            workspaceId,
-            kind: 'file',
-            title: file.name,
-            storageKey,
-            mime: file.type || 'application/octet-stream',
-            byteSize: file.size,
-            createdByUserId: user.id,
+          const sourceId = await db.transaction(async (tx) => {
+            const id = await createSource(tx, {
+              workspaceId,
+              kind: 'file',
+              title: file.name,
+              storageKey,
+              mime: file.type || 'application/octet-stream',
+              byteSize: file.size,
+              createdByUserId: user.id,
+            })
+            await enqueueIngest(workspaceId, id, tx)
+            return id
           })
-
-          await enqueueIngest(workspaceId, sourceId)
           return { sourceId }
         },
         { auth: 'agent' },
@@ -294,21 +299,24 @@ export function knowledgeRoutes(ctx: ApiContext) {
             .limit(1)
           if (!messageRows[0]) return status(404, { error: 'Message not found' })
 
-          const sourceId = await createSource(db, {
-            workspaceId,
-            kind: 'qa',
-            title: body.title,
-            meta: { promotedFromMessageId: body.messageId },
-            createdByUserId: user.id,
+          const sourceId = await db.transaction(async (tx) => {
+            const id = await createSource(tx, {
+              workspaceId,
+              kind: 'qa',
+              title: body.title,
+              meta: { promotedFromMessageId: body.messageId },
+              createdByUserId: user.id,
+            })
+            await createEntry(tx, {
+              workspaceId,
+              sourceId: id,
+              language: body.language,
+              question: body.question,
+              body: body.body,
+            })
+            await enqueueIngest(workspaceId, id, tx)
+            return id
           })
-          await createEntry(db, {
-            workspaceId,
-            sourceId,
-            language: body.language,
-            question: body.question,
-            body: body.body,
-          })
-          await enqueueIngest(workspaceId, sourceId)
           return { sourceId }
         },
         {

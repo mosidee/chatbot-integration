@@ -129,6 +129,35 @@ describe('workspace settings', () => {
     expect(response.status).toBe(200)
   })
 
+  test('a setting with fields never set compares equal to what GET returned', async () => {
+    const retrieval = { kind: 'generic', baseUrl: 'https://retrieval.example.com/search' }
+    expect(
+      (
+        await fixture.as(
+          fixture.admin,
+          '/api/v1/settings/workspace',
+          json({ externalRetrieval: retrieval }),
+        )
+      ).status,
+    ).toBe(200)
+    // topK and scoreThreshold were never set, so GET leaves them out entirely.
+    const page = (await (await fixture.as(fixture.admin, '/api/v1/settings/workspace')).json()) as {
+      settings: { externalRetrieval: Record<string, unknown> }
+    }
+    expect('topK' in page.settings.externalRetrieval).toBe(false)
+
+    const again = await fixture.as(
+      fixture.admin,
+      '/api/v1/settings/workspace',
+      json({
+        externalRetrieval: retrieval,
+        expected: { externalRetrieval: page.settings.externalRetrieval },
+      }),
+    )
+    expect(again.status).toBe(200)
+    await fixture.as(fixture.admin, '/api/v1/settings/workspace', json({ externalRetrieval: null }))
+  })
+
   test('a save without a revision still overwrites, for scripts that mean to', async () => {
     const response = await fixture.as(
       fixture.admin,

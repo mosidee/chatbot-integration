@@ -675,7 +675,7 @@ export const api = {
   },
 
   settings: {
-    /** `revision` is sent back with a save; a save from an older one is refused (409). */
+    /** The page keeps what this returned and sends it back as `expected` with a save. */
     workspace: () =>
       get<{ settings: WorkspaceSettings; revision: string }>('/v1/settings/workspace'),
     me: () => get<Me>('/v1/settings/me'),

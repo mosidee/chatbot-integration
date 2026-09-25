@@ -73,6 +73,7 @@ async function viaProxy(
     signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
   })
   const fromLine = response.headers.get('x-upstream') === 'line'
+  if (!response.ok) await response.body?.cancel().catch(() => {})
   if (fromLine && response.status >= 400 && response.status < 500 && response.status !== 429) {
     throw new PermanentMediaError(`LINE refused the media: ${response.status}`)
   }

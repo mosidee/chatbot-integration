@@ -1,5 +1,5 @@
 import { type BlobStore, chunkQa, chunkText, embedTexts, type SlotConfig } from '@ci/core'
-import { type Database, EMBEDDING_DIMENSIONS, newId, schema } from '@ci/db'
+import { type Database, EMBEDDING_DIMENSIONS, type Executor, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
 import { drainBlobDeletions, queueBlobDeletions } from './blob-deletions'
@@ -169,7 +169,7 @@ export async function replaceFileSource(
      * their own, and neither could see the other's uncommitted row: the document ended up
      * indexed twice. Locked, the second waits and its delete then sees the first one's entry.
      */
-    await tx
+    const [source] = await tx
       .select({ id: schema.knowledgeSources.id })
       .from(schema.knowledgeSources)
       .where(
@@ -179,6 +179,8 @@ export async function replaceFileSource(
         ),
       )
       .for('update')
+    // Deleted meanwhile, or not this workspace's: nothing to replace.
+    if (!source) return
     await tx
       .delete(schema.knowledgeEntries)
       .where(
@@ -216,7 +218,12 @@ export async function replaceFileSource(
     await tx
       .update(schema.knowledgeSources)
       .set({ status: 'ready', error: null, updatedAt: new Date() })
-      .where(eq(schema.knowledgeSources.id, input.sourceId))
+      .where(
+        and(
+          eq(schema.knowledgeSources.id, input.sourceId),
+          eq(schema.knowledgeSources.workspaceId, input.workspaceId),
+        ),
+      )
   })
 
   return { chunks: pieces.length }
@@ -296,7 +303,7 @@ export type CreateEntryInput = {
   variantGroup?: string
 }
 
-export async function createEntry(db: Database, input: CreateEntryInput): Promise<string> {
+export async function createEntry(db: Executor, input: CreateEntryInput): Promise<string> {
   const id = newId()
   await db.insert(schema.knowledgeEntries).values({
     id,
@@ -313,7 +320,7 @@ export async function createEntry(db: Database, input: CreateEntryInput): Promis
 }
 
 export async function createSource(
-  db: Database,
+  db: Executor,
   input: {
     workspaceId: string
     kind: 'qa' | 'article' | 'file' | 'url'
