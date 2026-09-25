@@ -88,17 +88,11 @@ LINE_MEDIA_PROXY_SECRET=<the same random secret, 32 characters or more>
 Without them LINE media is fetched directly. Set both or neither (the server refuses to start
 with one), and the URL must be https.
 
-Notifications on agents' phones and computers (ADR 0010) need a VAPID key pair. Generate it
-once, on the server, straight into the file so the private key is never shown:
-
-```bash
-docker compose run --rm --no-deps api bun run --silent packages/infra/src/push-keys.ts >> .env
-```
-
-Without the keys the console does not offer notifications. Set both or neither. Keep them:
-new keys strand every device already subscribed, and each person then has to turn
-notifications on again. `PUBLIC_WEB_URL` must be the https address people use, because push
-services see it as the sender and a home-screen app on iPhone needs https anyway.
+Notifications on agents' phones and computers (ADR 0010) need a VAPID key pair: see
+*Migration 0018* below for adding it to a running installation. On a fresh one, once the
+stack is up, the same steps apply. Without the keys the console does not offer
+notifications. `PUBLIC_WEB_URL` must be the https address people use: push services see it
+as the sender, and a home-screen app on an iPhone needs https anyway.
 
 Any other S3-compatible store works the same way. The bundled MinIO was removed on
 2026-09-24 after MinIO stopped publishing its images (ADR 0008).
@@ -305,10 +299,28 @@ from `workers/line-media`.
 
 ### Migration 0018 (notifications)
 
-It adds `push_subscriptions` and writes no data. Add the VAPID keys (see *First deployment*)
-before the deploy, or notifications stay off until you do. Each person then turns them on
-from Settings → General on each device. On an iPhone or iPad the console has to be added to
-the Home Screen first, and turned on from the app that opens from the icon.
+It adds `push_subscriptions` and writes no data. Deploy as usual; notifications stay off
+until the VAPID keys exist. Then generate them inside the new image, straight into `.env`,
+so the private key is never shown:
+
+```bash
+cp .env .env.backup-$(date +%Y%m%d%H%M)
+docker compose exec -T api bun run --silent packages/infra/src/push-keys.ts >> .env
+grep -c '^VAPID_' .env            # 2
+grep -c $'\r' .env                # 0
+docker compose up -d --force-recreate api worker
+docker compose exec -T api sh -c 'test -n "$VAPID_PUBLIC_KEY" && echo set'
+```
+
+`-T` matters: with a terminal allocated the output can carry carriage returns into the keys.
+Keep the keys: new ones strand every subscribed device, and each person has to turn
+notifications on again. Each person turns them on from Settings → General on each device. On
+an iPhone or iPad the console has to be added to the Home Screen first, and turned on from
+the app that opens from that icon.
+
+Check through the public hostname that the proxy in front leaves the service worker alone:
+`curl -sI https://<host>/sw.js` must say `cache-control: no-cache` and a JavaScript content
+type, not HTML.
 
 ### Settings that arrive switched on
 
