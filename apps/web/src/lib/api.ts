@@ -781,6 +781,20 @@ export const api = {
       post<{ workspaceId: string; userId: string }>(`/invitations/${token}/accept`, body),
   },
 
+  /** Notifications on this device (ADR 0010). */
+  push: {
+    config: () => get<{ publicKey: string | null }>('/v1/push/config'),
+    check: (endpoint: string) => post<{ subscribed: boolean }>('/v1/push/check', { endpoint }),
+    subscribe: (subscription: PushSubscriptionJSON) =>
+      post<{ subscribed: true }>('/v1/push/subscriptions', subscription),
+    unsubscribe: (endpoint: string, everywhere = false) =>
+      del<{ subscribed: false }>('/v1/push/subscriptions', { endpoint, everywhere }),
+    test: (endpoint: string) =>
+      post<{ result: 'sent' | 'not_subscribed' | 'gone' | 'failed' }>('/v1/push/test', {
+        endpoint,
+      }),
+  },
+
   auth: {
     /** Null when nobody is signed in. Used by the route guard, so it must never throw. */
     session: async (): Promise<{

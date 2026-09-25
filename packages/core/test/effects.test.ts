@@ -51,7 +51,7 @@ describe('applyEffects', () => {
       { type: 'run_suggestion' },
       { type: 'record_handoff', reason: 'low_confidence', at: new Date('2026-09-01T10:00:00Z') },
       { type: 'add_internal_note', body: 'note body' },
-      { type: 'notify_agents', reason: 'handoff' },
+      { type: 'notify_agents', reason: 'handoff', at: new Date(0) },
       { type: 'schedule_waiting_human_timeout', minutes: 15 },
       { type: 'cancel_waiting_human_timeout' },
       { type: 'enqueue_summary' },
@@ -129,7 +129,7 @@ describe('applyEffects', () => {
 
     await applyEffects(
       [
-        { type: 'notify_agents', reason: 'handoff' },
+        { type: 'notify_agents', reason: 'handoff', at: new Date(0) },
         { type: 'add_internal_note', body: 'still runs' },
       ],
       ctx,
@@ -171,7 +171,7 @@ describe('applyEffects', () => {
     expect(calls).toHaveLength(0)
   })
 
-  test('a human-mode customer message only ever reaches the suggestion port', async () => {
+  test('a human-mode customer message reaches only the suggestion and notify ports', async () => {
     const { ports, calls } = fakePorts()
     const { effects } = transition(
       {
@@ -186,7 +186,7 @@ describe('applyEffects', () => {
 
     await applyEffects(effects, ctx, ports)
 
-    expect(calls.map((c) => c.port)).toEqual(['enqueueSuggestion'])
+    expect(calls.map((c) => c.port)).toEqual(['enqueueSuggestion', 'notifyAgents'])
     expect(calls.map((c) => c.port)).not.toContain('enqueueAiTurn')
     expect(calls.map((c) => c.port)).not.toContain('sendAcknowledgement')
   })

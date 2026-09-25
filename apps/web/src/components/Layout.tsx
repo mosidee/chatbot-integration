@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type Me } from '../lib/api'
 import { can } from '../lib/capabilities'
 import { setLanguage } from '../lib/i18n'
+import { disablePush, setAppBadge } from '../lib/push'
 import { RealtimeProvider, useRealtimeStatus } from '../lib/ws'
 import { Button, Card, cn, Dialog } from './ui'
 
@@ -39,6 +40,12 @@ export function Layout() {
     queryFn: () => api.conversations.counts(),
     refetchInterval: 20_000,
   })
+
+  // The count on the app icon, where one is drawn (an installed app): who is waiting here.
+  const waiting = counts.data?.waiting
+  useEffect(() => {
+    if (waiting !== undefined) setAppBadge(waiting)
+  }, [waiting])
 
   const items: NavItem[] = [
     {
@@ -131,6 +138,10 @@ export function Layout() {
               size="sm"
               variant="ghost"
               onClick={async () => {
+                // A signed-out device stops receiving customers' messages on its lock
+                // screen. Best effort: failing to reach the server must not keep somebody
+                // signed in.
+                await disablePush(true).catch(() => {})
                 await api.auth.signOut()
                 queryClient.clear()
                 location.href = '/login'

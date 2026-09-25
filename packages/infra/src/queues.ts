@@ -21,6 +21,7 @@ export const QUEUE_NAMES = {
   idleResolve: 'idle_resolve',
   customerErasure: 'customer_erasure',
   workspaceErasure: 'workspace_erasure',
+  push: 'push',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
@@ -149,6 +150,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     idle_resolve: make(QUEUE_NAMES.idleResolve),
     customer_erasure: make(QUEUE_NAMES.customerErasure),
     workspace_erasure: make(QUEUE_NAMES.workspaceErasure),
+    push: make(QUEUE_NAMES.push),
   }
 }
 

@@ -13,6 +13,7 @@ import {
   type JobMeta,
   type KnowledgeIngestJob,
   type OutboundJob,
+  type PushJob,
   pendingSummary,
   pruneOutbox,
   QUEUE_NAMES,
@@ -30,6 +31,7 @@ import { IDLE_RESOLVE_EVERY_MINUTES, processIdleResolve } from './processors/idl
 import { processInbound } from './processors/inbound'
 import { processKnowledgeIngest } from './processors/knowledge-ingest'
 import { markDeliveryFailed, processOutbound } from './processors/outbound'
+import { processPush } from './processors/push'
 import {
   processCustomerErasure,
   processRetention,
@@ -68,6 +70,8 @@ const CONCURRENCY = {
   customer_erasure: 1,
   // One at a time, and never more: it deletes a whole tenant's rows and then its media.
   workspace_erasure: 1,
+  // Small posts to the push services, each bounded by a timeout.
+  push: 5,
 } as const
 
 function makeWorker<T>(
@@ -234,6 +238,7 @@ async function main() {
       CONCURRENCY.knowledge_ingest,
       processKnowledgeIngest,
     ),
+    makeWorker<PushJob>(QUEUE_NAMES.push, runtime, ports, logger, CONCURRENCY.push, processPush),
   ]
 
   /**

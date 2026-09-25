@@ -44,6 +44,14 @@ export const envSchema = z.object({
     .optional(),
   LINE_MEDIA_PROXY_SECRET: z.string().min(32).optional(),
 
+  /**
+   * The VAPID key pair that signs Web Push requests (ADR 0010), base64url as
+   * `bun run push:keys` prints them. Both or neither: without them push is off and the
+   * console does not offer it. Changing them strands every device already subscribed.
+   */
+  VAPID_PUBLIC_KEY: z.string().min(80).optional(),
+  VAPID_PRIVATE_KEY: z.string().min(40).optional(),
+
   BETTER_AUTH_SECRET: z.string().min(16),
   BETTER_AUTH_URL: z.string().default('http://localhost:3000'),
   GOOGLE_CLIENT_ID: z.string().optional(),
@@ -106,6 +114,11 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   if (Boolean(parsed.data.LINE_MEDIA_PROXY_URL) !== Boolean(parsed.data.LINE_MEDIA_PROXY_SECRET)) {
     throw new Error(
       'Invalid environment configuration:\n  - LINE_MEDIA_PROXY_URL and LINE_MEDIA_PROXY_SECRET are set together or not at all',
+    )
+  }
+  if (Boolean(parsed.data.VAPID_PUBLIC_KEY) !== Boolean(parsed.data.VAPID_PRIVATE_KEY)) {
+    throw new Error(
+      'Invalid environment configuration:\n  - VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY are set together or not at all',
     )
   }
   cached = parsed.data

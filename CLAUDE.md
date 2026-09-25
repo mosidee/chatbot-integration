@@ -126,6 +126,7 @@ bun run auth:generate     # regenerate the Better Auth schema after changing aut
 bun run backfill:plain-text    # convert old markdown replies; dry by default
 bun run conversations:merge    # merge duplicate threads; dry unless
                                # CONFIRM_MERGE_CONVERSATIONS=yes
+bun run push:keys         # a VAPID pair as .env lines (ADR 0010); append, don't print
 ./scripts/smoke.sh        # end-to-end: sign in, set up a mock provider, assert an answer
 cd workers/line-media && bunx wrangler deploy   # the LINE media Worker (ADR 0009)
 ```
@@ -366,6 +367,9 @@ without spending money.
   provider or retrieval call that uses the global `fetch` is an SSRF hole. URLs the
   *operator* sets in the environment (`LINE_MEDIA_PROXY_URL`) and fixed platform hosts are
   not tenant-typed and use a plain `fetch` on purpose.
+- **A push subscription's endpoint is member-typed too,** and the worker posts to it. It must
+  pass `isPushServiceEndpoint` (FCM, Apple, Mozilla and Windows push hosts, https, default
+  port) both when it is saved and before every send, and the send refuses redirects.
 - `TOOL_EGRESS_ALLOW_PRIVATE` lets a tenant-defined tool — and a provider or external
   retrieval URL — reach loopback and private addresses. Tests and local development need it;
   `createRuntime` **throws at startup** if it is set with `NODE_ENV=production`, because the
@@ -607,6 +611,28 @@ without spending money.
 - A popover inside the message thread is clipped by its scroll container, so its bounding box
   can extend over the header and the click lands on the header instead. Panels that open from
   a bubble go in the normal flow and let the thread grow.
+
+### Notifications (Web Push)
+
+- **Agents' devices are told by Web Push** (ADR 0010). `notifyAgents` queues a `push` job
+  (`push-<reason>-<conversation>-<trigger or at>`) under a **savepoint**: `applyEffects`
+  swallows a notify failure, and a failed statement left in the surrounding transaction
+  would turn its commit into a silent rollback. The job decides when it runs whether the
+  conversation is still open and owed, and who is told (the colleague holding it for
+  `customer_message`, otherwise every agent and admin, never a viewer, membership read at
+  send time).
+- **`/sw.js` caches nothing and has no fetch handler.** A caching worker pins an old build on
+  an iPhone's home screen, where nobody can clear it. The API serves it `no-cache`.
+- **Every push shows a notification.** Safari revokes a subscription that receives silent
+  pushes, so do not add an "already looking at it" skip in the worker.
+- iPhone and iPad can subscribe only from the app added to the Home Screen (iOS 16.4+), and
+  `Notification.requestPermission()` must be the first thing a click handler awaits. Android
+  shows no number on the icon, only a dot.
+- A browser under automation cannot subscribe to a real push service: the browser test
+  stubs `PushManager`, and `apps/web/test/sw.test.ts` runs the worker in a fake scope.
+- A password reset, a member's removal and signing out delete `push_subscriptions` rows; a
+  lock screen showing customers' words is the part of a session that signing out would
+  otherwise leave behind.
 
 ### Widget
 

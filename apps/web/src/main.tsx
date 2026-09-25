@@ -11,6 +11,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useTranslation } from 'react-i18next'
 import { ApiError, api } from './lib/api'
+import { registerServiceWorker } from './lib/push'
 import './lib/i18n'
 import './styles.css'
 import { Layout } from './components/Layout'
@@ -92,6 +93,17 @@ const appRoute = createRoute({
   },
 })
 
+/** Which queue is showing, so the dashboard can link straight into one. */
+function inboxSearch(search: Record<string, unknown>): { tab: InboxTab; c?: string } {
+  return {
+    tab: INBOX_TABS.includes(search.tab as InboxTab) ? (search.tab as InboxTab) : 'open',
+    // The open conversation, so a link, a reload or Back lands on the same thread.
+    ...(typeof search.c === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(search.c)
+      ? { c: search.c }
+      : {}),
+  }
+}
+
 /**
  * A bare workspace slug in the address bar opens that workspace.
  *
@@ -110,7 +122,8 @@ const appRoute = createRoute({
 const workspaceRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/$slug',
-  beforeLoad: async ({ params }) => {
+  validateSearch: inboxSearch,
+  beforeLoad: async ({ params, search }) => {
     const me = await api.settings.me()
     const match = me.memberships.find((membership) => membership.slug === params.slug)
 
@@ -122,7 +135,8 @@ const workspaceRoute = createRoute({
       // Everything held belongs to the workspace being left.
       queryClient.clear()
     }
-    throw redirect({ to: '/' })
+    // A notification opens `/<slug>?tab=…&c=…`: land on that conversation, not the top.
+    throw redirect({ to: '/', search: { tab: search.tab, ...(search.c ? { c: search.c } : {}) } })
   },
   component: function UnknownWorkspace() {
     const { t } = useTranslation()
@@ -138,14 +152,7 @@ const routeTree = rootRoute.addChildren([
       getParentRoute: () => appRoute,
       path: '/',
       component: Inbox,
-      // Which queue is showing, so the dashboard can link straight into one.
-      validateSearch: (search: Record<string, unknown>): { tab: InboxTab; c?: string } => ({
-        tab: INBOX_TABS.includes(search.tab as InboxTab) ? (search.tab as InboxTab) : 'open',
-        // The open conversation, so a link, a reload or Back lands on the same thread.
-        ...(typeof search.c === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(search.c)
-          ? { c: search.c }
-          : {}),
-      }),
+      validateSearch: inboxSearch,
     }),
     createRoute({ getParentRoute: () => appRoute, path: '/dashboard', component: Dashboard }),
     createRoute({ getParentRoute: () => appRoute, path: '/knowledge', component: Knowledge }),
@@ -186,6 +193,9 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+// For notifications on this device (ADR 0010); it caches nothing.
+registerServiceWorker()
 
 const rootElement = document.getElementById('root')
 if (!rootElement) throw new Error('missing #root element')

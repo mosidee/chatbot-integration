@@ -42,3 +42,21 @@ describe('the LINE media proxy settings', () => {
     ).toThrow('https')
   })
 })
+
+describe('the VAPID keys', () => {
+  test('refuse half a pair, which would switch push off without saying so', () => {
+    resetEnvCache()
+    expect(() => loadEnv({ ...BASE, VAPID_PUBLIC_KEY: 'B'.repeat(87) })).toThrow('set together')
+  })
+
+  test('accept a pair', () => {
+    resetEnvCache()
+    const env = loadEnv({
+      ...BASE,
+      VAPID_PUBLIC_KEY: 'B'.repeat(87),
+      VAPID_PRIVATE_KEY: 'k'.repeat(43),
+    })
+    expect(env.VAPID_PUBLIC_KEY).toHaveLength(87)
+    resetEnvCache()
+  })
+})

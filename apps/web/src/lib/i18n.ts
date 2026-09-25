@@ -290,6 +290,25 @@ const th = {
     noChannel: 'ยังไม่มีช่องทางทดสอบ',
     sentCount: 'ส่งแล้ว {{count}} ข้อความ',
   },
+  push: {
+    title: 'การแจ้งเตือนบนอุปกรณ์นี้',
+    hint: 'แจ้งเตือนเมื่อลูกค้ารอพนักงาน หรือเขียนมาในแชทที่คุณดูแล แม้ปิดหน้านี้อยู่',
+    enable: 'เปิดการแจ้งเตือน',
+    disable: 'ปิดบนอุปกรณ์นี้',
+    on: 'เปิดอยู่บนอุปกรณ์นี้',
+    sendTest: 'ส่งทดสอบ',
+    needsInstall:
+      'บน iPhone และ iPad ต้องเพิ่มหน้านี้ไปยังหน้าจอโฮมก่อน: แตะปุ่มแชร์ แล้วเลือก "เพิ่มไปยังหน้าจอโฮม" จากนั้นเปิดจากไอคอนนั้นและกลับมาที่หน้านี้',
+    unsupported: 'เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองใช้ Chrome หรือ Safari',
+    denied: 'การแจ้งเตือนถูกบล็อกสำหรับเว็บไซต์นี้ เปิดได้จากการตั้งค่าของเบราว์เซอร์หรือของเครื่อง แล้วโหลดหน้านี้ใหม่',
+    checkFailed: 'ตรวจสอบสถานะการแจ้งเตือนไม่สำเร็จ',
+    test: {
+      sent: 'ส่งแล้ว ควรเห็นการแจ้งเตือนในไม่กี่วินาที',
+      not_subscribed: 'อุปกรณ์นี้ยังไม่ได้เปิดการแจ้งเตือน',
+      gone: 'อุปกรณ์นี้ยกเลิกการรับแจ้งเตือนไปแล้ว กรุณาเปิดใหม่',
+      failed: 'ส่งไม่สำเร็จ ลองอีกครั้งภายหลัง',
+    },
+  },
   settings: {
     readOnly: 'การตั้งค่าเป็นของผู้ดูแลพื้นที่ทำงาน คุณดูได้อย่างเดียว',
     loadFailed: 'โหลดการตั้งค่าไม่สำเร็จ',
@@ -840,6 +859,26 @@ const en: typeof th = {
     attachImage: 'Attach image',
     noChannel: 'No test channel configured',
     sentCount: 'Sent {{count}}',
+  },
+  push: {
+    title: 'Notifications on this device',
+    hint: 'Get notified when a customer is waiting for a person or writes in a conversation you hold, even with this page closed.',
+    enable: 'Turn on notifications',
+    disable: 'Turn off on this device',
+    on: 'On for this device',
+    sendTest: 'Send a test',
+    needsInstall:
+      'On iPhone and iPad, add this page to your Home Screen first: tap Share, choose "Add to Home Screen", then open it from that icon and come back here.',
+    unsupported: 'This browser cannot show notifications. Try Chrome or Safari.',
+    denied:
+      'Notifications are blocked for this site. Allow them in your browser or device settings, then reload this page.',
+    checkFailed: 'Could not check the notification status.',
+    test: {
+      sent: 'Sent. It should appear within a few seconds.',
+      not_subscribed: 'This device has not turned notifications on.',
+      gone: 'This device is no longer subscribed. Please turn it on again.',
+      failed: 'Could not send it. Try again later.',
+    },
   },
   settings: {
     readOnly: 'Settings belong to workspace admins. You can read them here.',

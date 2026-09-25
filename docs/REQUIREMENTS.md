@@ -426,6 +426,12 @@ settings conflicts are judged per field (`expected`, a 409 naming `fields`), so 
 another card is not a conflict; a LINE refusal through the Worker is final rather than retried;
 knowledge indexing is scoped by workspace; the Worker has tests under `bun run test`.
 
+**Notifications, 2026-09-25.** Agents' devices are told by Web Push when a customer is
+handed off, still waiting, has a draft waiting for approval, or writes to a conversation a
+person holds — with the console closed, in Chrome, Edge and Safari, and on iPhone and
+Android once the console is added to the home screen, where the waiting count shows on the
+icon (iOS and installed desktop apps; Android shows a dot). Migration 0018, ADR 0010.
+
 What remains is listed in the status table of `recommendation.md` and `UX-AUDIT.md`: a
 separate media origin, a restore rehearsal, a manual screen-reader pass, Messenger
 idempotency, stable write keys when a retried model changes its arguments, an "indexed and

@@ -1,7 +1,7 @@
 import { newId, schema } from '@ci/db'
 import { accountReach, consumeInvitation, findInvitation } from '@ci/infra'
 import { acceptInvitationBodySchema, type UserRoleName } from '@ci/shared'
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import type { ApiContext } from '../context'
@@ -271,4 +271,12 @@ async function setPassword(ctx: ApiContext, userId: string, password: string): P
   }
 
   await auth.internalAdapter.deleteUserSessions(userId)
+  /**
+   * And every device they had turned notifications on for. A reset is how somebody is
+   * locked out of a lost phone, and a lock screen showing customers' messages is the part
+   * of the session a signed-out console does not end. Keyed by the user alone, across
+   * workspaces, for the reason the sessions are: the password is the account's, not a
+   * workspace's.
+   */
+  await ctx.db.delete(schema.pushSubscriptions).where(eq(schema.pushSubscriptions.userId, userId))
 }

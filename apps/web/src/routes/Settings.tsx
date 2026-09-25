@@ -19,6 +19,7 @@ import {
   VerifyButton,
   VerifyMessage,
 } from '../components/ModelField'
+import { NotificationsCard } from '../components/NotificationsCard'
 import {
   Button,
   Card,
@@ -335,7 +336,9 @@ export function Settings() {
           </fieldset>
         ) : null}
 
-        {/* Saved replies are an agent's own tool, so outside the admins-only fieldset. */}
+        {/* Saved replies and notifications are an agent's own, so outside the admins-only
+            fieldset. */}
+        {active === 'general' && can(me.data, 'reply') ? <NotificationsCard /> : null}
         {active === 'general' && can(me.data, 'reply') ? <CannedResponsesCard /> : null}
 
         {active === 'channels' ? (

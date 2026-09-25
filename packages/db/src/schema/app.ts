@@ -956,6 +956,39 @@ export const auditLog = pgTable(
   (t) => [index('audit_log_workspace_idx').on(t.workspaceId, t.createdAt)],
 )
 
+/**
+ * A device that asked for notifications from one workspace (ADR 0010).
+ *
+ * One row per workspace and device, not per person: a device holds one push endpoint for
+ * the whole origin, and somebody in two workspaces turns each on separately. Who receives
+ * is decided at send time against the current membership, so a removed colleague's rows
+ * stop mattering at once; they are deleted as well, and on a password reset.
+ *
+ * `endpoint` is a URL a browser gave us and the worker posts to. It is checked against the
+ * known push services on the way in and again before every send (`isPushServiceEndpoint`).
+ */
+export const pushSubscriptions = pgTable(
+  'push_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    /** The browser's public key and auth secret, which encrypt what we send it. */
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    createdAt: ts('created_at').defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('push_subscriptions_endpoint_uq').on(t.workspaceId, t.endpoint),
+    index('push_subscriptions_user_idx').on(t.userId),
+  ],
+)
+
 // Re-export enum value types so callers can use the shared union types directly.
 export type {
   AiTask,

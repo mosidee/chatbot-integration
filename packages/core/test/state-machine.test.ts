@@ -37,9 +37,12 @@ describe('customer message routing', () => {
     expect(effects).toEqual([{ type: 'run_ai_turn', deliver: 'draft' }])
   })
 
-  test('human mode only produces a suggestion', () => {
+  test('human mode produces a suggestion and tells the person holding it', () => {
     const { effects } = transition(state({ mode: 'human' }), { type: 'customer_message', at: AT })
-    expect(effects).toEqual([{ type: 'run_suggestion' }])
+    expect(effects).toEqual([
+      { type: 'run_suggestion' },
+      { type: 'notify_agents', reason: 'customer_message', at: AT },
+    ])
   })
 
   test('waiting_human mode produces a suggestion for whoever picks it up', () => {
@@ -47,7 +50,17 @@ describe('customer message routing', () => {
       type: 'customer_message',
       at: AT,
     })
-    expect(effects).toEqual([{ type: 'run_suggestion' }])
+    expect(effects).toEqual([
+      { type: 'run_suggestion' },
+      { type: 'notify_agents', reason: 'customer_message', at: AT },
+    ])
+  })
+
+  test('the AI answering tells nobody', () => {
+    for (const mode of ['ai', 'ai_supervised'] as const) {
+      const { effects } = transition(state({ mode }), { type: 'customer_message', at: AT })
+      expect(effects.map((effect) => effect.type)).not.toContain('notify_agents')
+    }
   })
 
   /**

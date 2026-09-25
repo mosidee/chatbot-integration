@@ -1,4 +1,5 @@
 import type { ConversationMode, ConversationStatus, HandoffReason, Language } from '@ci/shared'
+import type { NotifyReason } from '../ports'
 
 /**
  * The conversation state machine.
@@ -77,8 +78,12 @@ export type Effect =
     }
   /** Write an internal note visible to agents only. */
   | { type: 'add_internal_note'; body: string }
-  /** Tell connected agents something needs attention. */
-  | { type: 'notify_agents'; reason: 'handoff' | 'draft_ready' | 'timeout' }
+  /**
+   * Tell agents something needs attention: the open console at once, and their devices by
+   * push. `at` names the occasion, for the reason `record_handoff` carries one: a replayed
+   * effect list must not buzz everybody's phone a second time.
+   */
+  | { type: 'notify_agents'; reason: NotifyReason; at: Date }
   /** Schedule the waiting-human fallback check. */
   | { type: 'schedule_waiting_human_timeout'; minutes: number }
   /** Cancel a previously scheduled fallback check. */
@@ -156,7 +161,7 @@ export function transition(
           type: 'add_internal_note',
           body: event.note ?? `AI handed off. Reason: ${event.reason}.`,
         },
-        { type: 'notify_agents', reason: 'handoff' },
+        { type: 'notify_agents', reason: 'handoff', at: event.at },
       ]
       if (opts.waitingHumanFallbackMinutes !== null) {
         effects.push({
@@ -258,7 +263,7 @@ export function transition(
             // timer that runs twice for one wait apologises once.
             at: state.waitingHumanSince ?? event.at,
           },
-          { type: 'notify_agents', reason: 'timeout' },
+          { type: 'notify_agents', reason: 'timeout', at: state.waitingHumanSince ?? event.at },
         ],
       }
     }
@@ -305,7 +310,7 @@ function onCustomerMessage(
               type: 'add_internal_note',
               body: 'Customer sent media the AI cannot interpret. Handed off.',
             },
-            { type: 'notify_agents', reason: 'handoff' },
+            { type: 'notify_agents', reason: 'handoff', at: event.at },
           ],
         }
       }
@@ -315,12 +320,26 @@ function onCustomerMessage(
     case 'ai_supervised':
       return { patch: {}, effects: [{ type: 'run_ai_turn', deliver: 'draft' }] }
 
+    // The AI may only suggest here. This is the invariant the product depends on. The
+    // customer is talking to a person, so a person is told, wherever they are.
     case 'human':
-      // The AI may only suggest here. This is the invariant the product depends on.
-      return { patch: {}, effects: [{ type: 'run_suggestion' }] }
+      return {
+        patch: {},
+        effects: [
+          { type: 'run_suggestion' },
+          { type: 'notify_agents', reason: 'customer_message', at: event.at },
+        ],
+      }
 
+    // Already queued for a human: produce a suggestion so whoever picks it up has a head
+    // start, and remind whoever might.
     case 'waiting_human':
-      // Already queued for a human: produce a suggestion so whoever picks it up has a head start.
-      return { patch: {}, effects: [{ type: 'run_suggestion' }] }
+      return {
+        patch: {},
+        effects: [
+          { type: 'run_suggestion' },
+          { type: 'notify_agents', reason: 'customer_message', at: event.at },
+        ],
+      }
   }
 }

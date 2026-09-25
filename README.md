@@ -28,6 +28,7 @@ Milestones one to six are delivered, and one to four are running in a pilot on t
 | Knowledge | Hybrid retrieval over Postgres with pgvector and trigram search, Thai and English |
 | Memory | Rolling per-customer summaries, plus recall over that customer's past conversations |
 | Console | Inbox with open and waiting badges, search, takeover, suggested replies, resend of failed deliveries, knowledge, tabbed settings, dashboard; usable on a phone |
+| Notifications | Web Push to agents' devices with the console closed, in Chrome, Edge and Safari and on phones from the home screen, with the waiting count on the app icon |
 | Tools | Tenant-defined HTTP tools the AI can call, with restricted egress and proved identity |
 | Security | Every URL a tenant types goes through restricted egress; a private model gateway is approved per tenant by a platform admin. Stored files are served as downloads or inert media |
 | Quality | Thumbs and reasons on AI replies, and a review queue of conversations nobody has read |

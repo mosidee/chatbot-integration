@@ -3,6 +3,7 @@ import { type EffectContext, type EffectPorts, type Logger, redactText } from '@
 import { type Database, decryptJson, type Executor, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
+import { type PushJob, pushJobId, vapidKeys } from './push'
 import { summaryJobId, waitingHumanJobId } from './queues'
 import {
   conversationLanguage,
@@ -198,19 +199,41 @@ export function createEffectPorts(
     },
 
     /**
-     * Best-effort, and after the commit.
+     * The open consoles, after the commit; devices, through the outbox.
      *
-     * This is a Redis publish, so inside a transaction it would both hold a Postgres
-     * connection across a call to another system and announce a state that might still roll
-     * back. Deferred, it fires when what it describes is actually true.
+     * The realtime nudge is a Redis publish, so inside a transaction it would both hold a
+     * Postgres connection across a call to another system and announce a state that might
+     * still roll back. Deferred, it fires when what it describes is actually true.
+     *
+     * The push is an outbox row like any other promised work, but best effort all the same:
+     * it goes in under a savepoint, because `applyEffects` swallows a failure here and a
+     * failed statement left in the surrounding transaction would silently turn its commit
+     * into a rollback — the customer's message lost for the sake of a notification.
      */
-    async notifyAgents(ctx, reason) {
+    async notifyAgents(ctx, reason, at) {
       afterCommit(async () => {
         await publisher.publish(ctx.workspaceId, {
           type: 'conversation.updated',
           conversationId: ctx.conversationId,
         })
         logger.info('agents notified', { conversationId: ctx.conversationId, reason })
+      })
+
+      if (!vapidKeys(runtime.env)) return
+      const job: PushJob = {
+        workspaceId: ctx.workspaceId,
+        conversationId: ctx.conversationId,
+        reason,
+        ...(ctx.triggerMessageId ? { triggerMessageId: ctx.triggerMessageId } : {}),
+      }
+      await executor.transaction(async (savepoint) => {
+        await outbox.enqueue(savepoint, {
+          queue: 'push',
+          name: 'send',
+          workspaceId: ctx.workspaceId,
+          payload: job,
+          jobId: pushJobId({ ...ctx, reason, at }),
+        })
       })
     },
 
