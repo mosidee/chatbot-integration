@@ -38,6 +38,7 @@ import {
 import { processSuggestion } from './processors/suggestion'
 import { processSummarize, type SummarizeJob } from './processors/summarize'
 import { processWaitingHumanTimeout } from './processors/waiting-human'
+import { isTerminalFailure } from './terminal'
 
 /**
  * The worker process.
@@ -112,7 +113,7 @@ function makeWorker<T>(
       attempt: job?.attemptsMade,
       error: error.message,
     })
-    if (onTerminalFailure && job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+    if (onTerminalFailure && job && isTerminalFailure(job, error)) {
       onTerminalFailure(job.data, error).catch((recoveryError: unknown) => {
         logger.error('recovering from a failed job failed too', {
           queue: name,

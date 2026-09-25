@@ -124,8 +124,9 @@ bun run typecheck         # server packages, the web app and the widget
 bun run lint              # Biome; lint:fix writes the fixes
 bun run auth:generate     # regenerate the Better Auth schema after changing auth config
 bun run backfill:plain-text    # convert old markdown replies; dry by default
-bun run conversations:merge    # merge duplicate threads; dry unless CONFIRM_MERGE_CONVERSATIONS=yes
-./scripts/smoke.sh        # end-to-end: sign in, configure a mock provider, assert the AI answers
+bun run conversations:merge    # merge duplicate threads; dry unless
+                               # CONFIRM_MERGE_CONVERSATIONS=yes
+./scripts/smoke.sh        # end-to-end: sign in, set up a mock provider, assert an answer
 cd workers/line-media && bunx wrangler deploy   # the LINE media Worker (ADR 0009)
 ```
 
@@ -151,7 +152,8 @@ without spending money.
 - Biome cannot parse Tailwind 4 at-rules, so CSS is excluded from it.
 - TypeScript is pinned to 5.9.3. Elysia and Eden lean hard on inference and 7.x is too new to
   risk on that path.
-- `bun test` would pick up Playwright specs, so the root script scopes it to `apps packages`.
+- `bun test` would pick up Playwright specs, so the root script scopes it to
+  `apps packages workers`.
   Browser tests run through `bun run test:e2e`.
 
 ### Local infrastructure and storage
@@ -329,6 +331,8 @@ without spending money.
 - **Every stored vector has an `embedding_space`** (`model|dims` or `model|native`), and
   dense search and recall compare only within the query's space. A new embedding writer
   stores `embedded.space` from `embedTexts`.
+- **Knowledge indexing is scoped by workspace** (`indexEntry(db, workspaceId, entryId, …)`,
+  `indexSource(db, workspaceId, sourceId, …)`); an id from another workspace is skipped.
 - **Index swaps re-check under a lock.** `indexEntry` locks the entry and stores nothing if
   its text changed while embedding (the edit queued its own job); `replaceFileSource` locks
   the source row, since two concurrent swaps could not see each other's new entry and left
@@ -417,11 +421,11 @@ without spending money.
   `LINE_MEDIA_PROXY_URL` and `LINE_MEDIA_PROXY_SECRET` are set (`withLineMediaProxy`): the
   VPS's route to LINE's Tokyo content server runs at ~14 KB/s (65 s for one photo; 1.2 s
   through the Worker). The Worker builds LINE's content URL from a numeric id only and holds
-  no R2 binding; it marks what LINE answered with `x-upstream: line`, and a LINE 4xx is a
-  `PermanentMediaError` — not fetched directly and not retried. Otherwise the proxy call has
-  30 s (`PROXY_TIMEOUT_MS`), then the app falls back to the direct fetch, which has **no
-  deadline on purpose** — the endpoint is slow, not stalled, and
-  a 15-second limit failed every photo over ~200 KB. The Worker's secret lives in two places
+  no R2 binding; it marks what LINE answered with `x-upstream: line`, and a LINE 4xx other
+  than 429 is a `PermanentMediaError` — not fetched directly and not retried. Otherwise the
+  proxy call has 30 s (`PROXY_TIMEOUT_MS`), then the app falls back to the direct fetch,
+  which has **no deadline on purpose** — the endpoint is slow, not stalled, and a 15-second
+  limit failed every photo over ~200 KB. The Worker's secret lives in two places
   (the Worker's `PROXY_SECRET` and the server's `.env`); change both together.
 
 ### Media and storage keys
@@ -447,8 +451,6 @@ without spending money.
 - **Delete rows that name stored files and queue the files in one transaction**
   (`queueBlobDeletions`), then `drainBlobDeletions`. A failed removal stays queued; the
   nightly retention job retries it and queues agent uploads never sent after a day.
-- **Knowledge indexing is scoped by workspace** (`indexEntry(db, workspaceId, entryId, …)`,
-  `indexSource(db, workspaceId, sourceId, …)`); an id from another workspace is skipped.
 - `eraseWorkspace` refuses to delete anything unless a `workspace_erasures` row says the
   deletion was asked for, and saves the media keys onto that row **before** the rows go.
   After the cascade there is nothing left to read them from, so a retry would otherwise
@@ -461,9 +463,9 @@ without spending money.
 - `pg_notify` inside a transaction fires **at commit** and is dropped on rollback, which is
   exactly what the outbox needs: the relay is woken when the row becomes visible and never
   for one that was rolled back. It is called on the same executor as the insert for that
-  reason. Measured at 29ms against a 30-second timer, so the notification and not the sweep
-  is doing the work; the sweep exists for a dropped connection or a pooler in transaction
-  mode, which carries no notifications at all.
+  reason. Measured at 29ms when the fallback timer was 30 seconds, so the notification and not
+  the sweep is doing the work; the sweep, now one second, exists for a dropped connection or a
+  pooler in transaction mode, which carries no notifications at all.
 - The `outbox` table is **not tenant-owned** and has no workspace foreign key. A
   workspace-erasure job must outlive the cascade it was queued to perform, and the nightly
   sweep belongs to no tenant — nor does the idle-resolve planning pass, which fans out one
@@ -476,7 +478,11 @@ without spending money.
   `uncertain`: the platform did not answer (`UncertainDeliveryError`), so it may have
   arrived; never resent automatically. `failed` means **nothing will try again**: the
   outbound job writes it only on its last attempt (`JobMeta.finalAttempt`) and until then
-  leaves the row `queued` with the error noted. That is what makes the console's resend
+  leaves the row `queued` with the error noted; a job that failed for good before reaching
+  the send is marked by the worker's terminal hook (`markDeliveryFailed`). "For good" is
+  `isTerminalFailure` (`apps/worker/src/terminal.ts`): the last attempt, **or** an
+  `UnrecoverableError` — which is how BullMQ fails a job that stalled out, on any attempt.
+  The AI turn's handoff-after-failure hook uses the same test. That is what makes the console's resend
   (`POST /conversations/:id/messages/:messageId/resend`) safe: it locks the row, requires
   `failed` (and refuses an AI reply with 409 while a colleague owns the conversation), moves
   it to `queued` and writes an outbox row in the same transaction with a fresh job id
@@ -557,7 +563,8 @@ without spending money.
   is a 409. The console's settings saves send `expected` instead — the shown value of each
   setting being changed — and are refused only when one of *those* changed (the 409 names
   them in `fields`), so a colleague on another card or a platform action is not a conflict.
-  The page's `shown` ref moves only for settings it saved itself; the settings query never
+  The page's `shown` ref moves only for settings it saved itself, and is replaced
+  wholesale after a conflict; the settings query never
   refetches in the background, and the socket's reconnect skips it. The entry editor takes
   its revision at focus and follows its own chain of saves through a map. Saves go one at a
   time. Omitting both still overwrites.
@@ -700,8 +707,8 @@ to `docs/DEPLOY.md` if production needs it. Compose passes `.env` to both servic
 
 ## Pull requests
 
-Feature branches into `main`. CI runs lint, typecheck, migrations, tests, the web build, the
-browser tests, and builds both release images and requires them to start healthy.
+Feature branches into `main`. CI runs lint, typecheck, migrations, tests, the web and widget
+builds, the browser tests, and builds both release images and requires them to start healthy.
 End commit messages with the co-author trailer the session provides, for example:
 
 ```

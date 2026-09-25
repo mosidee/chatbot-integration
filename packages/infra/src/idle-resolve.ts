@@ -26,8 +26,8 @@ import type { Runtime } from './runtime'
  * - **Silent for the workspace's chosen number of hours** since that last message.
  *
  * Who spoke last is read from the messages themselves rather than `last_message_at`, which
- * an agent's reply does not update: trusting it would have skipped exactly the handed-back
- * conversations this is meant to include.
+ * says when but not who: a system holding message must not count as our side answering, and
+ * the column only began moving for agent replies with migration 0017.
  *
  * A customer who writes again reopens the conversation, the same as after any resolve.
  */

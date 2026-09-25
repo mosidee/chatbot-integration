@@ -27,9 +27,9 @@ VPS: the same photo in 1.1–1.3 seconds.
   `LINE_MEDIA_PROXY_SECRET` on the VPS), compared in constant time. The LINE channel token
   travels in the request body, per request, because every tenant's channel has its own.
 - It stores and logs nothing; Workers observability is off for it.
-- It marks LINE's own answers with `x-upstream: line`. A LINE refusal (a 4xx, say for expired
-  content) is final: the app neither retries it nor tries the direct fetch, which would be
-  refused the same way. The Worker's own refusals (401, 400) are not marked, and the app falls
+- It marks LINE's own answers with `x-upstream: line`. A LINE refusal (a 4xx other than 429, say
+  for expired content) is final: the app neither retries it nor tries the direct fetch, which would be
+  refused the same way. The Worker's own refusals (401, 400, 405) are not marked, and the app falls
   back to the direct fetch for those.
 - `workers/line-media/test` runs under `bun run test`, with LINE stubbed at `fetch`.
 - It has no R2 binding. The bytes come back to the worker process and are stored by the
@@ -37,7 +37,7 @@ VPS: the same photo in 1.1–1.3 seconds.
   leaked secret cannot write to the media bucket.
 
 The app uses it for LINE only when `LINE_MEDIA_PROXY_URL` and `LINE_MEDIA_PROXY_SECRET` are
-both set (`withLineMediaProxy`), and falls back to the direct fetch if it fails. The URL is
+both set (`withLineMediaProxy`), and falls back to the direct fetch if it fails, unless LINE itself refused. The URL is
 the operator's, from the environment, never a tenant's, so it is a plain `fetch` and not
 restricted egress (ADR 0004).
 

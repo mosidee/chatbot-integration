@@ -14,3 +14,4 @@ apps/web/dist
 .data/
 test-results/
 playwright-report/
+.wrangler/

@@ -42,6 +42,18 @@ const REQUIRED_FIELDS: Record<string, { key: string; label: string; secret: bool
   web: [{ key: 'visitorTokenSecret', label: 'Visitor token secret', secret: true }],
 }
 
+/** JSON with object keys sorted, so two readings of the same value compare equal. */
+function stableJson(value: unknown): string {
+  if (value === undefined) return 'null'
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  // Undefined entries are left out, as `JSON.stringify` leaves them out of what `GET` returns.
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, inner]) => inner !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`
+}
+
 /**
  * Workspace settings as the browser is allowed to see them.
  *
@@ -50,17 +62,6 @@ const REQUIRED_FIELDS: Record<string, { key: string; label: string; secret: bool
  * secret they just wrote. One function rather than two, because the two drifted apart once
  * already and the reply to a write is the easier of the pair to forget.
  */
-/** JSON with object keys sorted, so two readings of the same value compare equal. */
-function stableJson(value: unknown): string {
-  if (value === undefined) return 'null'
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0,
-  )
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`
-}
-
 function publicSettings(raw: WorkspaceSettings) {
   const { externalRetrieval, identity, ...rest } = withSettingsDefaults(raw)
   return {

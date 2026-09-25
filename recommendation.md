@@ -44,7 +44,7 @@ rather than rounded away.
 | 15. Widget origins and Unicode | Fixed | UTF-8 token signing; embedding enforced by CSP `frame-ancestors` per channel; the iframe's own session request is accepted (`e2e/widget-embed.spec.ts`). |
 | 16. Widget attachments and history | Fixed | Only delivered replies are shown (a reply withheld by a takeover used to appear); files signed at read time from storage keys; cursor on when a row became visible (`messages.sent_at`). |
 | 17. Provider cache refresh | Fixed | Profiles carry a revision (`updatedAt`); caches rebuild on change. |
-| 18. Live socket authorisation | Fixed | Origin check; re-validation on `auth.changed`/`workspace.status` and every five minutes; typing scoped to workspace and role; no join race; client refetches on reconnect and stops on 4401/4403. |
+| 18. Live socket authorisation | Fixed | Origin check; re-validation on `auth.changed`/`workspace.status` and every five minutes; typing scoped to workspace and role; no join race; client refetches on reconnect (except Settings, which keeps the version it shows) and stops on 4401/4403. |
 | 19. Embedding-space identity | Fixed | `embedding_space` stored and matched on dense search and recall. |
 | 20. Index replacement | Fixed | File reindex and recall embed first and swap in one transaction; transient failures retried. An entry index re-checks the entry under a lock and stores nothing if it changed while embedding; file swaps lock the source row, so concurrent reindexes cannot index a document twice (`packages/infra/test/retrieval.integration.test.ts`). |
 | 21. Persistent-thread memory | Fixed | Newest notes; incremental summaries from a cursor; new facts win; recall excludes only the visible window. |
