@@ -17,22 +17,26 @@ import {
  * SDK's own, run as a process: Playwright runs on Node and the test server is Bun's.
  */
 
-let mcp: ChildProcess | null = null
+const processes: ChildProcess[] = []
 let mcpUrl = ''
+let oauthUrl = ''
+
+/** Start a test server script and read the URL it prints. */
+async function serve(script: string): Promise<string> {
+  const child = spawn('bun', ['run', script], { stdio: ['ignore', 'pipe', 'inherit'] })
+  processes.push(child)
+  const lines = createInterface({ input: child.stdout as NodeJS.ReadableStream })
+  for await (const line of lines) return line
+  throw new Error(`${script} printed nothing`)
+}
 
 test.beforeAll(async () => {
-  mcp = spawn('bun', ['run', 'packages/infra/test/helpers/mcp-server-cli.ts'], {
-    stdio: ['ignore', 'pipe', 'inherit'],
-  })
-  const lines = createInterface({ input: mcp.stdout as NodeJS.ReadableStream })
-  for await (const line of lines) {
-    mcpUrl = line
-    break
-  }
+  mcpUrl = await serve('packages/infra/test/helpers/mcp-server-cli.ts')
+  oauthUrl = await serve('packages/infra/test/helpers/oauth-mcp-server-cli.ts')
 })
 
 test.afterAll(() => {
-  mcp?.kill()
+  for (const child of processes) child.kill()
 })
 
 test.beforeEach(async ({ request }) => {
@@ -93,4 +97,29 @@ test('an admin connects a server, allows a tool, and the AI answers from it', as
   await expect(
     page.getByText(`ผลการตรวจสอบ: order ${order} for nobody: shipped`).first(),
   ).toBeVisible({ timeout: 25_000 })
+})
+
+test('an admin signs in to an OAuth server and comes back connected', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/settings?tab=integrations')
+  const card = page.getByTestId('mcp-card')
+  await card.getByTestId('mcp-add').click()
+  await card.getByTestId('mcp-name').fill('hosted')
+  await card.getByTestId('mcp-url').fill(oauthUrl)
+  await card.getByTestId('mcp-auth').selectOption('oauth')
+  await card.getByTestId('mcp-save').click()
+  await expect(card.getByTestId('mcp-signin-state-hosted')).toBeVisible()
+
+  // Off to the server's own page, which approves at once, and back through the callback.
+  await card.getByTestId('mcp-signin-hosted').click()
+  await page.waitForURL(/\/settings\?tab=integrations&mcp=connected/)
+  await expect(page.getByTestId('mcp-signed-in')).toBeVisible()
+  await expect(page.getByTestId('mcp-card').getByTestId('mcp-signin-state-hosted')).toHaveText(
+    /Signed in|ลงชื่อเข้าใช้แล้ว/,
+  )
+
+  // Signed in, its tools can be fetched.
+  await page.getByTestId('mcp-card').getByTestId('mcp-open-hosted').click()
+  await page.getByTestId('mcp-card').getByTestId('mcp-fetch-hosted').click()
+  await expect(page.getByTestId('mcp-card').getByTestId('mcp-tool-lookup_order')).toBeVisible()
 })

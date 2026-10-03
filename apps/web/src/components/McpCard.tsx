@@ -7,6 +7,7 @@ import type {
 } from '@ci/shared'
 import { exposedMcpToolName } from '@ci/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRouterState } from '@tanstack/react-router'
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
@@ -54,6 +55,10 @@ export function McpCard() {
   const [open, setOpen] = useState<string | null>(null)
   const save = useSaveState()
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+  // Back from a server's sign-in page: the callback says how it went in the address.
+  const returned = useRouterState({
+    select: (state) => (state.location.search as { mcp?: string }).mcp,
+  })
 
   const remove = useMutation({
     mutationFn: (id: string) => api.mcp.remove(id),
@@ -83,6 +88,16 @@ export function McpCard() {
       </div>
       <p className="text-[11px] text-[var(--text-muted)]">{t('mcp.hint')}</p>
 
+      {returned === 'connected' ? (
+        <p
+          className="text-[12px] text-emerald-700 dark:text-emerald-300"
+          data-testid="mcp-signed-in"
+        >
+          {t('mcp.signedInNow')}
+        </p>
+      ) : returned === 'failed' ? (
+        <ErrorNote message={t('mcp.signInFailed')} />
+      ) : null}
       {servers.isError ? <ErrorNote message={t('mcp.loadFailed')} /> : null}
       {list.length === 0 && !adding && servers.isSuccess ? (
         <EmptyState title={t('mcp.none')} />
@@ -131,6 +146,7 @@ export function McpCard() {
             />
           </div>
           {server.lastError ? <ErrorNote message={server.lastError} /> : null}
+          {server.auth === 'oauth' ? <SignIn server={server} onChange={refresh} /> : null}
           {open === server.id ? <ServerTools server={server} onChange={refresh} /> : null}
         </div>
       ))}
@@ -157,7 +173,7 @@ function AddServer({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
   const id = useId()
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
-  const [auth, setAuth] = useState<'none' | 'header'>('header')
+  const [auth, setAuth] = useState<'none' | 'header' | 'oauth'>('header')
   const [headerName, setHeaderName] = useState('Authorization')
   const [token, setToken] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -211,12 +227,18 @@ function AddServer({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
             data-testid="mcp-auth"
             className="h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-sm"
             value={auth}
-            onChange={(e) => setAuth(e.target.value as 'none' | 'header')}
+            onChange={(e) => setAuth(e.target.value as 'none' | 'header' | 'oauth')}
           >
             <option value="header">{t('mcp.authHeader')}</option>
+            <option value="oauth">{t('mcp.authOAuth')}</option>
             <option value="none">{t('mcp.authNone')}</option>
           </select>
         </div>
+        {auth === 'oauth' ? (
+          <p className="text-[12px] text-amber-700 sm:col-span-2 dark:text-amber-300">
+            {t('mcp.oauthWarning')}
+          </p>
+        ) : null}
         {auth === 'header' ? (
           <>
             <div className="space-y-1">
@@ -539,6 +561,60 @@ function TestTool({ server }: { server: McpServerSummary }) {
           {result}
         </pre>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * Signing in to an OAuth server. The browser leaves for the server's own page and comes back
+ * to this tab with `?mcp=connected` or `?mcp=failed`.
+ */
+function SignIn({ server, onChange }: { server: McpServerSummary; onChange: () => void }) {
+  const { t } = useTranslation()
+  const [error, setError] = useState<string | null>(null)
+  const start = useMutation({
+    mutationFn: () => api.mcp.startSignIn(server.id),
+    onMutate: () => setError(null),
+    onSuccess: (result) => {
+      if ('authorizationUrl' in result) window.location.assign(result.authorizationUrl)
+      else onChange()
+    },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  })
+  const disconnect = useMutation({
+    mutationFn: () => api.mcp.disconnect(server.id),
+    onSuccess: onChange,
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  })
+  const signedIn = server.hasCredential && server.status === 'ok'
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[12px]">
+      <span
+        data-testid={`mcp-signin-state-${server.name}`}
+        className={signedIn ? 'text-emerald-700 dark:text-emerald-300' : 'text-[var(--text-muted)]'}
+      >
+        {signedIn ? t('mcp.signedIn') : t('mcp.notSignedIn')}
+      </span>
+      <Button
+        size="sm"
+        data-testid={`mcp-signin-${server.name}`}
+        disabled={start.isPending}
+        onClick={() => start.mutate()}
+      >
+        {signedIn ? t('mcp.signInAgain') : t('mcp.signIn')}
+      </Button>
+      {server.hasCredential ? (
+        <ConfirmButton
+          testId={`mcp-disconnect-${server.name}`}
+          label={t('mcp.disconnect')}
+          armedLabel={t('common.removeConfirm')}
+          onConfirm={() => disconnect.mutate()}
+        />
+      ) : null}
+      <span className="basis-full text-[11px] text-amber-700 dark:text-amber-300">
+        {t('mcp.oauthWarning')}
+      </span>
+      {error ? <ErrorNote message={error} /> : null}
     </div>
   )
 }

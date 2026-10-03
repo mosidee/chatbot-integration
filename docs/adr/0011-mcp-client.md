@@ -52,9 +52,40 @@ source is built.
 
 ### Authentication
 
-`none`, or a token in a header the admin names (stored encrypted, `hasCredential` only).
-OAuth — an admin signing in to a hosted server once — is a second step; see the addendum when
-it lands.
+`none`; a token in a header the admin names (stored encrypted, `hasCredential` only); or
+OAuth, an admin signing in to a hosted server once.
+
+**OAuth** follows the MCP authorization spec: protected-resource metadata, authorization
+server discovery, dynamic client registration, PKCE. The SDK's `auth()` runs in exactly two
+places, both with a person present:
+
+- `POST /settings/mcp/:id/oauth/start` (admin) discovers, registers, and returns the URL to
+  send the admin to. Its `state` is HMAC-signed with `APP_SECRET_KEY` and names the
+  workspace, the server and the admin, for ten minutes. The URL comes from the server's
+  metadata and the console navigates to it, so anything but `https:` is refused.
+- `GET /api/mcp/oauth/callback` is public, because it is a redirect from somebody else's
+  site, and so proves everything itself: the state is ours, unexpired, and names the person
+  whose session arrived; they are still an admin of that workspace and it is active. It
+  swaps the code and redirects to a fixed console path. `redirect_uri` is built from
+  `PUBLIC_WEB_URL`, never from the request. Better Auth's cookie is `SameSite=Lax`, so the
+  session arrives on that top-level redirect.
+
+Everything the sign-in leaves — the client registration, the tokens with their expiry, the
+discovery results — is one encrypted JSON document in `credential_encrypted`.
+
+**A turn never calls `auth()`.** On a failed refresh it falls through to "start a new
+sign-in", and it swallows a 5xx or a network error on the way, so in a worker a passing
+outage would become a server needing an admin. The worker sends `Authorization: Bearer`
+itself and refreshes with the SDK's `refreshAuthorization` directly, from the stored
+discovery, when the token is within a minute of expiring — **under a row lock, re-reading
+after taking it**, so two turns cannot both spend a single-use refresh token (the second
+finds the first one's token). A call answered 401 gets one forced refresh and one retry.
+Only `invalid_grant` marks the server `needs_reconnect`; its tools then leave every turn
+until an admin signs in again, rather than handing every conversation off. A server that is
+down during a refresh is an ordinary tool failure.
+
+The AI acts as whoever signed in, for every customer. The card says so and suggests an
+account made for the purpose.
 
 ## Consequences
 

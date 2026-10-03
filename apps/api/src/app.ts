@@ -10,7 +10,7 @@ import { dashboardRoutes } from './routes/dashboard'
 import { identityRoutes } from './routes/identity'
 import { invitationRoutes } from './routes/invitations'
 import { knowledgeRoutes } from './routes/knowledge'
-import { mcpRoutes } from './routes/mcp'
+import { mcpOAuthCallbackRoutes, mcpRoutes } from './routes/mcp'
 import { mediaRoutes } from './routes/media'
 import { platformRoutes } from './routes/platform'
 import { pushRoutes } from './routes/push'
@@ -103,6 +103,10 @@ export function createApp(ctx: ApiContext) {
       // And a fourth: the caller is LINE's or Meta's fetcher collecting a file we sent, and
       // the signature on the link is what stands in for a session it will never have.
       .group('/api/media', (app) => app.use(mediaRoutes(ctx)))
+
+      // A fifth: an MCP server sending an admin back after they signed in. It checks the
+      // signed state and the session itself (ADR 0011).
+      .group('/api/mcp/oauth', (app) => app.use(mcpOAuthCallbackRoutes(ctx)))
 
       .group('/api/v1', (app) =>
         app

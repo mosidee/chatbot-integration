@@ -4,6 +4,7 @@ import { schema } from '@ci/db'
 import type { McpServerSummary } from '@ci/shared'
 import { eq } from 'drizzle-orm'
 import { startMcpServer, type TestMcpServer } from '../../../packages/infra/test/helpers/mcp-server'
+import { startOAuthMcpServer } from '../../../packages/infra/test/helpers/oauth-mcp-server'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
 import { type ApiFixture, createApiFixture } from './helpers/session'
@@ -157,5 +158,70 @@ describe('the allowlist', () => {
     const summary = (await list()).find((row) => row.id === id)
     expect(summary?.allowed).toEqual([])
     expect(summary?.snapshot).toEqual([])
+  })
+})
+
+describe('signing in with OAuth', () => {
+  test('an admin starts, the server sends them back, and the server is connected', async () => {
+    const hosted = startOAuthMcpServer()
+    try {
+      const created = await fixture.as(
+        fixture.admin,
+        '/api/v1/settings/mcp',
+        json('POST', { name: 'hosted', url: hosted.url, auth: 'oauth' }),
+      )
+      const { id } = (await created.json()) as { id: string }
+      const started = await fixture.as(
+        fixture.admin,
+        `/api/v1/settings/mcp/${id}/oauth/start`,
+        json('POST'),
+      )
+      const { authorizationUrl } = (await started.json()) as { authorizationUrl: string }
+      expect(authorizationUrl).toStartWith(`${hosted.base}/authorize`)
+      expect((await list()).find((row) => row.id === id)?.hasCredential).toBe(false)
+
+      const approved = await fetch(authorizationUrl, { redirect: 'manual' })
+      const callback = new URL(approved.headers.get('location') ?? '')
+      expect(callback.pathname).toBe('/api/mcp/oauth/callback')
+
+      // Somebody else's session cannot finish it, and neither can a forged state.
+      const stranger = await fixture.as(fixture.agent, `${callback.pathname}${callback.search}`)
+      expect(stranger.headers.get('location')).toEndWith('mcp=failed')
+      const forged = new URL(callback)
+      forged.searchParams.set('state', 'not.ours')
+      const tampered = await fixture.as(fixture.admin, `${forged.pathname}${forged.search}`)
+      expect(tampered.headers.get('location')).toEndWith('mcp=failed')
+
+      const finished = await fixture.as(fixture.admin, `${callback.pathname}${callback.search}`)
+      expect(finished.status).toBe(302)
+      expect(finished.headers.get('location')).toBe(
+        new URL('/settings?tab=integrations&mcp=connected', ctx.env.PUBLIC_WEB_URL).toString(),
+      )
+      const summary = (await list()).find((row) => row.id === id)
+      expect(summary).toMatchObject({ hasCredential: true, status: 'ok' })
+
+      // Signed in, the tool list comes back with the token attached.
+      const fetched = await fixture.as(
+        fixture.admin,
+        `/api/v1/settings/mcp/${id}/fetch-tools`,
+        json('POST'),
+      )
+      expect(await fetched.json()).toEqual({ ok: true, tools: 3 })
+
+      await fixture.as(fixture.admin, `/api/v1/settings/mcp/${id}/oauth/disconnect`, json('POST'))
+      expect((await list()).find((row) => row.id === id)?.hasCredential).toBe(false)
+    } finally {
+      hosted.stop()
+    }
+  })
+
+  test('only an admin may start one', async () => {
+    const id = (await list())[0]?.id ?? ''
+    const response = await fixture.as(
+      fixture.agent,
+      `/api/v1/settings/mcp/${id}/oauth/start`,
+      json('POST'),
+    )
+    expect(response.status).toBe(403)
   })
 })

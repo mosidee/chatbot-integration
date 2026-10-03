@@ -94,7 +94,7 @@ Legend: **[v1]** in version 1 (M1–M4), **[M5]** milestone 5, **[M6]** mileston
 - [v1] Redaction of card numbers and Thai ID numbers before storage and model calls
 - [M5] Tool **sources** behind one registry interface, so the agent loop does not know where a tool came from
 - [M5] `http_tool`: one endpoint configured per workspace by an admin — URL, method, model-filled arguments, system-bound values, encrypted credential, timeout
-- [built, ADR 0011] MCP client: a tenant connects their own server and brings its tool set; per-workspace allowlist with a read/write choice per tool and the prompt cost shown, because every exposed tool costs prompt budget. Token-header servers; OAuth sign-in follows
+- [built, ADR 0011] MCP client: a tenant connects their own server and brings its tool set; per-workspace allowlist with a read/write choice per tool and the prompt cost shown, because every exposed tool costs prompt budget. Token-header servers and OAuth sign-in
 - [M5] Restricted egress for tenant-defined tools (see decision 20); `tool_error` handoff when a tool cannot be reached, answers with an error status or times out. Arguments the model got wrong go back to it to correct instead, since the endpoint was never called
 - [M5] A tool that writes records intent and fires after the turn, as every other side effect does. A write that fails holds the reply back, because a customer must never read "done" for something that did not happen; a turn that hands off for any other reason abandons its pending writes unfired
 - [M5] Identity proofs: the widget token, and a one-time verification link for LINE and Messenger (decision 21)

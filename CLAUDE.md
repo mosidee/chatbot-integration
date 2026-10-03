@@ -380,6 +380,11 @@ without spending money.
   provider or retrieval call that uses the global `fetch` is an SSRF hole. URLs the
   *operator* sets in the environment (`LINE_MEDIA_PROXY_URL`) and fixed platform hosts are
   not tenant-typed and use a plain `fetch` on purpose.
+- **An MCP sign-in is refreshed by the worker, never by the SDK's `auth()`** (ADR 0011):
+  `auth()` turns a refresh 5xx into "start a new sign-in", which in a job would strand the
+  server. `oauthHeaders` refreshes with `refreshAuthorization` under a row lock and marks
+  `needs_reconnect` only on `invalid_grant`. The callback at `/api/mcp/oauth/callback` is
+  public and checks the signed state, the session and the admin role itself.
 - **An MCP server's URL is tenant-typed too.** Fetching its tools, the test button and every
   call in a turn go through `runtime.toolFetch`. Import the SDK by deep path
   (`@modelcontextprotocol/sdk/client/index.js`), never the package root, which loads its
