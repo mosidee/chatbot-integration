@@ -242,6 +242,8 @@ const th = {
     },
   },
   knowledge: {
+    indexing: 'กำลังทำดัชนี AI ยังค้นคำตอบใหม่นี้ไม่เจอ',
+    ready: 'AI ค้นเจอแล้ว',
     readOnly: 'คุณดูคลังความรู้ได้อย่างเดียว การเพิ่มหรือแก้ไขต้องใช้สิทธิ์เจ้าหน้าที่',
     loadFailed: 'โหลดคลังความรู้ไม่สำเร็จ',
     entryConflict: 'มีคนอื่นแก้ไขรายการนี้หลังจากที่คุณเปิด ช่องนี้แสดงฉบับล่าสุดแล้ว กรุณาแก้ไขอีกครั้ง',
@@ -837,6 +839,8 @@ const en: typeof th = {
     },
   },
   knowledge: {
+    indexing: 'Indexing — the AI cannot find this version yet',
+    ready: 'Findable by the AI',
     readOnly: 'You can read the knowledge base. Adding or editing needs an agent role.',
     loadFailed: 'The knowledge base could not be loaded',
     entryConflict:

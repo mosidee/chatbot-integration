@@ -335,6 +335,12 @@ docker compose exec -T postgres psql -U ci -d chatbot_integration -c \
   "select t, count(*) from conversations, unnest(tags) t group by t order by 2 desc"
 ```
 
+### Migration 0020 (knowledge entries say when they are findable)
+
+It adds `knowledge_entries.indexed_revision` and marks every entry already indexed (one with
+chunks, or switched off) as current. An enabled entry with no chunks shows "indexing" until
+its next index. It writes data, so back up first; a second run changes nothing.
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that

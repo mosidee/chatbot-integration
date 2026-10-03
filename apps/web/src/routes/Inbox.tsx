@@ -212,10 +212,10 @@ export function Inbox() {
         ...(reviewFilter ? { review: 'true' as const } : {}),
         ...(q ? { q } : {}),
         ...(tagFilter.length > 0 ? { tag: tagFilter } : {}),
-        offset: pageParam,
+        ...(pageParam ? { cursor: pageParam } : {}),
       }),
-    initialPageParam: 0,
-    getNextPageParam: (last) => last.nextOffset ?? undefined,
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
     refetchInterval: 30_000,
   })
 

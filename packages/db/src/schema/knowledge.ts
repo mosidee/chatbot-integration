@@ -101,6 +101,12 @@ export const knowledgeEntries = pgTable(
     enabled: boolean('enabled').default(true).notNull(),
     createdAt: ts('created_at').defaultNow().notNull(),
     updatedAt: ts('updated_at').defaultNow().notNull(),
+    /**
+     * The `updated_at` whose text retrieval now holds, copied by the indexer when it swaps
+     * the chunks in. Equal to `updated_at` means what the editor shows is what the AI can
+     * find; behind it means an index job is still on its way (UX audit U11).
+     */
+    indexedRevision: ts('indexed_revision'),
   },
   (t) => [
     index('knowledge_entries_workspace_idx').on(t.workspaceId, t.enabled),

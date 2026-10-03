@@ -46,6 +46,38 @@ import type { ApiContext } from '../context'
 /** Enough to fill the panel without fetching a year of history to show the last sentence. */
 const DEFAULT_MESSAGE_WINDOW = 30
 
+/** The last row of a page of the inbox, by the values it was sorted on. */
+type ListCursor = { o: number; w: string; l: string; id: string }
+
+function encodeListCursor(cursor: ListCursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString('base64url')
+}
+
+const listCursorSchema = z.object({
+  o: z.number().int().min(0).max(2),
+  // As Postgres prints a timestamptz, or an infinity.
+  w: z
+    .string()
+    .max(64)
+    .regex(/^[0-9:.+\- infinity]+$/),
+  l: z
+    .string()
+    .max(64)
+    .regex(/^[0-9:.+\- infinity]+$/),
+  id: z.string().max(64),
+})
+
+function decodeListCursor(raw: string): ListCursor | null {
+  try {
+    const parsed = listCursorSchema.safeParse(
+      JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')),
+    )
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
 export function conversationRoutes(ctx: ApiContext) {
   const { db, runtime } = ctx
   const ports = createEffectPorts(runtime, runtime.logger)
@@ -119,7 +151,7 @@ export function conversationRoutes(ctx: ApiContext) {
        */
       .get(
         '/',
-        async ({ workspaceId, query, user }) => {
+        async ({ workspaceId, query, user, status }) => {
           const filters = [eq(schema.conversations.workspaceId, workspaceId)]
           if (query.status) filters.push(eq(schema.conversations.status, query.status))
           if (query.mode) filters.push(eq(schema.conversations.mode, query.mode))
@@ -170,7 +202,6 @@ export function conversationRoutes(ctx: ApiContext) {
             )`)
           }
           const limit = query.limit ?? 50
-          const offset = query.offset ?? 0
 
           /** Your people first, then unclaimed people, then everybody else's. */
           const ownership = sql`case
@@ -201,6 +232,37 @@ export function conversationRoutes(ctx: ApiContext) {
               then ${schema.conversations.lastCustomerMessageAt}
           end`
 
+          /**
+           * The sort keys with their nulls made into ends of the line, so the order and the
+           * cursor are written over the same four values: nobody waiting sorts after every
+           * wait, and a conversation with no message after every one that has.
+           */
+          const waitKey = sql`coalesce(${waitingSince}, 'infinity'::timestamptz)`
+          const lastKey = sql`coalesce(${schema.conversations.lastMessageAt}, '-infinity'::timestamptz)`
+
+          /**
+           * Where the page starts: after the last row of the previous one, by value.
+           *
+           * Offsets counted positions in a queue that moves while somebody pages it, so a
+           * conversation that rose past the boundary was shown twice and the one it
+           * displaced was never shown. A cursor holds the last row's keys, so every row
+           * that did not move is seen exactly once; one that jumps above the cursor appears
+           * when the first page refetches. The timestamps travel as Postgres wrote them:
+           * through a JavaScript Date they lose their microseconds and the comparison slips.
+           */
+          const after = query.cursor ? decodeListCursor(query.cursor) : null
+          if (query.cursor && !after) return status(400, { error: 'Invalid cursor' })
+          if (after) {
+            filters.push(sql`(
+              ${ownership} > ${after.o}
+              or (${ownership} = ${after.o} and ${waitKey} > ${after.w}::timestamptz)
+              or (${ownership} = ${after.o} and ${waitKey} = ${after.w}::timestamptz
+                  and ${lastKey} < ${after.l}::timestamptz)
+              or (${ownership} = ${after.o} and ${waitKey} = ${after.w}::timestamptz
+                  and ${lastKey} = ${after.l}::timestamptz and ${schema.conversations.id} < ${after.id})
+            )`)
+          }
+
           const rows = await db
             .select({
               id: schema.conversations.id,
@@ -218,6 +280,9 @@ export function conversationRoutes(ctx: ApiContext) {
               customerAssigneeUserId: schema.customers.assigneeUserId,
               channelType: schema.channels.type,
               channelName: schema.channels.name,
+              sortOwnership: sql<number>`${ownership}`,
+              sortWait: sql<string>`${waitKey}::text`,
+              sortLast: sql<string>`${lastKey}::text`,
             })
             .from(schema.conversations)
             // Replaces a second query that fetched these by id. The ordering needs the
@@ -230,19 +295,27 @@ export function conversationRoutes(ctx: ApiContext) {
             .where(and(...filters))
             .orderBy(
               ownership,
-              sql`${waitingSince} asc nulls last`,
-              sql`${schema.conversations.lastMessageAt} desc nulls last`,
+              sql`${waitKey} asc`,
+              sql`${lastKey} desc`,
               // A total order: two conversations tied on everything above used to swap
               // between requests, so paging could show one twice and never the other.
               desc(schema.conversations.id),
             )
             // One more than a page, which is how the caller learns there is another.
             .limit(limit + 1)
-            .offset(offset)
 
           const page = rows.slice(0, limit)
-          const nextOffset = rows.length > limit ? offset + limit : null
-          if (page.length === 0) return { conversations: [], nextOffset: null }
+          const last = page.at(-1)
+          const nextCursor =
+            rows.length > limit && last
+              ? encodeListCursor({
+                  o: Number(last.sortOwnership),
+                  w: last.sortWait,
+                  l: last.sortLast,
+                  id: last.id,
+                })
+              : null
+          if (page.length === 0) return { conversations: [], nextCursor: null }
 
           /**
            * The newest message of each conversation on the page, one row each.
@@ -282,8 +355,8 @@ export function conversationRoutes(ctx: ApiContext) {
           }
 
           return {
-            /** Where the next page starts, or null on the last page. */
-            nextOffset,
+            /** Pass back as `cursor` for the next page; null on the last. */
+            nextCursor,
             conversations: page.map((row) => ({
               id: row.id,
               mode: row.mode,
@@ -339,11 +412,8 @@ export function conversationRoutes(ctx: ApiContext) {
             /** Name, identifier or message text to look for; see the filter above. */
             q: z.string().trim().min(2).max(200).optional(),
             limit: z.coerce.number().int().min(1).max(100).optional(),
-            /**
-             * Where to start, from `nextOffset`. The order is total (id breaks every tie),
-             * so paging a queue that is not changing reaches every row exactly once.
-             */
-            offset: z.coerce.number().int().min(0).max(100_000).optional(),
+            /** From the previous page's `nextCursor`. Opaque. */
+            cursor: z.string().max(400).optional(),
           }),
         },
       )

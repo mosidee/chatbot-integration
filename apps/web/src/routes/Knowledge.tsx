@@ -127,6 +127,9 @@ function SourceRow({
     queryKey: ['knowledge-entries', source.id],
     queryFn: () => api.knowledge.entries(source.id),
     enabled: expanded,
+    // Asked again while an entry is still being indexed, so "indexing" turns into "ready"
+    // on its own; quiet once everything shown is what the AI can find.
+    refetchInterval: (query) => (query.state.data?.entries.some(isIndexing) ? 2000 : false),
   })
 
   return (
@@ -220,11 +223,27 @@ function SourceRow({
   )
 }
 
+/** Saved, but retrieval does not hold this text yet: the AI would still give the old one. */
+function isIndexing(entry: {
+  enabled: boolean
+  updatedAt: string
+  indexedRevision: string | null
+}) {
+  return entry.enabled && entry.indexedRevision !== entry.updatedAt
+}
+
 function EntryEditor({
   entry,
   onChange,
 }: {
-  entry: { id: string; question: string | null; body: string; enabled: boolean; updatedAt: string }
+  entry: {
+    id: string
+    question: string | null
+    body: string
+    enabled: boolean
+    updatedAt: string
+    indexedRevision: string | null
+  }
   onChange: () => void
 }) {
   const { t } = useTranslation()
@@ -339,6 +358,20 @@ function EntryEditor({
         {/* These fields save on blur, so without this the only sign anything happened was
             the text staying where it was typed — which it also does when the save fails. */}
         <SaveStatus state={status.state} />
+        {/* Saved is not the same as findable: say which, so nobody tests the AI on an
+            answer it cannot see yet (UX audit U11). */}
+        {isIndexing(entry) ? (
+          <span className="text-[11px] text-[var(--text-muted)]" data-testid="entry-indexing">
+            {t('knowledge.indexing')}
+          </span>
+        ) : entry.enabled ? (
+          <span
+            className="text-[11px] text-emerald-700 dark:text-emerald-300"
+            data-testid="entry-ready"
+          >
+            {t('knowledge.ready')}
+          </span>
+        ) : null}
       </div>
       {conflict ? (
         <div data-testid="entry-conflict">

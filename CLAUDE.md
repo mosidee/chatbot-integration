@@ -591,7 +591,10 @@ without spending money.
 - The inbox order lives in SQL and the browser must not re-sort it. It used to lift
   `waiting_human` to the top client-side, which was right when the whole queue arrived in
   one page; the order now depends on who owns each customer, which only the database knows,
-  so re-sorting a page of fifty contradicts it.
+  so re-sorting a page of fifty contradicts it. It pages by **cursor** (`nextCursor`): the
+  order and the cursor share four coalesced sort keys (`waitKey`, `lastKey`), and the
+  cursor carries timestamps as Postgres printed them (`::text`), never through a Date. Change
+  the order and the cursor predicate together.
 - The conversation panel keeps the **most recent** thirty messages live and fetches older
   pages by cursor (`GET /conversations/:id?before=<message id>`) as somebody scrolls up —
   and only on the way up: opening a thread lands at its end instantly, because a smooth
