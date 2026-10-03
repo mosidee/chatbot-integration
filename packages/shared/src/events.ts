@@ -43,6 +43,13 @@ export const wsEventSchema = z.discriminatedUnion('type', [
     online: z.boolean(),
   }),
   /**
+   * An admin renamed or deleted a tag across the workspace. One event rather than one per
+   * conversation it touched; an open console refetches its list, its tags and the thread.
+   */
+  z.object({
+    type: z.literal('tags.changed'),
+  }),
+  /**
    * The workspace was suspended, restored or scheduled for deletion.
    *
    * Sent so an open console reacts at once rather than on the next reload. Somebody typing

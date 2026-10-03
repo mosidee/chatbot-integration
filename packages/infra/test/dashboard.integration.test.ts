@@ -128,4 +128,37 @@ describe('the dashboard', () => {
     // The window ends on today's date in Bangkok (07:00 on the 22nd there).
     expect(dashboard.days.at(-1)?.day).toBe('2026-09-22')
   })
+
+  test('top tags count conversations spoken in during the window, and their handoffs', async () => {
+    await db
+      .update(schema.conversations)
+      .set({ tags: ['billing', 'vip'], lastMessageAt: new Date('2026-09-21T03:00:00Z') })
+      .where(eq(schema.conversations.id, conversationId))
+    await db.insert(schema.handoffEvents).values({
+      id: newId(),
+      workspaceId,
+      conversationId,
+      reason: 'customer_requested',
+      occurredAt: new Date('2026-09-21T03:05:00Z'),
+    })
+    const dashboard = await loadDashboard(db, {
+      workspaceId,
+      days: 7,
+      now: new Date('2026-09-22T00:00:00Z'),
+      timezone: 'Asia/Bangkok',
+    })
+    expect(dashboard.topTags).toEqual([
+      { tag: 'billing', conversations: 1, handoffs: 1 },
+      { tag: 'vip', conversations: 1, handoffs: 1 },
+    ])
+
+    // A month later nobody has spoken in it: it is not this window's subject.
+    const later = await loadDashboard(db, {
+      workspaceId,
+      days: 7,
+      now: new Date('2026-10-22T00:00:00Z'),
+      timezone: 'Asia/Bangkok',
+    })
+    expect(later.topTags).toEqual([])
+  })
 })

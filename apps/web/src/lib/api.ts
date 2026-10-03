@@ -12,6 +12,7 @@ import type {
   MergeMatchKey,
   NormalizedMessage,
   SenderType,
+  TagCount,
   ToolSummary,
   UserRoleName,
   WorkspaceStatus,
@@ -423,6 +424,7 @@ export type Dashboard = {
   firstResponse: { medianSeconds: number | null; conversations: number }
   handoffWait: { medianSeconds: number | null; events: number; unanswered: number }
   handoffReasons: { reason: string; conversations: number }[]
+  topTags: { tag: string; conversations: number; handoffs: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number
   feedback: { up: number; down: number; reasons: { reason: string; count: number }[] }
@@ -436,7 +438,8 @@ export type ConversationFilters = {
   mode?: ConversationMode
   channelId?: string
   assigneeUserId?: string
-  tag?: string
+  /** Every one of these tags; sent comma-separated, which a tag cannot contain. */
+  tag?: string[]
   /** Only what nobody has reviewed. A literal string: the server refuses anything else. */
   review?: 'true'
   /** A name, identifier or phrase; two characters at least. */
@@ -537,7 +540,9 @@ export const api = {
     list: (filters: ConversationFilters = {}) => {
       const params = new URLSearchParams()
       for (const [key, value] of Object.entries(filters)) {
-        if (value !== undefined && value !== '') params.set(key, String(value))
+        if (Array.isArray(value)) {
+          if (value.length > 0) params.set(key, value.join(','))
+        } else if (value !== undefined && value !== '') params.set(key, String(value))
       }
       const qs = params.toString()
       return get<{ conversations: ConversationListItem[]; nextOffset: number | null }>(
@@ -574,6 +579,12 @@ export const api = {
       post<{ noteId: string }>(`/v1/conversations/${id}/notes`, { body }),
     discardSuggestion: (id: string, suggestionId: string) =>
       post<{ ok: true }>(`/v1/conversations/${id}/suggestions/${suggestionId}/discard`),
+    /** Every tag in the workspace, most used first. */
+    tags: () => get<{ tags: TagCount[] }>('/v1/conversations/tags'),
+    addTag: (id: string, tag: string) =>
+      post<{ tags: string[] }>(`/v1/conversations/${id}/tags`, { tag }),
+    removeTag: (id: string, tag: string) =>
+      del<{ tags: string[] }>(`/v1/conversations/${id}/tags`, { tag }),
     reviewCount: () => get<{ count: number }>('/v1/conversations/review-count'),
     counts: () => get<{ open: number; waiting: number }>('/v1/conversations/counts'),
     markReviewed: (id: string) => post<{ reviewedAt: string }>(`/v1/conversations/${id}/review`),
@@ -675,6 +686,9 @@ export const api = {
   },
 
   settings: {
+    renameTag: (from: string, to: string) =>
+      patch<{ changed: number }>('/v1/settings/tags', { from, to }),
+    deleteTag: (tag: string) => del<{ changed: number }>('/v1/settings/tags', { tag }),
     /** The page keeps what this returned and sends it back as `expected` with a save. */
     workspace: () =>
       get<{ settings: WorkspaceSettings; revision: string }>('/v1/settings/workspace'),

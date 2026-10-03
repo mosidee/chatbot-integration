@@ -322,6 +322,19 @@ Check through the public hostname that the proxy in front leaves the service wor
 `curl -sI https://<host>/sw.js` must say `cache-control: no-cache` and a JavaScript content
 type, not HTML.
 
+### Migration 0019 (conversation tags)
+
+It rewrites every stored tag into one spelling (lowercase, single spaces, at most 40
+characters, duplicates merged) and adds an index for the tag filter. Nothing is dropped:
+a conversation holding more than the new limit of 20 keeps them all and gains no more. It
+writes data, so take a `pg_dump` first (or run `scripts/backup.sh`); a second run changes
+nothing. Preview what it will change, read-only:
+
+```bash
+docker compose exec -T postgres psql -U ci -d chatbot_integration -c \
+  "select t, count(*) from conversations, unnest(tags) t group by t order by 2 desc"
+```
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that

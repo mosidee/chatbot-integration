@@ -330,7 +330,14 @@ without spending money.
   the customer's display name, the *values* of `customers.fields` (`jsonb_each_text`, so a
   field's name does not match) and `messages.text`, within the workspace and the current
   tab. At least two characters; `%`, `_` and `\` are escaped. `messages_text_trgm_idx`
-  (migration 0016) serves it.
+  (migration 0016) serves it. It matches a tag too.
+- **Tags have one spelling** (`normaliseTag` in `packages/shared/src/tags.ts`: lowercase,
+  single spaces, no commas, 40 characters) and are redacted where written. Migration 0019
+  repeats the rule in SQL and `apps/api/test/tags.test.ts` holds the two together; change
+  both or neither. Write them through `packages/infra/src/conversation-tags.ts`, never a
+  read-modify-write: the AI and a person add at the same moment. The filter is `?tag=a,b`
+  (all required); Elysia hands a comma-separated query value over as an array, so the route
+  accepts both shapes. The AI is offered only tags on two conversations or more.
 - **Every stored vector has an `embedding_space`** (`model|dims` or `model|native`), and
   dense search and recall compare only within the query's space. A new embedding writer
   stores `embedded.space` from `embedTexts`.

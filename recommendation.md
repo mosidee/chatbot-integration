@@ -50,7 +50,7 @@ rather than rounded away.
 | 21. Persistent-thread memory | Fixed | Newest notes; incremental summaries from a cursor; new facts win; recall excludes only the visible window. |
 | 22. Pagination and bounded reads | Fixed | Total order and offset paging with load-more; lateral previews; history by cursor without a cap. Offset paging can repeat or skip a row that moves while paging a live queue. |
 | 23. Reporting semantics | Fixed; accounting scope stated | Answered and response times count delivered replies; workspace timezone. Cost excludes failed primary attempts and embedding/rerank usage, and the dashboard says so. |
-| 24. Deployment images and failure states | Fixed; restore rehearsal not done | Worker manifest; CI builds both images and requires them healthy; MinIO pinned by digest, then removed with media moved to Cloudflare R2 (ADR 0008); console failure states (see the UX audit). A backup restore rehearsal has not been performed. |
+| 24. Deployment images and failure states | Fixed | Worker manifest; CI builds both images and requires them healthy; MinIO pinned by digest, then removed with media moved to Cloudflare R2 (ADR 0008); console failure states (see the UX audit). Nightly backups with same-snapshot row counts (`scripts/backup.sh`, offsite copy) and a restore check (`scripts/restore-check.sh`) that passed against production's dump on 2026-10-03. |
 
 ## UX/UI recommendations
 
@@ -369,7 +369,7 @@ AI traces can label an answer `sent` before outbound delivery completes. Chat ac
 
 ### 24. Build the actual deployment images in CI and polish failure states
 
-**Status (2026-09-24):** Fixed; restore rehearsal not done.
+**Status (2026-10-03):** Fixed; restore rehearsed on 2026-10-03 (see DEPLOY.md, Restoring).
 
 **Evidence:** [worker Dockerfile](apps/worker/Dockerfile), [API Dockerfile](apps/api/Dockerfile), [CI workflow](.github/workflows/ci.yml), [deployment guide](docs/DEPLOY.md), [console routes](apps/web/src/routes).
 

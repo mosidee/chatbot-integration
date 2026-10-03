@@ -22,6 +22,7 @@ import {
   customerLanguageEvidence,
   describeWriteFailure,
   isWorkspaceKey,
+  listWorkspaceTags,
   loadAiConfig,
   loadToolDefinitions,
   loadTurnContext,
@@ -199,6 +200,10 @@ export async function processAiTurn(
   // The subject comes from a proof recorded on the channel identity, never from anything
   // the model or the customer said; see packages/infra/src/identity.ts.
   const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
+  // Only tags on two conversations or more: see `ToolContext.knownTags`.
+  const knownTags = (await listWorkspaceTags(db, job.workspaceId, { minUses: 2, limit: 30 })).map(
+    (row) => row.tag,
+  )
   const bound = boundIdentityFor(context, settings)
   // Stable across a retry of this job, so a write that is sent twice carries one key.
   const writeKey = turnKey ?? `turn-${job.conversationId}-${Date.now()}`
@@ -272,6 +277,7 @@ export async function processAiTurn(
     logger,
     redaction: settings.redaction,
     toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
+    knownTags,
     // Offered only where it can actually be honoured. `draft` is excluded because that
     // path ends at a suggestion for a person to approve and never reaches the code below
     // that sends the link: the model would otherwise write "I've sent you a link", an
@@ -334,7 +340,24 @@ export async function processAiTurn(
   if (proposed > 0) {
     logger.info('merge suggested', { customerId: conversation.customerId, proposed })
   }
-  await addConversationTags(db, job.workspaceId, job.conversationId, result.tagsToAdd)
+  if (result.tagsToAdd.length > 0) {
+    const tagged = await addConversationTags(
+      db,
+      job.workspaceId,
+      job.conversationId,
+      result.tagsToAdd,
+      settings.redaction,
+    )
+    // Telling the console is not part of the turn: a Redis hiccup must not re-run it.
+    if (tagged.status === 'ok') {
+      await publisher
+        .publish(job.workspaceId, {
+          type: 'conversation.updated',
+          conversationId: job.conversationId,
+        })
+        .catch((error) => logger.warn('tag publish failed', { error: String(error) }))
+    }
+  }
 
   if (result.handoff) {
     // Pending writes are deliberately abandoned here. The model asked for them on the way

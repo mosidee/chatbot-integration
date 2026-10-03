@@ -278,6 +278,40 @@ describe('runAgentTurn', () => {
     expect(result.tagsToAdd).toEqual(['billing'])
   })
 
+  test("tags come back in the team's spelling, and the team's tags are offered", async () => {
+    const server = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          {
+            name: 'tag_conversation',
+            arguments: { tags: ['Billing ', 'billing', 'Late  Payment'] },
+          },
+        ],
+      },
+      { kind: 'text', text: 'รับทราบค่ะ' },
+    ])
+
+    const result = await runAgentTurn({
+      input: input(),
+      chatSlot: slot(server.url),
+      visionSlot: null,
+      bound: bound(),
+      turnKey: 'turn-test',
+      prices: {},
+      mode: 'answer',
+      maxRetries: 0,
+      knownTags: ['refund', 'late payment'],
+    })
+
+    expect(result.tagsToAdd).toEqual(['billing', 'late payment'])
+    const body = server.requests[0] as {
+      tools: { function: { name: string; description: string } }[]
+    }
+    const tagTool = body.tools.find((entry) => entry.function.name === 'tag_conversation')
+    expect(tagTool?.function.description).toContain('refund, late payment')
+  })
+
   test('omits tools for a provider without function calling', async () => {
     const server = mock([{ kind: 'text', text: 'answer only' }])
     await runAgentTurn({

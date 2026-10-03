@@ -466,6 +466,54 @@ describe('the AI and human loop', () => {
     expect(suggestions[0]?.text).not.toContain(card)
   })
 
+  test("the AI's tags are normalised and masked, and only shared tags are offered back", async () => {
+    const card = '4242424242424242'
+    const provider = mock([
+      { kind: 'text', text: 'สวัสดีค่ะ' },
+      { kind: 'text', text: 'สวัสดีค่ะ' },
+      {
+        kind: 'tool_calls',
+        toolCalls: [{ name: 'tag_conversation', arguments: { tags: ['VIP ', `card ${card}`] } }],
+      },
+      { kind: 'text', text: 'รับทราบค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+
+    // Two earlier conversations: one tag both carry, and one only the first does.
+    await customerSays(f, 'hello', { externalId: 'tag-a' })
+    await runQueuedWork(f)
+    const first = await onlyConversation(f)
+    await customerSays(f, 'hello', { externalId: 'tag-b' })
+    await runQueuedWork(f)
+    const second = await onlyConversation(f)
+    await f.runtime.db
+      .update(schema.conversations)
+      .set({ tags: ['shared', 'khun somchai'] })
+      .where(eq(schema.conversations.id, first.id))
+    await f.runtime.db
+      .update(schema.conversations)
+      .set({ tags: ['shared'] })
+      .where(eq(schema.conversations.id, second.id))
+
+    await customerSays(f, 'question', { externalId: 'tag-c' })
+    await runQueuedWork(f)
+    const third = await onlyConversation(f)
+
+    expect(third.tags[0]).toBe('vip')
+    expect(third.tags).toHaveLength(2)
+    expect(JSON.stringify(third.tags)).not.toContain(card)
+
+    // A tag on one conversation may name that customer; it is never shown in another's.
+    const asked = provider.requests[2] as {
+      tools: { function: { name: string; description: string } }[]
+    }
+    const description =
+      asked.tools.find((entry) => entry.function.name === 'tag_conversation')?.function
+        .description ?? ''
+    expect(description).toContain('shared')
+    expect(description).not.toContain('somchai')
+  })
+
   test('card numbers are masked before they reach the database or the model', async () => {
     const provider = mock([{ kind: 'text', text: 'ขอบคุณค่ะ' }])
     const f = await fixture({ providerBaseUrl: provider.url })

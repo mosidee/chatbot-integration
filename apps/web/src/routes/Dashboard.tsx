@@ -303,6 +303,36 @@ export function Dashboard() {
           ) : null}
         </Card>
 
+        {/* What people come about, and which of those subjects the AI hands on. */}
+        <Card className="space-y-2" testId="top-tags">
+          <h2 className="text-sm font-semibold">{t('tags.topTitle')}</h2>
+          {data.topTags.length === 0 ? (
+            <EmptyState title={t('tags.noTags')} />
+          ) : (
+            <ul className="space-y-1 text-[13px]">
+              {data.topTags.map((row) => (
+                <li key={row.tag} className="flex items-baseline justify-between gap-2">
+                  <Link
+                    to="/"
+                    search={{ tab: 'open', tag: row.tag }}
+                    className="min-w-0 flex-1 truncate hover:underline"
+                    data-testid={`top-tag-${row.tag}`}
+                  >
+                    {row.tag}
+                  </Link>
+                  {row.handoffs > 0 ? (
+                    <span className="text-[11px] text-[var(--text-muted)]">
+                      {t('tags.topHandoffs', { count: row.handoffs })}
+                    </span>
+                  ) : null}
+                  <span className="tabular-nums">{row.conversations}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[11px] text-[var(--text-muted)]">{t('tags.topDefinition')}</p>
+        </Card>
+
         {/* The other half of "what to fix next": where the AI answered but answered badly. */}
         <Card className="space-y-2">
           <h2 className="text-sm font-semibold">{t('dashboard.feedback')}</h2>

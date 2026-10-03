@@ -20,6 +20,7 @@ import {
   VerifyMessage,
 } from '../components/ModelField'
 import { NotificationsCard } from '../components/NotificationsCard'
+import { TagsCard } from '../components/TagsCard'
 import {
   Button,
   Card,
@@ -340,6 +341,7 @@ export function Settings() {
             fieldset. */}
         {active === 'general' && can(me.data, 'reply') ? <NotificationsCard /> : null}
         {active === 'general' && can(me.data, 'reply') ? <CannedResponsesCard /> : null}
+        {active === 'general' && can(me.data, 'admin') ? <TagsCard /> : null}
 
         {active === 'channels' ? (
           <ChannelsCard
@@ -1220,7 +1222,7 @@ function ToolsCard() {
   const list = tools.data?.tools ?? []
 
   return (
-    <Card className="space-y-3" data-testid="tools-card">
+    <Card className="space-y-3" testId="tools-card">
       <div className="flex items-baseline gap-3">
         <h2 className="text-sm font-semibold">{t('settings.tools')}</h2>
         <SaveStatus state={save.state} />
@@ -1745,7 +1747,7 @@ function IdentityCard({
   const [ttl, setTtl] = useState(settings.identity.verificationLink.ttlMinutes)
 
   return (
-    <Card className="space-y-3" data-testid="identity-card">
+    <Card className="space-y-3" testId="identity-card">
       <h2 className="text-sm font-semibold">{t('settings.identity')}</h2>
       <p className="text-[11px] text-[var(--text-muted)]">{t('settings.identityHint')}</p>
 
