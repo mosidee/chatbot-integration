@@ -200,10 +200,10 @@ export async function processAiTurn(
   // The subject comes from a proof recorded on the channel identity, never from anything
   // the model or the customer said; see packages/infra/src/identity.ts.
   const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
-  // Only tags on two conversations or more: see `ToolContext.knownTags`.
-  const knownTags = (await listWorkspaceTags(db, job.workspaceId, { minUses: 2, limit: 30 })).map(
-    (row) => row.tag,
-  )
+  // Only tags two customers or more carry: see `ToolContext.knownTags`.
+  const knownTags = (
+    await listWorkspaceTags(db, job.workspaceId, { minCustomers: 2, limit: 30 })
+  ).map((row) => row.tag)
   const bound = boundIdentityFor(context, settings)
   // Stable across a retry of this job, so a write that is sent twice carries one key.
   const writeKey = turnKey ?? `turn-${job.conversationId}-${Date.now()}`

@@ -84,8 +84,8 @@ export type ToolContext = {
   identityVerificationAvailable?: boolean
   /**
    * Tags already in use across this workspace, so the model reuses `billing` rather than
-   * inventing `billing-question`. Only tags on at least two conversations: one used once may
-   * name that customer, and this list is shown in every other customer's conversation.
+   * inventing `billing-question`. Only tags at least two customers carry: one only a single
+   * customer has may name them, and this list is shown in every other customer's conversation.
    */
   knownTags?: string[]
   /**

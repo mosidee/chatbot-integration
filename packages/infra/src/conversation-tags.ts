@@ -101,21 +101,23 @@ export async function removeConversationTag(
 /**
  * Every tag in the workspace with how many conversations carry it, most used first.
  *
- * `minUses` is what the AI is offered with: a tag on one conversation only may name that
- * customer (a name, an order reference), and offering it in somebody else's conversation is
- * the cross-customer leak recall is scoped twice to prevent.
+ * `minCustomers` is what the AI is offered with: a tag only one customer's conversations
+ * carry may name that customer (a name, an order reference), and offering it in somebody
+ * else's conversation is the cross-customer leak recall is scoped twice to prevent. Counted
+ * by customer, not conversation: one person writing on LINE and on the widget is two
+ * conversations and still one customer.
  */
 export async function listWorkspaceTags(
   db: Database,
   workspaceId: string,
-  options: { minUses?: number; limit?: number } = {},
+  options: { minCustomers?: number; limit?: number } = {},
 ): Promise<TagCount[]> {
   const rows = await db.execute<{ tag: string; count: number }>(sql`
     SELECT t AS tag, count(*)::int AS count
     FROM ${schema.conversations}, unnest(${schema.conversations.tags}) AS t
     WHERE ${schema.conversations.workspaceId} = ${workspaceId}
     GROUP BY t
-    HAVING count(*) >= ${options.minUses ?? 1}
+    HAVING count(DISTINCT ${schema.conversations.customerId}) >= ${options.minCustomers ?? 1}
     ORDER BY count(*) DESC, t
     LIMIT ${options.limit ?? 500}
   `)

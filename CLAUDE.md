@@ -341,7 +341,7 @@ without spending money.
   both or neither. Write them through `packages/infra/src/conversation-tags.ts`, never a
   read-modify-write: the AI and a person add at the same moment. The filter is `?tag=a,b`
   (all required); Elysia hands a comma-separated query value over as an array, so the route
-  accepts both shapes. The AI is offered only tags on two conversations or more.
+  accepts both shapes. The AI is offered only tags two customers or more carry (distinct `customer_id`, not conversations: one person on LINE and the widget is one customer).
 - **Every stored vector has an `embedding_space`** (`model|dims` or `model|native`), and
   dense search and recall compare only within the query's space. A new embedding writer
   stores `embedded.space` from `embedTexts`.
