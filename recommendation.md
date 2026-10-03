@@ -48,7 +48,7 @@ rather than rounded away.
 | 19. Embedding-space identity | Fixed | `embedding_space` stored and matched on dense search and recall. |
 | 20. Index replacement | Fixed | File reindex and recall embed first and swap in one transaction; transient failures retried. An entry index re-checks the entry under a lock and stores nothing if it changed while embedding; file swaps lock the source row, so concurrent reindexes cannot index a document twice (`packages/infra/test/retrieval.integration.test.ts`). |
 | 21. Persistent-thread memory | Fixed | Newest notes; incremental summaries from a cursor; new facts win; recall excludes only the visible window. |
-| 22. Pagination and bounded reads | Fixed | Total order and offset paging with load-more; lateral previews; history by cursor without a cap. Offset paging can repeat or skip a row that moves while paging a live queue. |
+| 22. Pagination and bounded reads | Fixed | Total order and keyset paging (`nextCursor` holds the last row's sort values, timestamps as Postgres printed them) with load-more; a row that does not move is seen exactly once while the queue changes, and one that jumps above the cursor appears on the first page (`apps/api/test/inbox-order.integration.test.ts`); lateral previews; history by cursor without a cap. |
 | 23. Reporting semantics | Fixed; accounting scope stated | Answered and response times count delivered replies; workspace timezone. Cost excludes failed primary attempts and embedding/rerank usage, and the dashboard says so. |
 | 24. Deployment images and failure states | Fixed | Worker manifest; CI builds both images and requires them healthy; MinIO pinned by digest, then removed with media moved to Cloudflare R2 (ADR 0008); console failure states (see the UX audit). Nightly backups with same-snapshot row counts (`scripts/backup.sh`, offsite copy) and a restore check (`scripts/restore-check.sh`) that passed against production's dump on 2026-10-03. |
 
@@ -345,7 +345,7 @@ Conversation resolution/reopening reuses the same conversation, but summarizatio
 
 ### 22. Implement bounded inbox queries and complete pagination
 
-**Status (2026-09-24):** Fixed (offset paging over a total order).
+**Status (2026-10-03):** Fixed (keyset paging over a total order).
 
 **Evidence:** [conversations.ts](apps/api/src/routes/conversations.ts), [Inbox.tsx](apps/web/src/routes/Inbox.tsx), [message paging tests](e2e/message-paging.spec.ts).
 

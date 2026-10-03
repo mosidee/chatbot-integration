@@ -445,8 +445,8 @@ export type ConversationFilters = {
   /** A name, identifier or phrase; two characters at least. */
   q?: string
   limit?: number
-  /** Where a page starts, from the previous page's `nextOffset`. */
-  offset?: number
+  /** Where a page starts, from the previous page's `nextCursor`. */
+  cursor?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +486,8 @@ export type KnowledgeEntry = {
   enabled: boolean
   /** The entry's revision: sent back with an edit, which is refused if it has moved on. */
   updatedAt: string
+  /** The revision retrieval holds. Behind `updatedAt` while an index job is on its way. */
+  indexedRevision: string | null
 }
 
 export type SearchHit = {
@@ -545,7 +547,7 @@ export const api = {
         } else if (value !== undefined && value !== '') params.set(key, String(value))
       }
       const qs = params.toString()
-      return get<{ conversations: ConversationListItem[]; nextOffset: number | null }>(
+      return get<{ conversations: ConversationListItem[]; nextCursor: string | null }>(
         `/v1/conversations${qs ? `?${qs}` : ''}`,
       )
     },

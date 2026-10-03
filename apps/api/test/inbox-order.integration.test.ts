@@ -660,23 +660,77 @@ describe('paging the queue', () => {
       .where(eq(schema.conversations.workspaceId, fixture.workspaceId))
 
     const seen: string[] = []
-    let offset: number | null = 0
+    let cursor: string | null = ''
     let pages = 0
-    while (offset !== null && pages < 20) {
+    while (cursor !== null && pages < 20) {
       const response = await fixture.as(
         fixture.admin,
-        `/api/v1/conversations?limit=50&offset=${offset}`,
+        `/api/v1/conversations?limit=50${cursor ? `&cursor=${cursor}` : ''}`,
       )
       const body = (await response.json()) as {
         conversations: { id: string; lastMessage: unknown }[]
-        nextOffset: number | null
+        nextCursor: string | null
       }
       seen.push(...body.conversations.map((row) => row.id))
-      offset = body.nextOffset
+      cursor = body.nextCursor
       pages += 1
     }
     expect(new Set(seen).size).toBe(seen.length)
     expect(seen.length).toBe(total)
+  })
+
+  /**
+   * Offsets counted positions, so a conversation that rose past the page boundary between
+   * two requests pushed another below it: one row was shown twice and another never. A
+   * cursor holds the last row's values, so a row that does not move is seen exactly once
+   * whatever the rest of the queue does, and one that jumps above it is the first page's.
+   */
+  test('a conversation moving while the queue is paged hides nothing else', async () => {
+    const tag = `moving${Math.random().toString(36).slice(2, 8)}`
+    const ids: string[] = []
+    for (let index = 0; index < 30; index += 1) {
+      const seeded = await seed({
+        name: `${tag}-${index}`,
+        owner: null,
+        customerSpokeAt: minutesAgo(200 - index),
+      })
+      ids.push(seeded.conversationId)
+    }
+    const page = async (cursor: string | null) => {
+      const response = await fixture.as(
+        fixture.admin,
+        `/api/v1/conversations?limit=10&q=${tag}${cursor ? `&cursor=${cursor}` : ''}`,
+      )
+      expect(response.status).toBe(200)
+      return (await response.json()) as {
+        conversations: { id: string }[]
+        nextCursor: string | null
+      }
+    }
+
+    const first = await page(null)
+    // Between pages, the newest waiter on page three has been waiting longest of all.
+    const mover = ids[29] ?? ''
+    await ctx.db
+      .update(schema.conversations)
+      .set({ lastCustomerMessageAt: minutesAgo(10_000), lastMessageAt: minutesAgo(10_000) })
+      .where(eq(schema.conversations.id, mover))
+    const second = await page(first.nextCursor)
+    const third = await page(second.nextCursor)
+
+    const seen = [...first.conversations, ...second.conversations, ...third.conversations].map(
+      (row) => row.id,
+    )
+    expect(new Set(seen).size).toBe(seen.length)
+    // Everything that did not move is seen once.
+    for (const id of ids.filter((id) => id !== mover)) expect(seen).toContain(id)
+    // The one that moved is at the top when the first page is fetched again.
+    expect((await page(null)).conversations[0]?.id).toBe(mover)
+  })
+
+  test('a cursor that is not ours is refused', async () => {
+    const response = await fixture.as(fixture.admin, '/api/v1/conversations?cursor=bm9wZQ')
+    expect(response.status).toBe(400)
   })
 })
 

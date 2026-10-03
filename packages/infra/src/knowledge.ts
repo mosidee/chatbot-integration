@@ -1,7 +1,7 @@
 import { type BlobStore, chunkQa, chunkText, embedTexts, type SlotConfig } from '@ci/core'
 import { type Database, EMBEDDING_DIMENSIONS, type Executor, newId, schema } from '@ci/db'
 import type { Language } from '@ci/shared'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { drainBlobDeletions, queueBlobDeletions } from './blob-deletions'
 
 /**
@@ -49,14 +49,37 @@ export async function indexEntry(
         ),
       )
 
+  /**
+   * Mark the entry's current revision as what retrieval holds, but only if it is still the
+   * text this run read: an edit since then queued its own job, and until that one lands the
+   * entry is honestly still indexing. The column is copied in SQL, never through a Date,
+   * which would lose the microseconds `updated_at` may carry.
+   */
+  const markIndexed = (executor: Executor) =>
+    executor
+      .update(schema.knowledgeEntries)
+      .set({ indexedRevision: sql`${schema.knowledgeEntries.updatedAt}` })
+      .where(
+        and(
+          eq(schema.knowledgeEntries.id, entryId),
+          eq(schema.knowledgeEntries.workspaceId, workspaceId),
+          eq(schema.knowledgeEntries.enabled, entry.enabled),
+          eq(schema.knowledgeEntries.body, entry.body),
+          sql`${schema.knowledgeEntries.question} is not distinct from ${entry.question}`,
+          eq(schema.knowledgeEntries.language, entry.language),
+        ),
+      )
+
   if (!entry.enabled) {
     await clearChunks()
+    await markIndexed(db)
     return { chunks: 0, model: null, skipped: true }
   }
 
   const pieces = chunkQa(entry.question, entry.body)
   if (pieces.length === 0) {
     await clearChunks()
+    await markIndexed(db)
     return { chunks: 0, model: null, skipped: true }
   }
 
@@ -122,6 +145,7 @@ export async function indexEntry(
         embeddingSpace: space,
       })),
     )
+    await markIndexed(tx)
     return true
   })
 
@@ -190,6 +214,8 @@ export async function replaceFileSource(
         ),
       )
     const entryId = newId()
+    // Its chunks go in with it, in this transaction: indexed from the moment it exists.
+    const now = new Date()
     await tx.insert(schema.knowledgeEntries).values({
       id: entryId,
       workspaceId: input.workspaceId,
@@ -198,6 +224,8 @@ export async function replaceFileSource(
       language: input.language,
       question: null,
       body: input.body,
+      updatedAt: now,
+      indexedRevision: now,
     })
     if (pieces.length > 0) {
       await tx.insert(schema.knowledgeChunks).values(
