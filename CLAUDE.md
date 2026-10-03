@@ -128,6 +128,8 @@ bun run conversations:merge    # merge duplicate threads; dry unless
                                # CONFIRM_MERGE_CONVERSATIONS=yes
 bun run push:keys         # a VAPID pair as .env lines (ADR 0010); append, don't print
 ./scripts/smoke.sh        # end-to-end: sign in, set up a mock provider, assert an answer
+./scripts/backup.sh       # nightly dump + same-snapshot row counts (DEPLOY.md, Backups)
+./scripts/restore-check.sh  # restore the newest dump into a throwaway Postgres and verify
 cd workers/line-media && bunx wrangler deploy   # the LINE media Worker (ADR 0009)
 ```
 
