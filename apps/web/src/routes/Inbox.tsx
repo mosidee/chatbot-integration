@@ -51,7 +51,7 @@ import {
   type UploadResult,
 } from '../lib/api'
 import { can } from '../lib/capabilities'
-import { useRealtime } from '../lib/ws'
+import { useRealtime, useViewing } from '../lib/ws'
 
 /**
  * The inbox: conversation list, thread, and the AI sidebar.
@@ -467,6 +467,8 @@ function ConversationPane({
   onBack: () => void
   onFilterTag: (tag: string) => void
 }) {
+  // Somebody reading this thread is not also buzzed when its customer writes (ADR 0010).
+  useViewing(conversationId)
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const saved = drafts.get(conversationId)

@@ -28,7 +28,12 @@ type Listener = (event: WsEvent) => void
 type Realtime = {
   status: RealtimeStatus
   subscribe: (listener: Listener) => () => void
+  /** Which conversation is on screen, or null; see `useViewing`. */
+  setViewing: (conversationId: string | null) => void
 }
+
+/** How often the console says again what it is showing; the server forgets after 75 s. */
+const VIEWING_RENEW_MS = 30_000
 
 const RealtimeContext = createContext<Realtime | null>(null)
 
@@ -36,6 +41,31 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const listeners = useRef(new Set<Listener>())
   const [status, setStatus] = useState<RealtimeStatus>('connecting')
+  const socketRef = useRef<WebSocket | null>(null)
+  const viewing = useRef<string | null>(null)
+
+  /**
+   * Tell the server what is on screen: the open conversation while the page is visible,
+   * nothing while it is hidden. A conversation in a background tab is not being read.
+   */
+  const reportViewing = useRef(() => {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    const shown = document.visibilityState === 'visible' ? viewing.current : null
+    socket.send(JSON.stringify({ type: 'viewing', conversationId: shown }))
+  })
+
+  useEffect(() => {
+    const report = () => reportViewing.current()
+    const renew = setInterval(() => {
+      if (viewing.current && document.visibilityState === 'visible') report()
+    }, VIEWING_RENEW_MS)
+    document.addEventListener('visibilitychange', report)
+    return () => {
+      clearInterval(renew)
+      document.removeEventListener('visibilitychange', report)
+    }
+  }, [])
 
   useEffect(() => {
     let socket: WebSocket | null = null
@@ -48,6 +78,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (closed) return
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
       socket = new WebSocket(`${protocol}//${location.host}/ws`)
+      socketRef.current = socket
 
       socket.onopen = () => {
         attempt = 0
@@ -66,6 +97,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         try {
           const parsed = JSON.parse(String(raw.data)) as WsEvent | { type: string }
           if (!('type' in parsed)) return
+          // The server has placed this socket; only now does it accept what we show.
+          if (parsed.type === 'ready') reportViewing.current()
           // The workspace was suspended or restored: the shell decides what to show.
           if (parsed.type === 'workspace.status') {
             void queryClient.invalidateQueries({ queryKey: ['me'] })
@@ -109,6 +142,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         listeners.current.delete(listener)
       }
     },
+    setViewing: (conversationId) => {
+      viewing.current = conversationId
+      reportViewing.current()
+    },
   }
   return createElement(RealtimeContext.Provider, { value }, children)
 }
@@ -119,6 +156,18 @@ export function useRealtime(onEvent: (event: WsEvent) => void): void {
   const handler = useRef(onEvent)
   handler.current = onEvent
   useEffect(() => realtime?.subscribe((event) => handler.current(event)), [realtime])
+}
+
+/**
+ * Say that this conversation is on screen for as long as the component is mounted, so a
+ * customer's message to it does not also buzz this person's devices.
+ */
+export function useViewing(conversationId: string | null): void {
+  const realtime = useContext(RealtimeContext)
+  useEffect(() => {
+    realtime?.setViewing(conversationId)
+    return () => realtime?.setViewing(null)
+  }, [realtime, conversationId])
 }
 
 /** Whether the live feed is up, for the header. */

@@ -3,7 +3,15 @@ import { createECDH } from 'node:crypto'
 import { loadEnv } from '@ci/config'
 import { silentLogger } from '@ci/core'
 import { newId, schema } from '@ci/db'
-import { createEffectPorts, type PushJob, sendPush, vapidKeys, vapidSubject } from '@ci/infra'
+import {
+  createEffectPorts,
+  markViewing,
+  type PushJob,
+  sendPush,
+  vapidKeys,
+  vapidSubject,
+  viewersOf,
+} from '@ci/infra'
 import { and, eq, like } from 'drizzle-orm'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
@@ -149,7 +157,25 @@ function recorder(status = 201) {
 function deps(fake: typeof fetch) {
   const keys = vapidKeys(env)
   if (!keys) throw new Error('test env has no VAPID keys')
-  return { db: ctx.db, vapid: keys, subject: vapidSubject(env), logger: silentLogger, fetch: fake }
+  return {
+    db: ctx.db,
+    vapid: keys,
+    subject: vapidSubject(env),
+    logger: silentLogger,
+    fetch: fake,
+    viewers: (input: { workspaceId: string; conversationId: string; userIds: readonly string[] }) =>
+      viewersOf(ctx.runtime.redis, input),
+  }
+}
+
+/** What a console reports over its socket. */
+async function viewing(userId: string, conversationId: string | null, socketId = 'tab-1') {
+  await markViewing(ctx.runtime.redis, {
+    workspaceId: fixture.workspaceId,
+    userId,
+    socketId,
+    conversationId,
+  })
 }
 
 describe('subscribing', () => {
@@ -336,6 +362,98 @@ describe('sending', () => {
     }) as unknown as typeof fetch
     const outcome = await sendPush(deps(mixed), job)
     expect(outcome).toMatchObject({ sent: 1, failed: 1 })
+  })
+})
+
+describe('the person already reading it', () => {
+  test('is left out of a customer message, and everybody else is still told', async () => {
+    await clearDevices()
+    const { subscription: agentDevice } = await subscribe(fixture.agent)
+    const { subscription: adminDevice } = await subscribe(fixture.admin)
+    const { conversationId, messageId } = await conversation({ mode: 'waiting_human' })
+    await viewing(fixture.agent.userId, conversationId)
+
+    const { posts, fake } = recorder()
+    const outcome = await sendPush(deps(fake), {
+      workspaceId: fixture.workspaceId,
+      conversationId,
+      reason: 'customer_message',
+      triggerMessageId: messageId,
+    })
+    expect(outcome.sent).toBe(1)
+    expect(posts.map((post) => post.url)).toEqual([adminDevice.endpoint])
+    expect(posts.map((post) => post.url)).not.toContain(agentDevice.endpoint)
+    await viewing(fixture.agent.userId, null)
+  })
+
+  test('holding it and reading it: nothing is sent at all', async () => {
+    await clearDevices()
+    await subscribe(fixture.agent)
+    const { conversationId, messageId } = await conversation({
+      mode: 'human',
+      assigneeUserId: fixture.agent.userId,
+    })
+    // Another tab shows something else; the one showing this conversation is enough.
+    await viewing(fixture.agent.userId, null, 'tab-2')
+    await viewing(fixture.agent.userId, conversationId, 'tab-1')
+
+    const { posts, fake } = recorder()
+    const outcome = await sendPush(deps(fake), {
+      workspaceId: fixture.workspaceId,
+      conversationId,
+      reason: 'customer_message',
+      triggerMessageId: messageId,
+    })
+    expect(outcome.skipped).toBe('already open on screen')
+    expect(posts).toHaveLength(0)
+    await viewing(fixture.agent.userId, null)
+  })
+
+  test('a handoff is never held back, even from somebody reading it', async () => {
+    await clearDevices()
+    await subscribe(fixture.agent)
+    const { conversationId, messageId } = await conversation({ mode: 'waiting_human' })
+    await viewing(fixture.agent.userId, conversationId)
+    const { posts, fake } = recorder()
+    await sendPush(deps(fake), {
+      workspaceId: fixture.workspaceId,
+      conversationId,
+      reason: 'handoff',
+      triggerMessageId: messageId,
+    })
+    expect(posts).toHaveLength(1)
+    await viewing(fixture.agent.userId, null)
+  })
+
+  test('another conversation on screen, or a report gone stale, holds nothing back', async () => {
+    await clearDevices()
+    await subscribe(fixture.agent)
+    const { conversationId, messageId } = await conversation({
+      mode: 'human',
+      assigneeUserId: fixture.agent.userId,
+    })
+    const elsewhere = await conversation({ mode: 'ai' })
+    await viewing(fixture.agent.userId, elsewhere.conversationId)
+    const job: PushJob = {
+      workspaceId: fixture.workspaceId,
+      conversationId,
+      reason: 'customer_message',
+      triggerMessageId: messageId,
+    }
+    const first = recorder()
+    await sendPush(deps(first.fake), job)
+    expect(first.posts).toHaveLength(1)
+
+    // A tab that stopped renewing (closed laptop lid) counts for nothing once it lapses.
+    await ctx.runtime.redis.hset(
+      `viewing:${fixture.workspaceId}:${fixture.agent.userId}`,
+      'tab-1',
+      `${conversationId}|${Date.now() - 1}`,
+    )
+    const second = recorder()
+    await sendPush(deps(second.fake), job)
+    expect(second.posts).toHaveLength(1)
+    await viewing(fixture.agent.userId, null)
   })
 })
 

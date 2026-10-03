@@ -68,8 +68,12 @@ Standard Web Push, with our own VAPID key pair. No third-party notification serv
 ## Consequences
 
 - Every push must show a notification. Safari withdraws a subscription that receives silent
-  pushes, so there is no "already looking" suppression; the per-conversation tag keeps the
-  noise down instead.
+  pushes, so suppression can only mean not sending. Since 2026-10-03 a customer's message is
+  not sent to somebody who has that conversation on screen: the console reports it over its
+  socket, the API keeps it in Redis for 75 s per person and socket, and the worker leaves
+  that person out while everyone else is still told. It is per person, not per device —
+  reading on the laptop quiets the phone too — and handoffs and reminders are never held
+  back. The per-conversation tag still collapses the rest.
 - Customer text appears on lock screens. That is the point of the feature and also the
   reason a password reset deletes the account's subscriptions.
 - A browser under automation cannot subscribe, so the browser tests stub `PushManager`, and
