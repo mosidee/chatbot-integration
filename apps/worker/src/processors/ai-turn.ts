@@ -17,6 +17,7 @@ import {
   addConversationTags,
   boundIdentityFor,
   createEffectPorts,
+  createMcpCaller,
   createTurnRetrieval,
   createWorkspaceToolSources,
   customerLanguageEvidence,
@@ -24,6 +25,7 @@ import {
   isWorkspaceKey,
   listWorkspaceTags,
   loadAiConfig,
+  loadMcpServers,
   loadToolDefinitions,
   loadTurnContext,
   loadWorkspaceSettings,
@@ -200,6 +202,12 @@ export async function processAiTurn(
   // The subject comes from a proof recorded on the channel identity, never from anything
   // the model or the customer said; see packages/infra/src/identity.ts.
   const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
+  // The workspace's MCP servers: their approved tools, and a caller over restricted egress.
+  const mcpServers = await loadMcpServers(db, job.workspaceId, env.APP_SECRET_KEY)
+  const mcp = {
+    tools: mcpServers.flatMap((server) => server.tools),
+    caller: createMcpCaller(mcpServers, runtime.toolFetch),
+  }
   // Only tags two customers or more carry: see `ToolContext.knownTags`.
   const knownTags = (
     await listWorkspaceTags(db, job.workspaceId, { minCustomers: 2, limit: 30 })
@@ -276,7 +284,7 @@ export async function processAiTurn(
     turnKey: writeKey,
     logger,
     redaction: settings.redaction,
-    toolSources: createWorkspaceToolSources(toolDefinitions, runtime),
+    toolSources: createWorkspaceToolSources(toolDefinitions, runtime, mcp),
     knownTags,
     // Offered only where it can actually be honoured. `draft` is excluded because that
     // path ends at a suggestion for a person to approve and never reaches the code below
@@ -392,7 +400,13 @@ export async function processAiTurn(
       return
     }
 
-    const outcome = await runPendingWrites(toolDefinitions, result.pendingWrites, bound, runtime)
+    const outcome = await runPendingWrites(
+      toolDefinitions,
+      result.pendingWrites,
+      bound,
+      runtime,
+      mcp.caller,
+    )
     if (outcome.failed) {
       logger.warn('a tenant tool write failed; the reply was held back', {
         conversationId: job.conversationId,

@@ -182,6 +182,15 @@ const server = Bun.serve({
       return toolCallResponse(tenantTool, {})
     }
 
+    // An order lookup on a connected MCP server (ADR 0011): `<server>_lookup_order`.
+    const orderId = /\border (SO-[A-Za-z0-9-]+)/i.exec(question)?.[1]
+    const lookup = (body.tools ?? [])
+      .map((t) => t.function?.name)
+      .find((name) => name?.endsWith('_lookup_order'))
+    if (orderId && lookup && !alreadyCalled) {
+      return toolCallResponse(lookup, { order_id: orderId })
+    }
+
     /**
      * Asking for a person, which is what a browser test needs to reach the handoff path.
      *
@@ -208,6 +217,23 @@ const server = Bun.serve({
     // a test assert that the tool's answer actually reached the customer.
     const toolAnswer = [...(body.messages ?? [])].reverse().find((m) => m.role === 'tool')
     if (toolAnswer && typeof toolAnswer.content === 'string') {
+      const found = /"result"\s*:\s*"([^"]+)"/.exec(toolAnswer.content)?.[1]
+      if (found) {
+        return Response.json({
+          id: 'chatcmpl-mock-mcp-answer',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'mock-model',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: `ผลการตรวจสอบ: ${found}` },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 140, completion_tokens: 20, total_tokens: 160 },
+        })
+      }
       const plan = /"plan"\s*:\s*"([^"]+)"/.exec(toolAnswer.content)?.[1]
       if (plan) {
         return Response.json({

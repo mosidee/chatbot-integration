@@ -53,8 +53,8 @@ plain text, because every channel renders markdown as punctuation. A conversatio
 customer walked away from closes itself after a day, which is also what makes the AI
 remember it next time.
 
-Still to come: an MCP client, so a tenant can connect their own server and bring a whole
-tool set without us shipping anything. Billing, self-service sign-up and emailed invitations
+A tenant can also connect their own MCP server and bring its tools, approving each one and
+saying whether it reads or writes (ADR 0011). Billing, self-service sign-up and emailed invitations
 are deliberately absent.
 
 ## Requirements

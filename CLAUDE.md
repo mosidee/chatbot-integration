@@ -380,6 +380,10 @@ without spending money.
   provider or retrieval call that uses the global `fetch` is an SSRF hole. URLs the
   *operator* sets in the environment (`LINE_MEDIA_PROXY_URL`) and fixed platform hosts are
   not tenant-typed and use a plain `fetch` on purpose.
+- **An MCP server's URL is tenant-typed too.** Fetching its tools, the test button and every
+  call in a turn go through `runtime.toolFetch`. Import the SDK by deep path
+  (`@modelcontextprotocol/sdk/client/index.js`), never the package root, which loads its
+  server half and express.
 - **A push subscription's endpoint is member-typed too,** and the worker posts to it. It must
   pass `isPushServiceEndpoint` (FCM, Apple, Mozilla and Windows push hosts, https, default
   port) both when it is saved and before every send, and the send refuses redirects.
@@ -727,7 +731,11 @@ A tool a *tenant* defines is not code: it is a `tools` row an admin writes in se
 offered through `createHttpToolSource`.
 
 **A tool source:** implement `ToolSource` from `packages/core/src/ai/tool-source.ts` and add
-it to the list the worker passes to `runAgentTurn`. The agent takes sources rather than
+it to the list the worker passes to `runAgentTurn` (`createWorkspaceToolSources`). MCP
+servers are one (ADR 0011): their own `mcp_servers` table, an admin's allowlist with a
+read/write choice per tool, the stored snapshot as the only thing the model is shown, and
+`runPendingWrites` dispatching on `PendingWrite.source`. A tool name an MCP server exposes
+(`<server>_<tool>`) and an HTTP tool's name are checked against each other both ways. The agent takes sources rather than
 tools precisely so this needs no change to the turn. The internal source is merged first and
 wins any name clash.
 

@@ -15,6 +15,7 @@
     "@ci/core": "workspace:*",
     "@ci/db": "workspace:*",
     "@ci/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "bullmq": "6.3.8",
     "drizzle-orm": "0.45.2",
     "exceljs": "4.4.0",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@types/papaparse": "5.5.2",
-    "@types/web-push": "3.6.4"
+    "@types/web-push": "3.6.4",
+    "zod": "4.6.5"
   }
 }

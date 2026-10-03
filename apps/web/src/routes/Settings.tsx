@@ -11,6 +11,7 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { McpCard } from '../components/McpCard'
 import {
   ModelField,
   refreshProviderModels,
@@ -368,6 +369,7 @@ export function Settings() {
         {active === 'integrations' && isAdmin ? (
           <>
             <ToolsCard />
+            <McpCard />
             <IdentityCard
               settings={settings}
               onSave={(patch) => saveWorkspace.mutate(patch as never)}
