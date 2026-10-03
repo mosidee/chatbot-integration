@@ -757,7 +757,7 @@ export const api = {
     create: (body: {
       name: string
       url: string
-      auth: 'none' | 'header'
+      auth: 'none' | 'header' | 'oauth'
       headerName?: string
       credential?: string
     }) => post<{ id: string }>('/v1/settings/mcp', body),
@@ -772,6 +772,12 @@ export const api = {
       },
     ) => patch<{ ok: true }>(`/v1/settings/mcp/${id}`, body),
     remove: (id: string) => del<{ ok: true }>(`/v1/settings/mcp/${id}`),
+    /** Where to send the admin to sign in, or `connected` when the stored sign-in works. */
+    startSignIn: (id: string) =>
+      post<{ authorizationUrl: string } | { connected: true }>(
+        `/v1/settings/mcp/${id}/oauth/start`,
+      ),
+    disconnect: (id: string) => post<{ ok: true }>(`/v1/settings/mcp/${id}/oauth/disconnect`),
     fetchTools: (id: string) =>
       post<{ ok: true; tools: number } | { ok: false; error: string }>(
         `/v1/settings/mcp/${id}/fetch-tools`,

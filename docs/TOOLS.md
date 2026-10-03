@@ -107,8 +107,12 @@ If you already run an MCP server (Streamable HTTP), connect it instead of defini
 by one: Settings → Integrations → MCP servers.
 
 1. **Connect it.** A short name (it prefixes every tool: `shop_lookup_order`), the server's
-   URL, and how it authenticates — a token in a header you name, or none. The token is stored
-   encrypted and never shown again.
+   URL, and how it authenticates — a token in a header you name, signing in (OAuth), or none.
+   A token is stored encrypted and never shown again. With signing in, press **Sign in**: you
+   go to the server's own page and come back connected. The AI then calls the server as the
+   account you signed in with, for every customer — use one made for the purpose. If the
+   sign-in later expires for good, the server says **Sign in again** and its tools are left
+   out until you do.
 2. **Fetch its tools.** The list is stored as it is now. A server that changes a tool later
    changes nothing here until you fetch again.
 3. **Tick what the AI may use, and say what each does.** A tool the server marks read-only is

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { MCP_LIMITS } from '@ci/shared'
+import { boundedFetch } from '../src/bounded-fetch'
 import { createRestrictedFetch } from '../src/egress'
 import { callMcpTool, fetchMcpTools } from '../src/mcp'
 import { startMcpServer, type TestMcpServer } from './helpers/mcp-server'
@@ -82,5 +83,31 @@ describe('the MCP client', () => {
       ),
     ).rejects.toThrow()
     expect(server.headers).toHaveLength(0)
+  })
+})
+
+describe('bounded fetch', () => {
+  const big = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request) =>
+      new URL(request.url).pathname === '/slow'
+        ? new Promise<Response>((resolve) => setTimeout(() => resolve(new Response('late')), 2000))
+        : new Response('x'.repeat(10_000)),
+  })
+  const base = `http://127.0.0.1:${big.port}`
+
+  test('a body past the ceiling fails rather than filling memory', async () => {
+    const limited = boundedFetch(globalThis.fetch, { maxBytes: 1000, timeoutMs: 5000 })
+    const response = await limited(`${base}/big`)
+    await expect(response.text()).rejects.toThrow('more than 1000 bytes')
+    const roomy = boundedFetch(globalThis.fetch, { maxBytes: 20_000, timeoutMs: 5000 })
+    expect((await (await roomy(`${base}/big`)).text()).length).toBe(10_000)
+  })
+
+  test('a server that does not answer in time is given up on', async () => {
+    const limited = boundedFetch(globalThis.fetch, { maxBytes: 1000, timeoutMs: 200 })
+    await expect(limited(`${base}/slow`)).rejects.toThrow()
+    big.stop(true)
   })
 })

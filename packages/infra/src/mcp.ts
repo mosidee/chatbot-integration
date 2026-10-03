@@ -1,4 +1,4 @@
-import type { FetchLike, McpCaller, McpCallResult, McpToolDefinition } from '@ci/core'
+import type { FetchLike, Logger, McpCaller, McpCallResult, McpToolDefinition } from '@ci/core'
 import { type Database, decryptSecret, schema } from '@ci/db'
 import {
   exposedMcpToolName,
@@ -10,6 +10,8 @@ import {
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { and, eq } from 'drizzle-orm'
+import { boundedFetch } from './bounded-fetch'
+import { oauthHeaders } from './mcp-oauth'
 
 /**
  * Talking to a workspace's MCP servers (ADR 0011).
@@ -28,6 +30,8 @@ export type McpServerRuntime = {
   timeoutMs: number
   /** Sent with every request. Decrypted at the moment of use, never logged. */
   headers: Record<string, string>
+  /** Signed in with OAuth: a 401 is worth one refresh and one retry. */
+  oauth: boolean
   tools: McpToolDefinition[]
 }
 
@@ -76,6 +80,8 @@ export async function loadMcpServers(
   db: Database,
   workspaceId: string,
   secretKey: string,
+  fetch: FetchLike,
+  logger?: Logger,
 ): Promise<McpServerRuntime[]> {
   const rows = await db
     .select()
@@ -86,26 +92,54 @@ export async function loadMcpServers(
     if (row.status !== 'ok') continue
     const tools = approvedTools(row)
     if (tools.length === 0) continue
+    let headers: Record<string, string>
+    if (row.auth === 'oauth') {
+      // Refreshed first if about to expire. A server whose sign-in cannot be used this turn
+      // is left out of it, rather than offered and failed, which would hand the turn off.
+      const signedIn = await oauthHeaders(db, {
+        workspaceId,
+        serverId: row.id,
+        secretKey,
+        fetch,
+      }).catch((error) => {
+        logger?.warn('mcp server left out of this turn', {
+          serverId: row.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return null
+      })
+      if (!signedIn) continue
+      headers = signedIn
+    } else {
+      headers = await serverHeaders(row, secretKey)
+    }
     servers.push({
       id: row.id,
       name: row.name,
       url: row.url,
       timeoutMs: row.timeoutMs,
-      headers: await serverHeaders(row, secretKey),
+      headers,
+      oauth: row.auth === 'oauth',
       tools,
     })
   }
   return servers
 }
 
+/** How much a server may send back: a tool answer, and a tool listing. */
+export const MCP_CALL_BYTES = 256 * 1024
+export const MCP_LIST_BYTES = 1024 * 1024
+
 /** Connect, run `work`, close: a connection never outlives its one use. */
 export async function withMcpClient<T>(
   server: { url: string; headers: Record<string, string>; timeoutMs: number },
   fetch: FetchLike,
   work: (client: Client) => Promise<T>,
+  maxBytes = MCP_CALL_BYTES,
 ): Promise<T> {
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
-    fetch,
+    // A little past the request timeout, so the SDK's own deadline reports first.
+    fetch: boundedFetch(fetch, { maxBytes, timeoutMs: server.timeoutMs + 2000 }),
     requestInit: { headers: server.headers },
   })
   const client = new Client(CLIENT_INFO)
@@ -156,13 +190,37 @@ export async function callMcpTool(
   })
 }
 
-/** A caller over loaded servers, for the turn and for the writes after it. */
-export function createMcpCaller(servers: McpServerRuntime[], fetch: FetchLike): McpCaller {
+/** The server said the credential was not good (SDK `StreamableHTTPError`, code 401). */
+function isUnauthorised(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 401
+}
+
+/**
+ * A caller over loaded servers, for the turn and for the writes after it. An OAuth server
+ * that answers 401 gets one forced refresh (`reauthorize`) and one retry: the token can be
+ * revoked or expire early without the expiry we stored saying so.
+ */
+export function createMcpCaller(
+  servers: McpServerRuntime[],
+  fetch: FetchLike,
+  options: {
+    reauthorize?: (serverId: string, rejected: string) => Promise<Record<string, string> | null>
+  } = {},
+): McpCaller {
   return {
-    async call(serverId, tool, args, options) {
+    async call(serverId, tool, args, callOptions) {
       const server = servers.find((s) => s.id === serverId)
       if (!server) throw new Error('is no longer connected in this workspace')
-      return callMcpTool(server, fetch, tool, args, options)
+      try {
+        return await callMcpTool(server, fetch, tool, args, callOptions)
+      } catch (error) {
+        if (!server.oauth || !options.reauthorize || !isUnauthorised(error)) throw error
+        const rejected = (server.headers.Authorization ?? '').replace(/^Bearer /, '')
+        const headers = await options.reauthorize(server.id, rejected)
+        if (!headers) throw error
+        server.headers = headers
+        return callMcpTool(server, fetch, tool, args, callOptions)
+      }
     },
   }
 }
@@ -178,39 +236,44 @@ export async function fetchMcpTools(
   server: { url: string; headers: Record<string, string>; timeoutMs: number },
   fetch: FetchLike,
 ): Promise<McpToolSnapshot[]> {
-  return withMcpClient(server, fetch, async (client) => {
-    const tools: McpToolSnapshot[] = []
-    let cursor: string | undefined
-    for (let page = 0; page < MCP_LIMITS.pages && tools.length < MCP_LIMITS.tools; page += 1) {
-      const listed = await client.listTools(cursor ? { cursor } : undefined, {
-        timeout: server.timeoutMs,
-      })
-      for (const tool of listed.tools) {
-        if (tools.length >= MCP_LIMITS.tools) break
-        const inputSchema = (tool.inputSchema ?? { type: 'object' }) as Record<string, unknown>
-        const annotations = tool.annotations as
-          | { readOnlyHint?: boolean; destructiveHint?: boolean }
-          | undefined
-        const readOnly =
-          annotations?.readOnlyHint === true
-            ? true
-            : annotations?.readOnlyHint === false || annotations?.destructiveHint === true
-              ? false
-              : null
-        const tooLarge = JSON.stringify(inputSchema).length > MCP_LIMITS.schemaBytes
-        tools.push({
-          name: String(tool.name).slice(0, 128),
-          description: (tool.description ?? '').slice(0, MCP_LIMITS.descriptionChars),
-          inputSchema: tooLarge ? { type: 'object' } : inputSchema,
-          readOnly,
-          ...(tooLarge ? { tooLarge: true } : {}),
+  return withMcpClient(
+    server,
+    fetch,
+    async (client) => {
+      const tools: McpToolSnapshot[] = []
+      let cursor: string | undefined
+      for (let page = 0; page < MCP_LIMITS.pages && tools.length < MCP_LIMITS.tools; page += 1) {
+        const listed = await client.listTools(cursor ? { cursor } : undefined, {
+          timeout: server.timeoutMs,
         })
+        for (const tool of listed.tools) {
+          if (tools.length >= MCP_LIMITS.tools) break
+          const inputSchema = (tool.inputSchema ?? { type: 'object' }) as Record<string, unknown>
+          const annotations = tool.annotations as
+            | { readOnlyHint?: boolean; destructiveHint?: boolean }
+            | undefined
+          const readOnly =
+            annotations?.readOnlyHint === true
+              ? true
+              : annotations?.readOnlyHint === false || annotations?.destructiveHint === true
+                ? false
+                : null
+          const tooLarge = JSON.stringify(inputSchema).length > MCP_LIMITS.schemaBytes
+          tools.push({
+            name: String(tool.name).slice(0, 128),
+            description: (tool.description ?? '').slice(0, MCP_LIMITS.descriptionChars),
+            inputSchema: tooLarge ? { type: 'object' } : inputSchema,
+            readOnly,
+            ...(tooLarge ? { tooLarge: true } : {}),
+          })
+        }
+        cursor = listed.nextCursor
+        if (!cursor) break
       }
-      cursor = listed.nextCursor
-      if (!cursor) break
-    }
-    return tools
-  })
+      return tools
+    },
+    MCP_LIST_BYTES,
+  )
 }
 
 /**

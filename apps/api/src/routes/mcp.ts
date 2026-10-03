@@ -2,9 +2,16 @@ import { encryptSecret, newId, schema } from '@ci/db'
 import {
   approvedTools,
   callMcpTool,
+  disconnectMcpSignIn,
   fetchMcpTools,
+  finishMcpSignIn,
   mcpExposedNames,
+  oauthHeaders,
+  readOAuthState,
   serverHeaders,
+  signSignInState,
+  startMcpSignIn,
+  verifySignInState,
 } from '@ci/infra'
 import {
   exposedMcpToolName,
@@ -17,7 +24,7 @@ import { and, eq } from 'drizzle-orm'
 import Elysia from 'elysia'
 import { z } from 'zod'
 import { authPlugin } from '../auth-plugin'
-import type { ApiContext } from '../context'
+import { type ApiContext, loadMemberships } from '../context'
 
 /**
  * A workspace's MCP servers (ADR 0011).
@@ -29,14 +36,26 @@ import type { ApiContext } from '../context'
 export function mcpRoutes(ctx: ApiContext) {
   const { db, env, runtime } = ctx
 
-  const summarise = (row: typeof schema.mcpServers.$inferSelect): McpServerSummary => ({
+  /**
+   * `hasCredential` means "can make a call": a pasted token for a header server, tokens for
+   * an OAuth one. A started but unfinished sign-in leaves a registration and no tokens.
+   */
+  const summarise = async (
+    row: typeof schema.mcpServers.$inferSelect,
+  ): Promise<McpServerSummary> => ({
     id: row.id,
     name: row.name,
     url: row.url,
     enabled: row.enabled,
     auth: row.auth,
     headerName: row.headerName,
-    hasCredential: Boolean(row.credentialEncrypted),
+    hasCredential:
+      row.auth === 'oauth'
+        ? Boolean(
+            (await readOAuthState(row.credentialEncrypted, env.APP_SECRET_KEY)).tokens
+              ?.access_token,
+          )
+        : Boolean(row.credentialEncrypted),
     status: row.status,
     lastError: row.lastError,
     timeoutMs: row.timeoutMs,
@@ -52,6 +71,21 @@ export function mcpRoutes(ctx: ApiContext) {
       .where(and(eq(schema.mcpServers.id, id), eq(schema.mcpServers.workspaceId, workspaceId)))
       .limit(1)
     return row ?? null
+  }
+
+  /** What a request to this server carries: a pasted token, or the signed-in OAuth token. */
+  const headersFor = async (
+    row: typeof schema.mcpServers.$inferSelect,
+  ): Promise<Record<string, string>> => {
+    if (row.auth !== 'oauth') return serverHeaders(row, env.APP_SECRET_KEY)
+    const headers = await oauthHeaders(db, {
+      workspaceId: row.workspaceId,
+      serverId: row.id,
+      secretKey: env.APP_SECRET_KEY,
+      fetch: runtime.toolFetch,
+    })
+    if (!headers) throw new Error('sign in to this server first')
+    return headers
   }
 
   const urlSchema = z
@@ -72,7 +106,7 @@ export function mcpRoutes(ctx: ApiContext) {
             .from(schema.mcpServers)
             .where(eq(schema.mcpServers.workspaceId, workspaceId))
             .orderBy(schema.mcpServers.name)
-          return { servers: rows.map(summarise) }
+          return { servers: await Promise.all(rows.map(summarise)) }
         },
         { auth: 'admin' },
       )
@@ -116,7 +150,7 @@ export function mcpRoutes(ctx: ApiContext) {
           body: z.object({
             name: mcpServerNameSchema,
             url: urlSchema,
-            auth: z.enum(['none', 'header']),
+            auth: z.enum(['none', 'header', 'oauth']),
             headerName: z
               .string()
               .regex(/^[A-Za-z0-9-]{1,80}$/)
@@ -225,9 +259,86 @@ export function mcpRoutes(ctx: ApiContext) {
         },
       )
 
+      /**
+       * Start signing in to an OAuth server: discover, register, and hand back the URL to send
+       * the admin to. The `state` names this admin, workspace and server and expires in ten
+       * minutes; the callback checks all of it. The URL comes from the server's metadata, so it
+       * is refused unless it is https — the console navigates to it.
+       */
+      .post(
+        '/:id/oauth/start',
+        async ({ workspaceId, params, user, status }) => {
+          const row = await load(workspaceId, params.id)
+          if (!row) return status(404, { error: 'Server not found' })
+          if (row.auth !== 'oauth')
+            return status(400, { error: 'This server does not use sign-in' })
+          try {
+            const started = await startMcpSignIn(db, {
+              workspaceId,
+              serverId: row.id,
+              serverUrl: row.url,
+              encrypted: row.credentialEncrypted,
+              secretKey: env.APP_SECRET_KEY,
+              publicWebUrl: env.PUBLIC_WEB_URL,
+              stateParam: signSignInState(
+                { workspaceId, serverId: row.id, userId: user.id },
+                env.APP_SECRET_KEY,
+              ),
+              fetch: runtime.toolFetch,
+            })
+            if (started.status === 'connected') {
+              await db
+                .update(schema.mcpServers)
+                .set({ status: 'ok', lastError: null, updatedAt: new Date() })
+                .where(
+                  and(
+                    eq(schema.mcpServers.id, row.id),
+                    eq(schema.mcpServers.workspaceId, workspaceId),
+                  ),
+                )
+              return { connected: true as const }
+            }
+            const secure =
+              started.url.protocol === 'https:' ||
+              (env.TOOL_EGRESS_ALLOW_PRIVATE && started.url.protocol === 'http:')
+            if (!secure)
+              return status(400, { error: 'The server offered an unsafe sign-in address' })
+            return { authorizationUrl: started.url.toString() }
+          } catch (error) {
+            return status(502, {
+              error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+            })
+          }
+        },
+        { auth: 'admin', params: z.object({ id: z.string() }) },
+      )
+
+      .post(
+        '/:id/oauth/disconnect',
+        async ({ workspaceId, params, status }) => {
+          const row = await load(workspaceId, params.id)
+          if (!row) return status(404, { error: 'Server not found' })
+          await disconnectMcpSignIn(db, {
+            workspaceId,
+            serverId: row.id,
+            secretKey: env.APP_SECRET_KEY,
+            fetch: runtime.toolFetch,
+          })
+          return { ok: true }
+        },
+        { auth: 'admin', params: z.object({ id: z.string() }) },
+      )
+
       .delete(
         '/:id',
         async ({ workspaceId, params }) => {
+          // Signed in: revoke at the server first, best effort, so its tokens do not outlive us.
+          await disconnectMcpSignIn(db, {
+            workspaceId,
+            serverId: params.id,
+            secretKey: env.APP_SECRET_KEY,
+            fetch: runtime.toolFetch,
+          })
           await db
             .delete(schema.mcpServers)
             .where(
@@ -254,13 +365,20 @@ export function mcpRoutes(ctx: ApiContext) {
             const snapshot = await fetchMcpTools(
               {
                 url: row.url,
-                headers: await serverHeaders(row, env.APP_SECRET_KEY),
+                headers: await headersFor(row),
                 timeoutMs: row.timeoutMs,
               },
               runtime.toolFetch,
             )
+            // Kept only while it still holds: the tool is still listed, still small enough,
+            // and not now saying it changes things while it was approved as a read.
             const allowed = row.allowed.filter((entry) =>
-              snapshot.some((tool) => tool.name === entry.name && !tool.tooLarge),
+              snapshot.some(
+                (tool) =>
+                  tool.name === entry.name &&
+                  !tool.tooLarge &&
+                  !(entry.effect === 'read' && tool.readOnly === false),
+              ),
             )
             await db
               .update(schema.mcpServers)
@@ -326,7 +444,7 @@ export function mcpRoutes(ctx: ApiContext) {
             const result = await callMcpTool(
               {
                 url: row.url,
-                headers: await serverHeaders(row, env.APP_SECRET_KEY),
+                headers: await headersFor(row),
                 timeoutMs: row.timeoutMs,
               },
               runtime.toolFetch,
@@ -357,4 +475,84 @@ export function mcpRoutes(ctx: ApiContext) {
         },
       )
   )
+}
+
+/**
+ * Where an MCP server sends the admin back after they sign in. Public by necessity — it is
+ * a redirect from somebody else's site — so it proves everything itself: the `state` is
+ * ours, unexpired and names this person; their session is current; they are still an admin
+ * of that workspace and it is active. Then it swaps the code for tokens and sends them to a
+ * fixed page of the console, never one named by a parameter.
+ */
+export function mcpOAuthCallbackRoutes(ctx: ApiContext) {
+  const { db, env, runtime } = ctx
+  const back = (outcome: 'connected' | 'failed') =>
+    new Response(null, {
+      status: 302,
+      headers: {
+        location: new URL(
+          `/settings?tab=integrations&mcp=${outcome}`,
+          env.PUBLIC_WEB_URL,
+        ).toString(),
+      },
+    })
+
+  return new Elysia().get('/callback', async ({ request }) => {
+    // From the URL itself: Elysia turns a comma in a query value into an array, and an
+    // authorization code may contain one.
+    const params = new URL(request.url).searchParams
+    const code = params.get('code')
+    const state = params.get('state')
+    const claims = state ? verifySignInState(state, env.APP_SECRET_KEY) : null
+    if (!claims || !code || code.length > 4000) return back('failed')
+
+    const session = await ctx.auth.api.getSession({ headers: request.headers }).catch(() => null)
+    if (!session || session.user.id !== claims.userId) return back('failed')
+    const membership = (await loadMemberships(db, claims.userId)).find(
+      (m) => m.workspaceId === claims.workspaceId,
+    )
+    if (membership?.role !== 'admin' || membership.status !== 'active') {
+      return back('failed')
+    }
+
+    const [row] = await db
+      .select()
+      .from(schema.mcpServers)
+      .where(
+        and(
+          eq(schema.mcpServers.id, claims.serverId),
+          eq(schema.mcpServers.workspaceId, claims.workspaceId),
+        ),
+      )
+      .limit(1)
+    if (row?.auth !== 'oauth') return back('failed')
+
+    try {
+      await finishMcpSignIn(db, {
+        workspaceId: claims.workspaceId,
+        serverId: row.id,
+        serverUrl: row.url,
+        encrypted: row.credentialEncrypted,
+        secretKey: env.APP_SECRET_KEY,
+        publicWebUrl: env.PUBLIC_WEB_URL,
+        code,
+        fetch: runtime.toolFetch,
+      })
+      return back('connected')
+    } catch (error) {
+      await db
+        .update(schema.mcpServers)
+        .set({
+          lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.mcpServers.id, row.id),
+            eq(schema.mcpServers.workspaceId, claims.workspaceId),
+          ),
+        )
+      return back('failed')
+    }
+  })
 }

@@ -30,6 +30,7 @@ import {
   loadTurnContext,
   loadWorkspaceSettings,
   mergeCustomerFields,
+  oauthHeaders,
   recordTrace,
   resolveExternalRetrieval,
   runPendingWrites,
@@ -203,10 +204,26 @@ export async function processAiTurn(
   // the model or the customer said; see packages/infra/src/identity.ts.
   const toolDefinitions = await loadToolDefinitions(db, job.workspaceId, env.APP_SECRET_KEY)
   // The workspace's MCP servers: their approved tools, and a caller over restricted egress.
-  const mcpServers = await loadMcpServers(db, job.workspaceId, env.APP_SECRET_KEY)
+  const mcpServers = await loadMcpServers(
+    db,
+    job.workspaceId,
+    env.APP_SECRET_KEY,
+    runtime.toolFetch,
+    logger,
+  )
   const mcp = {
     tools: mcpServers.flatMap((server) => server.tools),
-    caller: createMcpCaller(mcpServers, runtime.toolFetch),
+    caller: createMcpCaller(mcpServers, runtime.toolFetch, {
+      reauthorize: (serverId, rejected) =>
+        oauthHeaders(db, {
+          workspaceId: job.workspaceId,
+          serverId,
+          secretKey: env.APP_SECRET_KEY,
+          fetch: runtime.toolFetch,
+          force: true,
+          rejectedToken: rejected,
+        }),
+    }),
   }
   // Only tags two customers or more carry: see `ToolContext.knownTags`.
   const knownTags = (
