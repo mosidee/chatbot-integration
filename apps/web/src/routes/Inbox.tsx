@@ -1,9 +1,10 @@
-import type {
-  ConversationMode,
-  FeedbackRating,
-  FeedbackReason,
-  FeedbackTargetType,
-  NormalizedMessage,
+import {
+  type ConversationMode,
+  type FeedbackRating,
+  type FeedbackReason,
+  type FeedbackTargetType,
+  type NormalizedMessage,
+  normaliseTags,
 } from '@ci/shared'
 import {
   keepPreviousData,
@@ -21,6 +22,7 @@ import { EraseCustomer } from '../components/EraseCustomer'
 import { FeedbackControls } from '../components/FeedbackControls'
 import { Lightbox } from '../components/Lightbox'
 import { MergeSuggestions } from '../components/MergeSuggestions'
+import { ConversationTags, TagChip, TagFilter } from '../components/Tags'
 import {
   Button,
   ChannelBadge,
@@ -133,10 +135,32 @@ export function Inbox() {
   const tab: InboxTab = INBOX_TABS.includes(requested as InboxTab)
     ? (requested as InboxTab)
     : 'open'
-  const setTab = (next: InboxTab) =>
-    void navigate({ to: '/', search: { tab: next, ...(selectedId ? { c: selectedId } : {}) } })
-  const setSelectedId = (id: string | null) =>
-    void navigate({ to: '/', search: { tab, ...(id ? { c: id } : {}) } })
+  /**
+   * The tag filter, in the address beside the tab (`?tag=a,b`), so a filtered queue can be
+   * linked to and survives a reload. A conversation must carry every one.
+   */
+  const tagParam = useRouterState({
+    select: (state) => (state.location.search as { tag?: string }).tag,
+  })
+  const tagFilter = tagParam ? normaliseTags(tagParam.split(',')) : []
+  const go = (next: { tab?: InboxTab; c?: string | null; tags?: string[] }) => {
+    const c = next.c === undefined ? selectedId : next.c
+    const tags = next.tags ?? tagFilter
+    void navigate({
+      to: '/',
+      search: {
+        tab: next.tab ?? tab,
+        ...(c ? { c } : {}),
+        ...(tags.length > 0 ? { tag: tags.join(',') } : {}),
+      },
+    })
+  }
+  const setTab = (next: InboxTab) => go({ tab: next })
+  const setSelectedId = (id: string | null) => go({ c: id })
+  const setTagFilter = (tags: string[]) => go({ tags })
+  const filterByTag = (tag: string) => {
+    if (!tagFilter.includes(tag)) setTagFilter([...tagFilter, tag])
+  }
 
   // Waiting is open conversations only. Resolving does not change the mode, so without
   // this a conversation closed while it waited sat in the Waiting tab for good.
@@ -180,13 +204,14 @@ export function Inbox() {
   const q = searchFor.length >= 2 ? searchFor : undefined
 
   const conversations = useInfiniteQuery({
-    queryKey: ['conversations', statusFilter, modeFilter, reviewFilter, q],
+    queryKey: ['conversations', statusFilter, modeFilter, reviewFilter, q, tagFilter.join(',')],
     queryFn: ({ pageParam }) =>
       api.conversations.list({
         status: statusFilter,
         mode: modeFilter,
         ...(reviewFilter ? { review: 'true' as const } : {}),
         ...(q ? { q } : {}),
+        ...(tagFilter.length > 0 ? { tag: tagFilter } : {}),
         offset: pageParam,
       }),
     initialPageParam: 0,
@@ -206,6 +231,15 @@ export function Inbox() {
 
   // Live updates: refresh the list and, when it is the open conversation, the thread.
   useRealtime((event) => {
+    // An admin renamed or deleted a tag everywhere: every list, chip and suggestion moves.
+    if (event.type === 'tags.changed') {
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversation-tags'] })
+      if (selectedId) {
+        void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
+      }
+      return
+    }
     if ('conversationId' in event) {
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       void queryClient.invalidateQueries({ queryKey: ['review-count'] })
@@ -292,6 +326,9 @@ export function Inbox() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <div className="mt-2">
+            <TagFilter selected={tagFilter} onChange={setTagFilter} />
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -309,7 +346,9 @@ export function Inbox() {
               </Button>
             </div>
           ) : rows.length === 0 ? (
-            <EmptyState title={q ? t('inbox.noMatches') : t('inbox.empty')} />
+            <EmptyState
+              title={q || tagFilter.length > 0 ? t('inbox.noMatches') : t('inbox.empty')}
+            />
           ) : (
             <ul>
               {rows.map((conversation) => (
@@ -341,6 +380,20 @@ export function Inbox() {
                         </span>
                       ) : null}
                     </div>
+                    {conversation.tags.length > 0 ? (
+                      // Display only: the row is a button, and a button cannot hold another.
+                      // A tag is filtered on from the open conversation or the filter box.
+                      <div className="flex min-w-0 items-center gap-1" data-testid="row-tags">
+                        {conversation.tags.slice(0, 3).map((tag) => (
+                          <TagChip key={tag} tag={tag} small />
+                        ))}
+                        {conversation.tags.length > 3 ? (
+                          <span className="text-[11px] text-[var(--text-muted)]">
+                            +{conversation.tags.length - 3}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div className="flex items-baseline gap-2">
                       <span className="truncate text-[13px] text-[var(--text-muted)]">
                         {conversation.lastMessage?.text ?? ''}
@@ -395,6 +448,7 @@ export function Inbox() {
             key={selectedId}
             conversationId={selectedId}
             onBack={() => setSelectedId(null)}
+            onFilterTag={filterByTag}
           />
         ) : (
           <EmptyState title={t('conversation.selectPrompt')} />
@@ -407,9 +461,11 @@ export function Inbox() {
 function ConversationPane({
   conversationId,
   onBack,
+  onFilterTag,
 }: {
   conversationId: string
   onBack: () => void
+  onFilterTag: (tag: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
@@ -854,6 +910,14 @@ function ConversationPane({
             </Button>
           </div>
         </header>
+
+        <ConversationTags
+          conversationId={conversationId}
+          tags={data.conversation.tags}
+          canEdit={canWrite}
+          onFilter={onFilterTag}
+          onError={failed}
+        />
 
         {actionError ? (
           <div

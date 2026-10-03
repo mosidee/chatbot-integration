@@ -428,6 +428,8 @@ export const conversations = pgTable(
     index('conversations_identity_idx').on(t.channelIdentityId),
     index('conversations_customer_idx').on(t.customerId),
     index('conversations_workspace_reviewed_idx').on(t.workspaceId, t.reviewedAt),
+    // `tags @> $wanted`, the inbox filter (migration 0019).
+    index('conversations_tags_idx').using('gin', t.tags),
   ],
 )
 

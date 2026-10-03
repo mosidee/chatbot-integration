@@ -1,3 +1,4 @@
+import { normaliseTags } from '@ci/shared'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createRootRoute,
@@ -94,13 +95,20 @@ const appRoute = createRoute({
 })
 
 /** Which queue is showing, so the dashboard can link straight into one. */
-function inboxSearch(search: Record<string, unknown>): { tab: InboxTab; c?: string } {
+function inboxSearch(search: Record<string, unknown>): {
+  tab: InboxTab
+  c?: string
+  tag?: string
+} {
+  // Tags, comma-separated as the API takes them; normalised so a hand-typed link matches.
+  const tags = typeof search.tag === 'string' ? normaliseTags(search.tag.split(',')) : []
   return {
     tab: INBOX_TABS.includes(search.tab as InboxTab) ? (search.tab as InboxTab) : 'open',
     // The open conversation, so a link, a reload or Back lands on the same thread.
     ...(typeof search.c === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(search.c)
       ? { c: search.c }
       : {}),
+    ...(tags.length > 0 ? { tag: tags.join(',') } : {}),
   }
 }
 
@@ -136,7 +144,14 @@ const workspaceRoute = createRoute({
       queryClient.clear()
     }
     // A notification opens `/<slug>?tab=…&c=…`: land on that conversation, not the top.
-    throw redirect({ to: '/', search: { tab: search.tab, ...(search.c ? { c: search.c } : {}) } })
+    throw redirect({
+      to: '/',
+      search: {
+        tab: search.tab,
+        ...(search.c ? { c: search.c } : {}),
+        ...(search.tag ? { tag: search.tag } : {}),
+      },
+    })
   },
   component: function UnknownWorkspace() {
     const { t } = useTranslation()

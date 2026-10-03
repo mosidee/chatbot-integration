@@ -1,6 +1,7 @@
 import { aiMaySend, applyEffects, type ConversationState, redactText, transition } from '@ci/core'
 import { newId, schema } from '@ci/db'
 import {
+  addConversationTags,
   countReviewQueue,
   createEffectPorts,
   deleteFeedback,
@@ -9,9 +10,11 @@ import {
   inReviewQueue,
   isInReviewQueue,
   listFeedback,
+  listWorkspaceTags,
   loadWorkspaceSettings,
   markReviewed,
   markSuggestionSent,
+  removeConversationTag,
   sendVerificationLink,
   storeMessage,
   updateConversation,
@@ -23,7 +26,10 @@ import {
   feedbackRatingSchema,
   feedbackReasonSchema,
   feedbackTargetTypeSchema,
+  MAX_TAGS_PER_CONVERSATION,
+  normaliseTags,
   normalizedMessageSchema,
+  tagSchema,
 } from '@ci/shared'
 import { and, desc, eq, lt, sql } from 'drizzle-orm'
 import Elysia from 'elysia'
@@ -121,13 +127,25 @@ export function conversationRoutes(ctx: ApiContext) {
           if (query.assigneeUserId) {
             filters.push(eq(schema.conversations.assigneeUserId, query.assigneeUserId))
           }
-          if (query.tag) filters.push(sql`${query.tag} = ANY(${schema.conversations.tags})`)
+          /**
+           * Tags, comma-separated (a tag cannot hold a comma), all of them required. `@>`
+           * is what the GIN index from migration 0019 serves.
+           */
+          const tags = normaliseTags([query.tag ?? []].flat().flatMap((value) => value.split(',')))
+          if (tags.length > 0) {
+            filters.push(
+              sql`${schema.conversations.tags} @> ARRAY[${sql.join(
+                tags.map((tag) => sql`${tag}`),
+                sql`, `,
+              )}]::text[]`,
+            )
+          }
           if (query.review) filters.push(inReviewQueue())
           if (query.before)
             filters.push(lt(schema.conversations.lastMessageAt, new Date(query.before)))
           /**
-           * Search: the customer's name, one of their identifiers, or anything said in the
-           * conversation. A substring match rather than a similarity score, because an agent
+           * Search: the customer's name, one of their identifiers, a tag, or anything said in
+           * the conversation. A substring match rather than a similarity score, because an agent
            * typing a phone number or an order reference wants the thread that contains it,
            * and a trigram index serves ILIKE for three characters and more. The message
            * lookup names the workspace as well as the conversation, like every other.
@@ -139,6 +157,9 @@ export function conversationRoutes(ctx: ApiContext) {
               or exists (
                 select 1 from jsonb_each_text(${schema.customers.fields}) field
                 where field.value ilike ${pattern}
+              )
+              or exists (
+                select 1 from unnest(${schema.conversations.tags}) tag where tag ilike ${pattern}
               )
               or exists (
                 select 1 from ${schema.messages} m
@@ -298,7 +319,11 @@ export function conversationRoutes(ctx: ApiContext) {
             mode: conversationModeSchema.optional(),
             channelId: z.string().optional(),
             assigneeUserId: z.string().optional(),
-            tag: z.string().optional(),
+            /**
+             * A conversation must carry every one. Comma-separated or repeated: Elysia hands
+             * a comma-separated value over as an array already, so both shapes arrive.
+             */
+            tag: z.union([z.string().max(1000), z.array(z.string().max(200)).max(20)]).optional(),
             /**
              * Only conversations nobody has reviewed. A literal rather than a coerced
              * boolean: `z.coerce.boolean()` reads the string 'false' as true, so
@@ -361,6 +386,65 @@ export function conversationRoutes(ctx: ApiContext) {
           return { open: rows[0]?.open ?? 0, waiting: rows[0]?.waiting ?? 0 }
         },
         { auth: 'viewer' },
+      )
+
+      /**
+       * Every tag in the workspace with how many conversations carry it, for the tag picker,
+       * the suggestions while typing and the filter. Before `/:id`, like the counts above.
+       */
+      .get(
+        '/tags',
+        async ({ workspaceId }) => ({ tags: await listWorkspaceTags(db, workspaceId) }),
+        {
+          auth: 'viewer',
+        },
+      )
+
+      /**
+       * Add one tag. The tag travels in the body rather than the path: Thai, spaces and a
+       * slash survive JSON and not every path encoder. Refused with 409 when the
+       * conversation already holds the most it may.
+       */
+      .post(
+        '/:id/tags',
+        async ({ workspaceId, params, body, status }) => {
+          const settings = await loadWorkspaceSettings(db, workspaceId)
+          const result = await addConversationTags(
+            db,
+            workspaceId,
+            params.id,
+            [body.tag],
+            settings.redaction,
+            'strict',
+          )
+          if (result.status === 'not_found') return status(404, { error: 'Conversation not found' })
+          if (result.status === 'full') {
+            return status(409, {
+              error: `A conversation can carry at most ${MAX_TAGS_PER_CONVERSATION} tags`,
+              tags: result.tags,
+            })
+          }
+          await runtime.publisher.publish(workspaceId, {
+            type: 'conversation.updated',
+            conversationId: params.id,
+          })
+          return { tags: result.tags }
+        },
+        { auth: 'agent', body: z.object({ tag: tagSchema }) },
+      )
+
+      .delete(
+        '/:id/tags',
+        async ({ workspaceId, params, body, status }) => {
+          const tags = await removeConversationTag(db, workspaceId, params.id, body.tag)
+          if (!tags) return status(404, { error: 'Conversation not found' })
+          await runtime.publisher.publish(workspaceId, {
+            type: 'conversation.updated',
+            conversationId: params.id,
+          })
+          return { tags }
+        },
+        { auth: 'agent', body: z.object({ tag: tagSchema }) },
       )
 
       /**

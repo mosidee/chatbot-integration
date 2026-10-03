@@ -1,3 +1,4 @@
+import { MAX_TAG_LENGTH, normaliseTags } from '@ci/shared'
 import { tool } from 'ai'
 import { z } from 'zod'
 import type { BoundIdentity, ToolSource } from './tool-source'
@@ -82,6 +83,12 @@ export type ToolContext = {
   /** Whether a verification link can actually be sent, which decides if the tool exists. */
   identityVerificationAvailable?: boolean
   /**
+   * Tags already in use across this workspace, so the model reuses `billing` rather than
+   * inventing `billing-question`. Only tags on at least two conversations: one used once may
+   * name that customer, and this list is shown in every other customer's conversation.
+   */
+  knownTags?: string[]
+  /**
    * Optional capabilities. A tool is only offered to the model when its capability is
    * present, so a workspace with no knowledge base does not advertise a search that can
    * only ever come back empty.
@@ -100,6 +107,15 @@ const handoffReasonForAi = z.enum([
   'negative_sentiment',
   'unsupported_media',
 ])
+
+/** The tag tool's description, carrying the workspace's own vocabulary when it has one. */
+export function tagToolDescription(knownTags: readonly string[]): string {
+  const base =
+    'Attach short topic tags to this conversation so the team can filter and report on it. ' +
+    'Use lowercase words; never put a name, phone number, account or order number in a tag.'
+  if (knownTags.length === 0) return base
+  return `${base} Tags this team already uses: ${knownTags.join(', ')}. Reuse one of these whenever it fits rather than inventing a near-synonym.`
+}
 
 export function createInternalTools(ctx: ToolContext) {
   return {
@@ -124,14 +140,13 @@ export function createInternalTools(ctx: ToolContext) {
     }),
 
     tag_conversation: tool({
-      description:
-        'Attach short topic tags to this conversation so the team can filter and report on it.',
+      description: tagToolDescription(ctx.knownTags ?? []),
       inputSchema: z.object({
-        tags: z.array(z.string().min(1).max(40)).min(1).max(5),
+        tags: z.array(z.string().min(1).max(MAX_TAG_LENGTH)).min(1).max(5),
       }),
       execute: async ({ tags }) => {
-        for (const t of tags) {
-          if (!ctx.scratchpad.tagsToAdd.includes(t)) ctx.scratchpad.tagsToAdd.push(t)
+        for (const tag of normaliseTags(tags)) {
+          if (!ctx.scratchpad.tagsToAdd.includes(tag)) ctx.scratchpad.tagsToAdd.push(tag)
         }
         return { ok: true, tags: ctx.scratchpad.tagsToAdd }
       },

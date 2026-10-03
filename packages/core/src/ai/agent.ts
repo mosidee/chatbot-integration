@@ -41,6 +41,8 @@ export type RunAgentTurnOptions = {
   /** Stable across a retry of the same job; becomes the idempotency key of any write. */
   turnKey: string
   identityVerificationAvailable?: boolean
+  /** Tags the workspace already uses, offered so the model reuses them. See `ToolContext`. */
+  knownTags?: string[]
   logger?: Logger
   /** The whole turn's deadline. Each model attempt also has its own; see `deadline.ts`. */
   signal?: AbortSignal
@@ -117,6 +119,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentT
               identityVerificationAvailable: options.identityVerificationAvailable ?? false,
               searchKnowledge: options.searchKnowledge,
               searchPastConversations: options.searchPastConversations,
+              knownTags: options.knownTags ?? [],
             },
             options.logger,
           )

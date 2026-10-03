@@ -47,6 +47,12 @@ export type DashboardSummary = {
     unanswered: number
   }
   handoffReasons: { reason: string; conversations: number }[]
+  /**
+   * The ten tags most used on conversations someone spoke in during the window, and how
+   * many of those were handed to a person in it (from `handoff_events`, never the cleared
+   * `handoff_reason`).
+   */
+  topTags: { tag: string; conversations: number; handoffs: number }[]
   channels: { channel: string; type: string; conversations: number }[]
   waitingNow: number
   /**
@@ -116,6 +122,7 @@ export async function loadDashboard(
     channels,
     ratings,
     downReasons,
+    topTags,
   ] = await Promise.all([
     db.execute<{ day: string; count: number }>(sql`
         SELECT to_char(date_trunc('day', created_at AT TIME ZONE ${tz}), 'YYYY-MM-DD') AS day, count(*)::int AS count
@@ -264,6 +271,21 @@ export async function loadDashboard(
         GROUP BY 1
         ORDER BY 2 DESC
       `),
+    db.execute<{ tag: string; conversations: number; handoffs: number }>(sql`
+        SELECT t AS tag,
+               count(*)::int AS conversations,
+               (count(*) FILTER (WHERE EXISTS (
+                 SELECT 1 FROM ${schema.handoffEvents} h
+                 WHERE h.workspace_id = ${workspaceId}
+                   AND h.conversation_id = c.id
+                   AND h.occurred_at >= ${sinceIso}::timestamptz
+               )))::int AS handoffs
+        FROM ${schema.conversations} c, unnest(c.tags) AS t
+        WHERE c.workspace_id = ${workspaceId} AND c.last_message_at >= ${sinceIso}::timestamptz
+        GROUP BY t
+        ORDER BY 2 DESC, t
+        LIMIT 10
+      `),
   ])
 
   const [[waiting], reviewQueueNow] = await Promise.all([
@@ -341,6 +363,11 @@ export async function loadDashboard(
       conversations: [...firstResponse][0]?.conversations ?? 0,
     },
     handoffReasons: [...reasons].map((row) => ({ reason: row.reason, conversations: row.count })),
+    topTags: [...topTags].map((row) => ({
+      tag: row.tag,
+      conversations: row.conversations,
+      handoffs: row.handoffs,
+    })),
     channels: [...channels].map((row) => ({
       channel: row.channel,
       type: row.type,

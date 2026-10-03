@@ -15,6 +15,7 @@ import { platformRoutes } from './routes/platform'
 import { pushRoutes } from './routes/push'
 import { settingsRoutes } from './routes/settings'
 import { simulatorRoutes } from './routes/simulator'
+import { tagRoutes } from './routes/tags'
 import { toolRoutes } from './routes/tools'
 import { traceRoutes } from './routes/traces'
 import { uploadRoutes } from './routes/uploads'
@@ -112,6 +113,7 @@ export function createApp(ctx: ApiContext) {
           .use(adminRoutes(ctx))
           .use(platformRoutes(ctx))
           .use(toolRoutes(ctx))
+          .use(tagRoutes(ctx))
           .use(knowledgeRoutes(ctx))
           .use(traceRoutes(ctx))
           .use(uploadRoutes(ctx))

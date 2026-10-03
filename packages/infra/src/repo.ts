@@ -787,29 +787,6 @@ export async function mergeCustomerFields(
   return changed
 }
 
-export async function addConversationTags(
-  db: Database,
-  workspaceId: string,
-  conversationId: string,
-  tags: string[],
-): Promise<void> {
-  if (tags.length === 0) return
-  const rows = await db
-    .select({ tags: schema.conversations.tags })
-    .from(schema.conversations)
-    .where(
-      and(
-        eq(schema.conversations.id, conversationId),
-        eq(schema.conversations.workspaceId, workspaceId),
-      ),
-    )
-    .limit(1)
-
-  const current = rows[0]?.tags ?? []
-  const merged = [...new Set([...current, ...tags])]
-  await updateConversation(db, workspaceId, conversationId, { tags: merged })
-}
-
 /**
  * Record that a draft became a real message.
  *

@@ -1,5 +1,5 @@
 import { type Database, newId, schema } from '@ci/db'
-import type { MergeMatchKey } from '@ci/shared'
+import { type MergeMatchKey, normaliseTags } from '@ci/shared'
 import { and, eq, inArray, or, sql } from 'drizzle-orm'
 
 /**
@@ -558,7 +558,9 @@ export async function mergeConversations(
       (oldest, row) => (row.createdAt < oldest ? row.createdAt : oldest),
       survivor.createdAt,
     )
-    const tags = [...new Set([survivor.tags, ...absorbedRows.map((row) => row.tags)].flat())]
+    // Every tag either thread carried, one spelling each. Not cut to the per-conversation
+    // limit: a merge loses nothing, and the limit only stops a merged thread growing further.
+    const tags = normaliseTags([survivor.tags, ...absorbedRows.map((row) => row.tags)].flat())
 
     await tx
       .update(schema.conversations)
