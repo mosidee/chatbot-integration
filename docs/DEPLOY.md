@@ -340,14 +340,70 @@ them:
 
 ## Backups
 
-What matters is Postgres and `APP_SECRET_KEY`.
+What matters is Postgres and `APP_SECRET_KEY`. Media lives in R2, which Cloudflare keeps
+durable; it is not in these dumps. If you need a copy you control, `rclone sync` the bucket
+somewhere else on a schedule.
+
+**`APP_SECRET_KEY` is not in any dump.** Without it the restored provider keys and channel
+credentials cannot be decrypted. Keep a copy of `.env` in your password manager; the backup
+script does not ship it anywhere.
+
+### Nightly
+
+`scripts/backup.sh` dumps the database in `pg_restore`'s custom format and writes, beside each
+dump, the row count of every table read from the **same snapshot** (a repeatable-read
+transaction exports it and `pg_dump --snapshot` uses it), so a restore can be checked exactly
+while the application keeps writing. It keeps 14 days and, when `BACKUP_REMOTE` is set, copies
+both files there with a key of their own. Failures go to `backup.log` and a non-zero exit.
+
+Settings live in `~/chat-backup.env`, outside the repository; it holds no secrets:
+
+```bash
+APP_DIR=/home/<you>/chatbot-integration
+BACKUP_DIR=/home/<you>/chat-backups
+DOCKER="sudo -n docker"
+BACKUP_REMOTE=<user>@<backup host>
+BACKUP_SSH_KEY=/home/<you>/.ssh/chat_backup
+```
+
+Create that key yourself (`ssh-keygen -t ed25519 -f ~/.ssh/chat_backup -N ''`) and add its
+public half to the backup host's `authorized_keys`. Then run it once by hand and install it:
+
+```bash
+./scripts/backup.sh && tail -5 ~/chat-backups/backup.log
+crontab -e   # 30 3 * * * /home/<you>/chatbot-integration/scripts/backup.sh
+```
+
+A one-off dump before a migration is still the one-liner:
 
 ```bash
 docker compose exec -T postgres pg_dump -U ci chatbot_integration | gzip > backup-$(date +%F).sql.gz
 ```
 
-Media lives in R2, which Cloudflare keeps durable; it is not in these dumps. If you need a
-copy you control, `rclone sync` the bucket somewhere else on a schedule.
+### Restoring
+
+`scripts/restore-check.sh [dump]` proves a dump restores without touching anything live. It
+starts a throwaway Postgres on an internal Docker network of its own, restores the newest dump
+into it, compares every table's count with the counts file, and runs the application image's
+migrations against it expecting none to be missing. Everything it started is removed on exit.
+It runs the image with `docker run` and only the throwaway `DATABASE_URL`: `docker compose run`
+would load `.env`, and with it the production database.
+
+To restore for real, into the running stack (this **replaces** the live data; take a fresh
+dump of what is there first):
+
+```bash
+docker compose stop api worker
+docker compose exec -T postgres dropdb -U ci chatbot_integration
+docker compose exec -T postgres createdb -U ci chatbot_integration
+docker compose exec -T postgres pg_restore -U ci -d chatbot_integration --no-owner < chat-db-<stamp>.dump
+docker compose up -d api worker   # the API applies any newer migrations as it starts
+```
+
+Restore the `.env` the dump was taken with, or at least its `APP_SECRET_KEY`. Redis is not
+backed up: it holds queues and fan-out. Rows still waiting in `outbox` are relayed again, but a
+job already handed to Redis before the dump and lost with it is not; on the same server Redis
+survives, and jobs naming rows newer than the dump log "message vanished" and are harmless.
 
 ## Scaling beyond one box
 
