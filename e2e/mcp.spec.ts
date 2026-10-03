@@ -9,6 +9,7 @@ import {
   findTestChannelId,
   signIn,
   uniqueCustomer,
+  uniqueToken,
 } from './helpers'
 
 /**
@@ -82,12 +83,14 @@ test('an admin connects a server, allows a tool, and the AI answers from it', as
   // And a customer asking about an order gets the server's answer.
   const channelId = await findTestChannelId(request)
   const customer = uniqueCustomer('mcp')
-  await customerSays(request, channelId, customer, 'Where is my order SO-77?')
+  const order = `SO-${uniqueToken()}`
+  await customerSays(request, channelId, customer, `Where is my order ${order}?`)
   await page.goto('/')
   await page.getByTestId('conversation-row').filter({ hasText: customer }).click({
     timeout: 25_000,
   })
-  await expect(page.getByText('ผลการตรวจสอบ: order SO-77 for nobody: shipped')).toBeVisible({
-    timeout: 25_000,
-  })
+  // In the thread and in the row's preview alike; either proves it reached the customer.
+  await expect(
+    page.getByText(`ผลการตรวจสอบ: order ${order} for nobody: shipped`).first(),
+  ).toBeVisible({ timeout: 25_000 })
 })
