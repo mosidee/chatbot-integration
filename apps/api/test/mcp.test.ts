@@ -148,6 +148,23 @@ describe('the allowlist', () => {
     })
   })
 
+  test('fetching again drops a read approval for a tool that now says it writes', async () => {
+    const id = (await list()).find((row) => row.name === 'shop')?.id ?? ''
+    // As if approved when the server said nothing; it now says `cancel-order` destroys.
+    await ctx.db
+      .update(schema.mcpServers)
+      .set({
+        allowed: [
+          { name: 'cancel-order', effect: 'read', bindings: [] },
+          { name: 'lookup_order', effect: 'read', bindings: [] },
+        ],
+      })
+      .where(eq(schema.mcpServers.id, id))
+    await fixture.as(fixture.admin, `/api/v1/settings/mcp/${id}/fetch-tools`, json('POST'))
+    const summary = (await list()).find((row) => row.id === id)
+    expect(summary?.allowed.map((entry) => entry.name)).toEqual(['lookup_order'])
+  })
+
   test('another URL is another server: its approvals are dropped', async () => {
     const id = (await list()).find((row) => row.name === 'shop')?.id ?? ''
     await fixture.as(

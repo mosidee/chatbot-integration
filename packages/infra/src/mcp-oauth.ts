@@ -6,13 +6,18 @@ import type {
   OAuthDiscoveryState,
 } from '@modelcontextprotocol/sdk/client/auth.js'
 import { auth, refreshAuthorization } from '@modelcontextprotocol/sdk/client/auth.js'
-import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
+import {
+  InvalidClientError,
+  InvalidGrantError,
+  UnauthorizedClientError,
+} from '@modelcontextprotocol/sdk/server/auth/errors.js'
 import type {
   OAuthClientInformationMixed,
   OAuthClientMetadata,
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
+import { boundedFetch } from './bounded-fetch'
 
 /**
  * Signing in to an MCP server with OAuth (ADR 0011, addendum).
@@ -63,9 +68,17 @@ export function mcpRedirectUrl(publicWebUrl: string): string {
   return new URL('/api/mcp/oauth/callback', publicWebUrl).toString()
 }
 
+/** A change to the stored state: keys to set, and keys to remove. */
+type StatePatch = { set?: Partial<McpOAuthState>; remove?: (keyof McpOAuthState)[] }
+
 /**
- * An `OAuthClientProvider` over one row. Every change is written back at once, through the
- * executor it was given, so a refresh under a row lock writes inside that transaction.
+ * An `OAuthClientProvider` over one row. Every change is written back at once as a patch,
+ * merged into whatever the row holds by then: an admin starting a sign-in must not write
+ * back the token set it read a moment before, over the one a turn has just refreshed.
+ *
+ * In the route that starts a sign-in it reports no tokens, so `auth()` always goes to the
+ * server's page: "Sign in again" means signing in, perhaps as another account, and must not
+ * quietly refresh a token a turn may be refreshing at the same moment.
  */
 export class StoredOAuthProvider implements OAuthClientProvider {
   readonly captured: { url: URL | null } = { url: null }
@@ -74,7 +87,7 @@ export class StoredOAuthProvider implements OAuthClientProvider {
     private stored: McpOAuthState,
     private readonly options: {
       redirectUrl: string
-      persist: (state: McpOAuthState) => Promise<void>
+      persist: (patch: StatePatch) => Promise<void>
       /** The signed `state` parameter for a sign-in an admin is starting. */
       stateParam?: string
       /** True in the route that starts a sign-in: capture the URL rather than refuse. */
@@ -106,22 +119,20 @@ export class StoredOAuthProvider implements OAuthClientProvider {
 
   async saveClientInformation(info: OAuthClientInformationMixed): Promise<void> {
     this.stored = { ...this.stored, clientInformation: info }
-    await this.options.persist(this.stored)
+    await this.options.persist({ set: { clientInformation: info } })
   }
 
   tokens(): OAuthTokens | undefined {
-    return this.stored.tokens
+    return this.options.interactive ? undefined : this.stored.tokens
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    this.stored = {
-      ...this.stored,
-      tokens,
-      ...(tokens.expires_in ? { expiresAt: Date.now() + tokens.expires_in * 1000 } : {}),
-      codeVerifier: undefined,
-    }
-    if (!tokens.expires_in) delete this.stored.expiresAt
-    await this.options.persist(this.stored)
+    const expiresAt = tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined
+    this.stored = { ...this.stored, tokens, expiresAt, codeVerifier: undefined }
+    await this.options.persist({
+      set: { tokens, ...(expiresAt ? { expiresAt } : {}) },
+      remove: expiresAt ? ['codeVerifier'] : ['codeVerifier', 'expiresAt'],
+    })
   }
 
   redirectToAuthorization(url: URL): void {
@@ -131,7 +142,7 @@ export class StoredOAuthProvider implements OAuthClientProvider {
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
     this.stored = { ...this.stored, codeVerifier }
-    await this.options.persist(this.stored)
+    await this.options.persist({ set: { codeVerifier } })
   }
 
   codeVerifier(): string {
@@ -145,41 +156,57 @@ export class StoredOAuthProvider implements OAuthClientProvider {
 
   async saveDiscoveryState(discovery: OAuthDiscoveryState): Promise<void> {
     this.stored = { ...this.stored, discovery }
-    await this.options.persist(this.stored)
+    await this.options.persist({ set: { discovery } })
   }
 
   async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery') {
+    const remove: (keyof McpOAuthState)[] = []
+    if (scope === 'all' || scope === 'client') remove.push('clientInformation')
+    if (scope === 'all' || scope === 'tokens') remove.push('tokens', 'expiresAt')
+    if (scope === 'all' || scope === 'verifier') remove.push('codeVerifier')
+    if (scope === 'all' || scope === 'discovery') remove.push('discovery')
     const next = { ...this.stored }
-    if (scope === 'all' || scope === 'client') delete next.clientInformation
-    if (scope === 'all' || scope === 'tokens') {
-      delete next.tokens
-      delete next.expiresAt
-    }
-    if (scope === 'all' || scope === 'verifier') delete next.codeVerifier
-    if (scope === 'all' || scope === 'discovery') delete next.discovery
+    for (const key of remove) delete next[key]
     this.stored = next
-    await this.options.persist(this.stored)
+    await this.options.persist({ remove })
   }
 }
 
-/** Write a server's OAuth state back, encrypted, scoped by workspace. */
+/**
+ * Merge a patch into a server's stored OAuth state, under the row lock, encrypted, scoped by
+ * workspace. Inside a transaction that already holds the lock, taking it again is free.
+ */
 function persister(
   executor: Executor,
   workspaceId: string,
   serverId: string,
   secretKey: string,
-): (state: McpOAuthState) => Promise<void> {
-  return async (state) => {
-    await executor
-      .update(schema.mcpServers)
-      .set({
-        credentialEncrypted: await encryptSecret(JSON.stringify(state), secretKey),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(schema.mcpServers.id, serverId), eq(schema.mcpServers.workspaceId, workspaceId)),
+): (patch: StatePatch) => Promise<void> {
+  return (patch) =>
+    executor.transaction(async (tx) => {
+      const where = and(
+        eq(schema.mcpServers.id, serverId),
+        eq(schema.mcpServers.workspaceId, workspaceId),
       )
-  }
+      const [row] = await tx
+        .select({ credentialEncrypted: schema.mcpServers.credentialEncrypted })
+        .from(schema.mcpServers)
+        .where(where)
+        .for('update')
+      if (!row) return
+      const next: McpOAuthState = {
+        ...(await readOAuthState(row.credentialEncrypted, secretKey)),
+        ...patch.set,
+      }
+      for (const key of patch.remove ?? []) delete next[key]
+      await tx
+        .update(schema.mcpServers)
+        .set({
+          credentialEncrypted: await encryptSecret(JSON.stringify(next), secretKey),
+          updatedAt: new Date(),
+        })
+        .where(where)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +265,10 @@ export async function startMcpSignIn(
     stateParam: input.stateParam,
     interactive: true,
   })
-  const result = await auth(provider, { serverUrl: input.serverUrl, fetchFn: input.fetch })
+  const result = await auth(provider, {
+    serverUrl: input.serverUrl,
+    fetchFn: oauthFetch(input.fetch),
+  })
   if (result === 'AUTHORIZED') return { status: 'connected' }
   if (!provider.captured.url) throw new Error('the server did not offer a sign-in')
   return { status: 'redirect', url: provider.captured.url }
@@ -266,7 +296,7 @@ export async function finishMcpSignIn(
   await auth(provider, {
     serverUrl: input.serverUrl,
     authorizationCode: input.code,
-    fetchFn: input.fetch,
+    fetchFn: oauthFetch(input.fetch),
   })
   await db
     .update(schema.mcpServers)
@@ -286,12 +316,56 @@ export async function finishMcpSignIn(
 const REFRESH_MARGIN_MS = 60_000
 
 /**
+ * Every OAuth request has a deadline and a small ceiling: a token endpoint that hangs would
+ * otherwise hold a refresh, its row lock and a pooled connection for as long as it liked.
+ */
+const OAUTH_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 10_000 }
+function oauthFetch(fetch: FetchLike): FetchLike {
+  return boundedFetch(fetch, OAUTH_LIMITS)
+}
+
+/** The sign-in is gone for good and only an admin can bring it back. */
+function lostForGood(error: unknown): boolean {
+  return (
+    error instanceof InvalidGrantError ||
+    error instanceof InvalidClientError ||
+    error instanceof UnauthorizedClientError
+  )
+}
+
+function isStale(state: McpOAuthState, force: boolean, rejectedToken?: string): boolean {
+  const token = state.tokens?.access_token
+  if (!token) return false
+  if (force && token === rejectedToken) return true
+  return state.expiresAt !== undefined && state.expiresAt - Date.now() < REFRESH_MARGIN_MS
+}
+
+async function markServer(
+  db: Database,
+  input: { workspaceId: string; serverId: string },
+  set: { status?: 'ok' | 'needs_reconnect'; lastError: string | null },
+): Promise<void> {
+  await db
+    .update(schema.mcpServers)
+    .set({ ...set, updatedAt: new Date() })
+    .where(
+      and(
+        eq(schema.mcpServers.id, input.serverId),
+        eq(schema.mcpServers.workspaceId, input.workspaceId),
+      ),
+    )
+}
+
+/**
  * The `Authorization` header for an OAuth server, refreshing first when the token is about
  * to expire or `force` says the server refused it.
  *
- * Under a row lock, and re-reading after taking it: two turns at once must not both spend
- * a single-use refresh token, and the second finds the first one's fresh token instead.
- * Null when there is no sign-in to use; a refused refresh token marks the server and throws.
+ * A fresh token is read without a lock: every turn asks, and a turn must not queue behind
+ * another for nothing. A refresh takes the row lock and re-reads after taking it, so two
+ * turns cannot both spend a single-use refresh token (the second finds the first one's), and
+ * waits at most five seconds for it. Null when there is no sign-in to use. A refusal that
+ * only an admin can fix marks the server and throws; anything else is an ordinary failure,
+ * written to `last_error` so the card can say why.
  */
 export async function oauthHeaders(
   db: Database,
@@ -305,42 +379,44 @@ export async function oauthHeaders(
     rejectedToken?: string
   },
 ): Promise<Record<string, string> | null> {
+  const where = and(
+    eq(schema.mcpServers.id, input.serverId),
+    eq(schema.mcpServers.workspaceId, input.workspaceId),
+  )
+  const [peek] = await db.select().from(schema.mcpServers).where(where).limit(1)
+  if (peek?.auth !== 'oauth' || peek.status !== 'ok') return null
+  const seen = await readOAuthState(peek.credentialEncrypted, input.secretKey)
+  if (!seen.tokens?.access_token) return null
+  if (!isStale(seen, input.force ?? false, input.rejectedToken)) {
+    return { Authorization: `Bearer ${seen.tokens.access_token}` }
+  }
+
   let reconnect = false
-  const headers = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .select()
-      .from(schema.mcpServers)
-      .where(
-        and(
-          eq(schema.mcpServers.id, input.serverId),
-          eq(schema.mcpServers.workspaceId, input.workspaceId),
-        ),
-      )
-      .for('update')
-    if (row?.auth !== 'oauth' || row.status !== 'ok') return null
-    const state = await readOAuthState(row.credentialEncrypted, input.secretKey)
-    const token = state.tokens?.access_token
-    if (!token) return null
+  try {
+    const headers = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '5s'`)
+      const [row] = await tx.select().from(schema.mcpServers).where(where).for('update')
+      if (row?.auth !== 'oauth' || row.status !== 'ok') return null
+      const state = await readOAuthState(row.credentialEncrypted, input.secretKey)
+      const token = state.tokens?.access_token
+      if (!token) return null
+      if (!isStale(state, input.force ?? false, input.rejectedToken)) {
+        return { Authorization: `Bearer ${token}` }
+      }
 
-    const stale =
-      (input.force && token === input.rejectedToken) ||
-      (state.expiresAt !== undefined && state.expiresAt - Date.now() < REFRESH_MARGIN_MS)
-    if (!stale) return { Authorization: `Bearer ${token}` }
-
-    const refreshToken = state.tokens?.refresh_token
-    const discovery = state.discovery
-    if (!refreshToken || !discovery?.authorizationServerUrl || !state.clientInformation) {
-      reconnect = true
-      return null
-    }
-    try {
+      const refreshToken = state.tokens?.refresh_token
+      const discovery = state.discovery
+      if (!refreshToken || !discovery?.authorizationServerUrl || !state.clientInformation) {
+        reconnect = true
+        return null
+      }
       const resource = discovery.resourceMetadata?.resource
       const fresh = await refreshAuthorization(discovery.authorizationServerUrl, {
         metadata: discovery.authorizationServerMetadata,
         clientInformation: state.clientInformation,
         refreshToken,
         ...(resource ? { resource: new URL(resource) } : {}),
-        fetchFn: input.fetch,
+        fetchFn: oauthFetch(input.fetch),
       })
       const provider = new StoredOAuthProvider(state, {
         redirectUrl: '',
@@ -350,46 +426,69 @@ export async function oauthHeaders(
       // A server that does not rotate refresh tokens sends none back: keep the one we had.
       await provider.saveTokens({ refresh_token: refreshToken, ...fresh })
       return { Authorization: `Bearer ${fresh.access_token}` }
-    } catch (error) {
-      if (error instanceof InvalidGrantError) {
-        reconnect = true
-        return null
-      }
+    })
+    if (!reconnect) {
+      if (peek.lastError) await markServer(db, input, { lastError: null })
+      return headers
+    }
+  } catch (error) {
+    if (!lostForGood(error)) {
+      const message = error instanceof Error ? error.message : String(error)
+      await markServer(db, input, {
+        lastError: `refreshing the sign-in failed: ${message}`.slice(0, 300),
+      })
       throw error
     }
-  })
-
-  if (reconnect) {
-    await db
-      .update(schema.mcpServers)
-      .set({
-        status: 'needs_reconnect',
-        lastError: new McpNeedsReconnectError().message,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(schema.mcpServers.id, input.serverId),
-          eq(schema.mcpServers.workspaceId, input.workspaceId),
-        ),
-      )
-    throw new McpNeedsReconnectError()
+    reconnect = true
   }
-  return headers
+
+  await markServer(db, input, {
+    status: 'needs_reconnect',
+    lastError: new McpNeedsReconnectError().message,
+  })
+  throw new McpNeedsReconnectError()
 }
 
-/** Forget the sign-in. The server's own revocation, where it has one, is best effort. */
+/**
+ * Tell the server to forget our tokens, where it offers a revocation endpoint (RFC 7009).
+ * Best effort: the tokens are deleted here whatever it answers.
+ */
+async function revoke(state: McpOAuthState, fetch: FetchLike): Promise<void> {
+  const endpoint = (
+    state.discovery?.authorizationServerMetadata as { revocation_endpoint?: string } | undefined
+  )?.revocation_endpoint
+  const clientId = state.clientInformation?.client_id
+  if (!endpoint || !clientId) return
+  const bounded = oauthFetch(fetch)
+  for (const [token, hint] of [
+    [state.tokens?.refresh_token, 'refresh_token'],
+    [state.tokens?.access_token, 'access_token'],
+  ] as const) {
+    if (!token) continue
+    await bounded(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token, token_type_hint: hint, client_id: clientId }).toString(),
+    }).catch(() => {})
+  }
+}
+
+/** Sign out: revoke at the server where it can, then forget everything stored. */
 export async function disconnectMcpSignIn(
   db: Database,
-  input: { workspaceId: string; serverId: string },
+  input: { workspaceId: string; serverId: string; secretKey: string; fetch: FetchLike },
 ): Promise<void> {
+  const where = and(
+    eq(schema.mcpServers.id, input.serverId),
+    eq(schema.mcpServers.workspaceId, input.workspaceId),
+  )
+  const [row] = await db.select().from(schema.mcpServers).where(where).limit(1)
+  if (!row) return
+  if (row.auth === 'oauth') {
+    await revoke(await readOAuthState(row.credentialEncrypted, input.secretKey), input.fetch)
+  }
   await db
     .update(schema.mcpServers)
     .set({ credentialEncrypted: null, status: 'ok', lastError: null, updatedAt: new Date() })
-    .where(
-      and(
-        eq(schema.mcpServers.id, input.serverId),
-        eq(schema.mcpServers.workspaceId, input.workspaceId),
-      ),
-    )
+    .where(where)
 }

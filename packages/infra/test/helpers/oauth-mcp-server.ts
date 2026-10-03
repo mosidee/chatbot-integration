@@ -8,7 +8,7 @@ import { handleMcp, type McpCall } from './mcp-server'
  * exchange, and refresh tokens that rotate and can be spent only once.
  */
 
-export type RefreshMode = 'ok' | 'invalid_grant' | 'unavailable'
+export type RefreshMode = 'ok' | 'invalid_grant' | 'invalid_client' | 'unavailable'
 
 export type TestOAuthMcpServer = {
   url: string
@@ -22,6 +22,8 @@ export type TestOAuthMcpServer = {
   setExpiresIn: (seconds: number) => void
   /** Stop accepting every access token issued so far, as a revocation would. */
   revokeAccessTokens: () => void
+  /** Tokens sent to the revocation endpoint. */
+  revoked: string[]
   stop: () => void
 }
 
@@ -34,6 +36,7 @@ export function startOAuthMcpServer(): TestOAuthMcpServer {
   let refreshed = 0
   let mode: RefreshMode = 'ok'
   let expiresIn = 3600
+  const revoked: string[] = []
 
   const issue = () => {
     issued += 1
@@ -64,6 +67,7 @@ export function startOAuthMcpServer(): TestOAuthMcpServer {
           issuer: base,
           authorization_endpoint: `${base}/authorize`,
           token_endpoint: `${base}/token`,
+          revocation_endpoint: `${base}/revoke`,
           registration_endpoint: `${base}/register`,
           response_types_supported: ['code'],
           grant_types_supported: ['authorization_code', 'refresh_token'],
@@ -88,6 +92,13 @@ export function startOAuthMcpServer(): TestOAuthMcpServer {
         back.searchParams.set('state', url.searchParams.get('state') ?? '')
         return new Response(null, { status: 302, headers: { location: back.toString() } })
       }
+      if (url.pathname === '/revoke' && request.method === 'POST') {
+        const token = new URLSearchParams(await request.text()).get('token') ?? ''
+        revoked.push(token)
+        accessTokens.delete(token)
+        refreshTokens.delete(token)
+        return new Response(null, { status: 200 })
+      }
       if (url.pathname === '/token' && request.method === 'POST') {
         const form = new URLSearchParams(await request.text())
         if (form.get('grant_type') === 'authorization_code') {
@@ -102,6 +113,9 @@ export function startOAuthMcpServer(): TestOAuthMcpServer {
         }
         if (form.get('grant_type') === 'refresh_token') {
           if (mode === 'unavailable') return new Response('down', { status: 503 })
+          if (mode === 'invalid_client') {
+            return Response.json({ error: 'invalid_client' }, { status: 401 })
+          }
           const token = form.get('refresh_token') ?? ''
           if (mode === 'invalid_grant' || !refreshTokens.delete(token)) {
             return Response.json({ error: 'invalid_grant' }, { status: 400 })
@@ -140,6 +154,7 @@ export function startOAuthMcpServer(): TestOAuthMcpServer {
       expiresIn = seconds
     },
     revokeAccessTokens: () => accessTokens.clear(),
+    revoked,
     stop: () => server.stop(true),
   }
 }

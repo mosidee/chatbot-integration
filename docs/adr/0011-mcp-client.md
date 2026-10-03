@@ -43,6 +43,12 @@ source is built.
   testing a tool, and every call in a turn. The URL is tenant-typed, the same SSRF surface as
   an HTTP tool. The restricted client follows redirects itself and strips credentials across
   origins.
+- **Bounded.** Every request to a server or its authorization server has a deadline and a
+  ceiling on the body (`boundedFetch`: 256 KB for a call, 1 MB for a listing, 64 KB and ten
+  seconds for OAuth). The restricted client has neither, and the SDK reads a whole response
+  before anything here could trim it.
+- **A fetch that changes what a tool says** drops approvals that no longer hold: a tool
+  approved as a read that now says it changes things is taken off the allowlist.
 - **One connection per call.** Connect, call, close. Calls are rare and short, and nothing
   opened by a turn can outlive it. The SDK (`@modelcontextprotocol/sdk`, pinned) lives in
   `packages/infra` only and is imported by deep path, so the worker does not load its server
@@ -77,12 +83,21 @@ discovery results — is one encrypted JSON document in `credential_encrypted`.
 sign-in", and it swallows a 5xx or a network error on the way, so in a worker a passing
 outage would become a server needing an admin. The worker sends `Authorization: Bearer`
 itself and refreshes with the SDK's `refreshAuthorization` directly, from the stored
-discovery, when the token is within a minute of expiring — **under a row lock, re-reading
-after taking it**, so two turns cannot both spend a single-use refresh token (the second
-finds the first one's token). A call answered 401 gets one forced refresh and one retry.
-Only `invalid_grant` marks the server `needs_reconnect`; its tools then leave every turn
+discovery, when the token is within a minute of expiring. A fresh token is read without a
+lock, since every turn asks; a refresh takes the **row lock, re-reading after taking it**,
+so two turns cannot both spend a single-use refresh token (the second finds the first one's
+token), and waits at most five seconds for it (`lock_timeout`). A call answered 401 gets one forced refresh and one retry.
+Only a refusal an admin must fix — `invalid_grant`, `invalid_client`, `unauthorized_client` — marks the server `needs_reconnect`; its tools then leave every turn
 until an admin signs in again, rather than handing every conversation off. A server that is
-down during a refresh is an ordinary tool failure.
+down during a refresh is an ordinary failure, written to `last_error` so the card says why
+its tools are missing.
+
+**Sign in again** always goes to the server's page: the start route's provider reports no
+tokens, so `auth()` cannot quietly refresh instead (and race a turn doing the same). The
+working tokens stay until the callback replaces them. Every write to the stored state is a
+patch merged under the row lock, so a sign-in being started never writes back a token set a
+turn has just replaced. **Sign out** and deleting the server revoke both tokens at the
+server's revocation endpoint where it has one (RFC 7009), best effort, then forget them.
 
 The AI acts as whoever signed in, for every customer. The card says so and suggests an
 account made for the purpose.

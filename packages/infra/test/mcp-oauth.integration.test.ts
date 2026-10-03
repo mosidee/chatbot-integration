@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm'
 import { createRestrictedFetch } from '../src/egress'
 import { callMcpTool, createMcpCaller, loadMcpServers } from '../src/mcp'
 import {
+  disconnectMcpSignIn,
   finishMcpSignIn,
   McpNeedsReconnectError,
   oauthHeaders,
@@ -134,6 +135,15 @@ describe('keeping it alive', () => {
     hosted.setRefreshMode('unavailable')
     await expect(headersNow()).rejects.not.toBeInstanceOf(McpNeedsReconnectError)
     expect((await row())?.status).toBe('ok')
+    // And the card can say why its tools are missing this turn.
+    expect((await row())?.lastError).toContain('refreshing the sign-in failed')
+  })
+
+  test('a client registration the server revoked is lost for good too', async () => {
+    const { hosted, headersNow, row } = await signedIn({ expiresIn: 30 })
+    hosted.setRefreshMode('invalid_client')
+    await expect(headersNow()).rejects.toBeInstanceOf(McpNeedsReconnectError)
+    expect((await row())?.status).toBe('needs_reconnect')
   })
 
   test('a token the server stopped accepting is refreshed and the call tried once more', async () => {
@@ -166,4 +176,30 @@ test('the sign-in state is ours, unexpired and unaltered', () => {
   ).toString('base64url')
   expect(verifySignInState(`${forged}.${mac}`, secretKey)).toBeNull()
   expect(verifySignInState(`${body}.${mac}`, 'another-secret-key-of-enough-length')).toBeNull()
+})
+
+describe('signing out and in again', () => {
+  test('signing out revokes both tokens at the server and forgets them', async () => {
+    const { f, hosted, serverId, row } = await signedIn()
+    await disconnectMcpSignIn(f.db, { workspaceId: f.workspaceId, serverId, secretKey, fetch })
+    expect(hosted.revoked).toEqual(['rt-1', 'at-1'])
+    expect((await row())?.credentialEncrypted).toBeNull()
+  })
+
+  test('"sign in again" goes to the server, and the working token stays until it is replaced', async () => {
+    const { f, hosted, serverId, row, headersNow } = await signedIn()
+    const again = await startMcpSignIn(f.db, {
+      workspaceId: f.workspaceId,
+      serverId,
+      serverUrl: hosted.url,
+      encrypted: (await row())?.credentialEncrypted ?? null,
+      secretKey,
+      publicWebUrl: 'http://localhost:5173',
+      stateParam: 'again',
+      fetch,
+    })
+    expect(again.status).toBe('redirect')
+    expect(hosted.refreshes()).toBe(0)
+    expect(await headersNow()).toEqual({ Authorization: 'Bearer at-1' })
+  })
 })

@@ -10,6 +10,7 @@ import {
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { and, eq } from 'drizzle-orm'
+import { boundedFetch } from './bounded-fetch'
 import { oauthHeaders } from './mcp-oauth'
 
 /**
@@ -125,14 +126,20 @@ export async function loadMcpServers(
   return servers
 }
 
+/** How much a server may send back: a tool answer, and a tool listing. */
+export const MCP_CALL_BYTES = 256 * 1024
+export const MCP_LIST_BYTES = 1024 * 1024
+
 /** Connect, run `work`, close: a connection never outlives its one use. */
 export async function withMcpClient<T>(
   server: { url: string; headers: Record<string, string>; timeoutMs: number },
   fetch: FetchLike,
   work: (client: Client) => Promise<T>,
+  maxBytes = MCP_CALL_BYTES,
 ): Promise<T> {
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
-    fetch,
+    // A little past the request timeout, so the SDK's own deadline reports first.
+    fetch: boundedFetch(fetch, { maxBytes, timeoutMs: server.timeoutMs + 2000 }),
     requestInit: { headers: server.headers },
   })
   const client = new Client(CLIENT_INFO)
@@ -229,39 +236,44 @@ export async function fetchMcpTools(
   server: { url: string; headers: Record<string, string>; timeoutMs: number },
   fetch: FetchLike,
 ): Promise<McpToolSnapshot[]> {
-  return withMcpClient(server, fetch, async (client) => {
-    const tools: McpToolSnapshot[] = []
-    let cursor: string | undefined
-    for (let page = 0; page < MCP_LIMITS.pages && tools.length < MCP_LIMITS.tools; page += 1) {
-      const listed = await client.listTools(cursor ? { cursor } : undefined, {
-        timeout: server.timeoutMs,
-      })
-      for (const tool of listed.tools) {
-        if (tools.length >= MCP_LIMITS.tools) break
-        const inputSchema = (tool.inputSchema ?? { type: 'object' }) as Record<string, unknown>
-        const annotations = tool.annotations as
-          | { readOnlyHint?: boolean; destructiveHint?: boolean }
-          | undefined
-        const readOnly =
-          annotations?.readOnlyHint === true
-            ? true
-            : annotations?.readOnlyHint === false || annotations?.destructiveHint === true
-              ? false
-              : null
-        const tooLarge = JSON.stringify(inputSchema).length > MCP_LIMITS.schemaBytes
-        tools.push({
-          name: String(tool.name).slice(0, 128),
-          description: (tool.description ?? '').slice(0, MCP_LIMITS.descriptionChars),
-          inputSchema: tooLarge ? { type: 'object' } : inputSchema,
-          readOnly,
-          ...(tooLarge ? { tooLarge: true } : {}),
+  return withMcpClient(
+    server,
+    fetch,
+    async (client) => {
+      const tools: McpToolSnapshot[] = []
+      let cursor: string | undefined
+      for (let page = 0; page < MCP_LIMITS.pages && tools.length < MCP_LIMITS.tools; page += 1) {
+        const listed = await client.listTools(cursor ? { cursor } : undefined, {
+          timeout: server.timeoutMs,
         })
+        for (const tool of listed.tools) {
+          if (tools.length >= MCP_LIMITS.tools) break
+          const inputSchema = (tool.inputSchema ?? { type: 'object' }) as Record<string, unknown>
+          const annotations = tool.annotations as
+            | { readOnlyHint?: boolean; destructiveHint?: boolean }
+            | undefined
+          const readOnly =
+            annotations?.readOnlyHint === true
+              ? true
+              : annotations?.readOnlyHint === false || annotations?.destructiveHint === true
+                ? false
+                : null
+          const tooLarge = JSON.stringify(inputSchema).length > MCP_LIMITS.schemaBytes
+          tools.push({
+            name: String(tool.name).slice(0, 128),
+            description: (tool.description ?? '').slice(0, MCP_LIMITS.descriptionChars),
+            inputSchema: tooLarge ? { type: 'object' } : inputSchema,
+            readOnly,
+            ...(tooLarge ? { tooLarge: true } : {}),
+          })
+        }
+        cursor = listed.nextCursor
+        if (!cursor) break
       }
-      cursor = listed.nextCursor
-      if (!cursor) break
-    }
-    return tools
-  })
+      return tools
+    },
+    MCP_LIST_BYTES,
+  )
 }
 
 /**

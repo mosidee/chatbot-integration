@@ -1,6 +1,7 @@
 export * from './blob'
 export * from './blob-deletions'
 export * from './blob-fs'
+export * from './bounded-fetch'
 export * from './conversation-tags'
 export * from './dashboard'
 export * from './effect-ports'

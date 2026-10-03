@@ -318,7 +318,12 @@ export function mcpRoutes(ctx: ApiContext) {
         async ({ workspaceId, params, status }) => {
           const row = await load(workspaceId, params.id)
           if (!row) return status(404, { error: 'Server not found' })
-          await disconnectMcpSignIn(db, { workspaceId, serverId: row.id })
+          await disconnectMcpSignIn(db, {
+            workspaceId,
+            serverId: row.id,
+            secretKey: env.APP_SECRET_KEY,
+            fetch: runtime.toolFetch,
+          })
           return { ok: true }
         },
         { auth: 'admin', params: z.object({ id: z.string() }) },
@@ -327,6 +332,13 @@ export function mcpRoutes(ctx: ApiContext) {
       .delete(
         '/:id',
         async ({ workspaceId, params }) => {
+          // Signed in: revoke at the server first, best effort, so its tokens do not outlive us.
+          await disconnectMcpSignIn(db, {
+            workspaceId,
+            serverId: params.id,
+            secretKey: env.APP_SECRET_KEY,
+            fetch: runtime.toolFetch,
+          })
           await db
             .delete(schema.mcpServers)
             .where(
@@ -358,8 +370,15 @@ export function mcpRoutes(ctx: ApiContext) {
               },
               runtime.toolFetch,
             )
+            // Kept only while it still holds: the tool is still listed, still small enough,
+            // and not now saying it changes things while it was approved as a read.
             const allowed = row.allowed.filter((entry) =>
-              snapshot.some((tool) => tool.name === entry.name && !tool.tooLarge),
+              snapshot.some(
+                (tool) =>
+                  tool.name === entry.name &&
+                  !tool.tooLarge &&
+                  !(entry.effect === 'read' && tool.readOnly === false),
+              ),
             )
             await db
               .update(schema.mcpServers)
@@ -478,67 +497,62 @@ export function mcpOAuthCallbackRoutes(ctx: ApiContext) {
       },
     })
 
-  return new Elysia().get(
-    '/callback',
-    async ({ query, request }) => {
-      const claims = query.state ? verifySignInState(query.state, env.APP_SECRET_KEY) : null
-      if (!claims || !query.code) return back('failed')
+  return new Elysia().get('/callback', async ({ request }) => {
+    // From the URL itself: Elysia turns a comma in a query value into an array, and an
+    // authorization code may contain one.
+    const params = new URL(request.url).searchParams
+    const code = params.get('code')
+    const state = params.get('state')
+    const claims = state ? verifySignInState(state, env.APP_SECRET_KEY) : null
+    if (!claims || !code || code.length > 4000) return back('failed')
 
-      const session = await ctx.auth.api.getSession({ headers: request.headers }).catch(() => null)
-      if (!session || session.user.id !== claims.userId) return back('failed')
-      const membership = (await loadMemberships(db, claims.userId)).find(
-        (m) => m.workspaceId === claims.workspaceId,
+    const session = await ctx.auth.api.getSession({ headers: request.headers }).catch(() => null)
+    if (!session || session.user.id !== claims.userId) return back('failed')
+    const membership = (await loadMemberships(db, claims.userId)).find(
+      (m) => m.workspaceId === claims.workspaceId,
+    )
+    if (membership?.role !== 'admin' || membership.status !== 'active') {
+      return back('failed')
+    }
+
+    const [row] = await db
+      .select()
+      .from(schema.mcpServers)
+      .where(
+        and(
+          eq(schema.mcpServers.id, claims.serverId),
+          eq(schema.mcpServers.workspaceId, claims.workspaceId),
+        ),
       )
-      if (membership?.role !== 'admin' || membership.status !== 'active') {
-        return back('failed')
-      }
+      .limit(1)
+    if (row?.auth !== 'oauth') return back('failed')
 
-      const [row] = await db
-        .select()
-        .from(schema.mcpServers)
+    try {
+      await finishMcpSignIn(db, {
+        workspaceId: claims.workspaceId,
+        serverId: row.id,
+        serverUrl: row.url,
+        encrypted: row.credentialEncrypted,
+        secretKey: env.APP_SECRET_KEY,
+        publicWebUrl: env.PUBLIC_WEB_URL,
+        code,
+        fetch: runtime.toolFetch,
+      })
+      return back('connected')
+    } catch (error) {
+      await db
+        .update(schema.mcpServers)
+        .set({
+          lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+          updatedAt: new Date(),
+        })
         .where(
           and(
-            eq(schema.mcpServers.id, claims.serverId),
+            eq(schema.mcpServers.id, row.id),
             eq(schema.mcpServers.workspaceId, claims.workspaceId),
           ),
         )
-        .limit(1)
-      if (row?.auth !== 'oauth') return back('failed')
-
-      try {
-        await finishMcpSignIn(db, {
-          workspaceId: claims.workspaceId,
-          serverId: row.id,
-          serverUrl: row.url,
-          encrypted: row.credentialEncrypted,
-          secretKey: env.APP_SECRET_KEY,
-          publicWebUrl: env.PUBLIC_WEB_URL,
-          code: query.code,
-          fetch: runtime.toolFetch,
-        })
-        return back('connected')
-      } catch (error) {
-        await db
-          .update(schema.mcpServers)
-          .set({
-            lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(schema.mcpServers.id, row.id),
-              eq(schema.mcpServers.workspaceId, claims.workspaceId),
-            ),
-          )
-        return back('failed')
-      }
-    },
-    {
-      query: z.object({
-        code: z.string().max(4000).optional(),
-        state: z.string().max(2000).optional(),
-        error: z.string().max(200).optional(),
-      }),
-    },
-  )
+      return back('failed')
+    }
+  })
 }
