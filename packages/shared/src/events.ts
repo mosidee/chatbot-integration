@@ -77,6 +77,12 @@ export type WsEvent = z.infer<typeof wsEventSchema>
 export const wsClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('subscribe'), conversationId: z.string().nullable() }),
   z.object({ type: z.literal('typing'), conversationId: z.string() }),
+  /**
+   * What this console is showing: the open conversation while the page is visible, null
+   * otherwise. Renewed every 30 s; a customer's message to the conversation somebody is
+   * reading does not also buzz their devices (`packages/infra/src/presence.ts`).
+   */
+  z.object({ type: z.literal('viewing'), conversationId: z.string().max(64).nullable() }),
   z.object({ type: z.literal('ping') }),
 ])
 export type WsClientMessage = z.infer<typeof wsClientMessageSchema>

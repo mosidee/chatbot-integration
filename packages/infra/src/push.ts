@@ -72,6 +72,16 @@ export type PushDeps = {
   logger: Logger
   /** Replaced in tests; production posts to the push services directly. */
   fetch?: typeof fetch
+  /**
+   * Who of these has the conversation open (`viewersOf` over Redis). Without it nobody is
+   * left out. Asked only for a customer's message: a handoff or a waiting reminder still
+   * goes to everyone.
+   */
+  viewers?: (input: {
+    workspaceId: string
+    conversationId: string
+    userIds: readonly string[]
+  }) => Promise<Set<string>>
 }
 
 export type PushOutcome = {
@@ -156,6 +166,7 @@ export async function sendPush(deps: PushDeps, job: PushJob): Promise<PushOutcom
   const subscriptions = await db
     .select({
       id: schema.pushSubscriptions.id,
+      userId: schema.pushSubscriptions.userId,
       endpoint: schema.pushSubscriptions.endpoint,
       p256dh: schema.pushSubscriptions.p256dh,
       auth: schema.pushSubscriptions.auth,
@@ -176,6 +187,30 @@ export async function sendPush(deps: PushDeps, job: PushJob): Promise<PushOutcom
       ),
     )
   if (subscriptions.length === 0) return none('nobody subscribed')
+
+  /**
+   * Leave out whoever is reading this conversation already: being told that the customer
+   * just wrote, on every device, while reading the message, is noise. They are sent
+   * nothing — not a silent push, which Safari answers by revoking the subscription — and
+   * everybody else still is. Per person, not per device: reading on the laptop quiets the
+   * phone too, because that person is on it.
+   */
+  const watching =
+    job.reason === 'customer_message' && deps.viewers
+      ? await deps
+          .viewers({
+            workspaceId: job.workspaceId,
+            conversationId: job.conversationId,
+            userIds: subscriptions.map((row) => row.userId),
+          })
+          .catch((error) => {
+            // Better a notification too many than none: presence is a courtesy.
+            deps.logger.warn('push presence unavailable', { error: String(error) })
+            return new Set<string>()
+          })
+      : new Set<string>()
+  const recipients = subscriptions.filter((row) => !watching.has(row.userId))
+  if (recipients.length === 0) return none('already open on screen')
 
   const language: Language = conversation.settings.defaultLanguage === 'en' ? 'en' : 'th'
   const copy = COPY[language]
@@ -208,7 +243,7 @@ export async function sendPush(deps: PushDeps, job: PushJob): Promise<PushOutcom
   const outcome: PushOutcome = { sent: 0, gone: 0, failed: 0 }
   let transient = 0
 
-  for (const subscription of subscriptions) {
+  for (const subscription of recipients) {
     const result = await postPush(deps, subscription, payload, job.conversationId)
     if (result === 'sent') outcome.sent += 1
     else if (result === 'gone') {

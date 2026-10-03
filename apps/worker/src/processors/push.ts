@@ -5,6 +5,7 @@ import {
   sendPush,
   vapidKeys,
   vapidSubject,
+  viewersOf,
   workspaceIsWorkable,
 } from '@ci/infra'
 
@@ -26,7 +27,13 @@ export async function processPush(
   if (!(await workspaceIsWorkable(runtime.db, job.workspaceId, logger, 'push'))) return
 
   const outcome = await sendPush(
-    { db: runtime.db, vapid, subject: vapidSubject(runtime.env), logger },
+    {
+      db: runtime.db,
+      vapid,
+      subject: vapidSubject(runtime.env),
+      logger,
+      viewers: (input) => viewersOf(runtime.redis, input),
+    },
     job,
   )
   logger.info('push', { conversationId: job.conversationId, reason: job.reason, ...outcome })

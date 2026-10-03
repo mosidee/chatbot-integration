@@ -226,6 +226,10 @@ without spending money.
 - `session.activeOrganizationId` is plain text with no foreign key. It survives being
   removed from a workspace and survives that workspace being deleted, so `chooseMembership`
   falls back rather than trusting it.
+- **Elysia hands every WebSocket handler a fresh wrapper object.** Key anything per
+  connection by `ws.id`, never by the object: a map keyed by what `open` received found
+  nothing in `message` or `close`, so typing was dropped and closed sockets kept their
+  revalidation timers and room places until the API restarted.
 - **A socket re-proves itself on `auth.changed` and `workspace.status`.** Publish
   `auth.changed` (to each of the person's workspaces) whenever something narrows somebody's
   access; the socket server closes what no longer qualifies with 4401/4403, and the console
@@ -633,7 +637,12 @@ without spending money.
 - **`/sw.js` caches nothing and has no fetch handler.** A caching worker pins an old build on
   an iPhone's home screen, where nobody can clear it. The API serves it `no-cache`.
 - **Every push shows a notification.** Safari revokes a subscription that receives silent
-  pushes, so do not add an "already looking at it" skip in the worker.
+  pushes, so nothing may be sent without one. Quieting somebody happens by **not sending to
+  them**: the console reports the conversation on screen over its socket (`viewing`,
+  renewed every 30 s, cleared when hidden), the API keeps it in Redis per person and socket
+  (`packages/infra/src/presence.ts`, 75 s), and `sendPush` leaves out of a
+  `customer_message` whoever is reading that conversation. Per person, not per device.
+  Handoffs and reminders are never filtered.
 - iPhone and iPad can subscribe only from the app added to the Home Screen (iOS 16.4+), and
   `Notification.requestPermission()` must be the first thing a click handler awaits. Android
   shows no number on the icon, only a dot.

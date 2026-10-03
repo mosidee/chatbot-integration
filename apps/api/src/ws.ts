@@ -1,5 +1,5 @@
 import { schema } from '@ci/db'
-import { subscribeToWorkspace, type WorkspaceSubscriber } from '@ci/infra'
+import { markViewing, subscribeToWorkspace, type WorkspaceSubscriber } from '@ci/infra'
 import type { UserRoleName, WsEvent } from '@ci/shared'
 import { wsClientMessageSchema } from '@ci/shared'
 import { and, eq } from 'drizzle-orm'
@@ -27,6 +27,8 @@ import { loadMemberships, resolveMembership } from './context'
 const REVALIDATE_EVERY_MS = 5 * 60 * 1000
 
 type SocketLike = {
+  /** Elysia's id for the connection, the same in every handler. */
+  id: string
   send: (data: string) => unknown
   close: (code?: number, reason?: string) => unknown
 }
@@ -38,6 +40,8 @@ type SocketState = {
   /** The headers it opened with: the session cookie, re-checked on every revalidation. */
   headers: Headers
   timer: ReturnType<typeof setInterval>
+  /** The object `open` was handed, which is the one in the room's set. */
+  socket: SocketLike
 }
 
 type WorkspaceRoom = {
@@ -53,7 +57,13 @@ export function createWsRoutes(ctx: ApiContext) {
    * subscribe, and the loser's subscriber was never closed.
    */
   const opening = new Map<string, Promise<WorkspaceRoom>>()
-  const states = new WeakMap<object, SocketState>()
+  /**
+   * Keyed by the connection's id, not by the object a handler receives: Elysia hands each
+   * handler a fresh wrapper, so a map keyed by the one `open` saw found nothing in
+   * `message` or `close`. Typing was silently dropped, and a closed socket never left its
+   * room or stopped its revalidation timer.
+   */
+  const states = new Map<string, SocketState>()
 
   /** The console's own origins. A page elsewhere must not ride an agent's cookie in here. */
   const ownOrigins = new Set(
@@ -77,7 +87,7 @@ export function createWsRoutes(ctx: ApiContext) {
 
   /** Still signed in, still a member, workspace still active? Closes the socket if not. */
   async function revalidate(socket: SocketLike): Promise<void> {
-    const state = states.get(socket as object)
+    const state = states.get(socket.id)
     if (!state) return
     const session = await ctx.auth.api.getSession({ headers: state.headers }).catch(() => null)
     if (!session || session.user.id !== state.userId) {
@@ -106,7 +116,7 @@ export function createWsRoutes(ctx: ApiContext) {
      */
     if (event.type === 'auth.changed' || event.type === 'workspace.status') {
       for (const s of sockets) {
-        const state = states.get(s as object)
+        const state = states.get(s.id)
         if (event.type === 'auth.changed' && event.userId && state?.userId !== event.userId)
           continue
         void revalidate(s)
@@ -213,13 +223,14 @@ export function createWsRoutes(ctx: ApiContext) {
           userId: session.user.id,
           role: membership.role,
           headers: new Headers(headers),
+          socket,
           timer: setInterval(() => void revalidate(socket), REVALIDATE_EVERY_MS),
         }
-        states.set(ws as unknown as object, state)
+        states.set(socket.id, state)
         await join(membership.workspaceId, socket)
 
         // Closed while joining: the close handler found no room yet, so leave now.
-        if (!states.has(ws as unknown as object)) {
+        if (!states.has(socket.id)) {
           await leave(membership.workspaceId, socket)
           return
         }
@@ -235,8 +246,37 @@ export function createWsRoutes(ctx: ApiContext) {
           return
         }
 
+        if (parsed.data.type === 'viewing') {
+          const state = states.get(ws.id)
+          if (!state) return
+          const conversationId = parsed.data.conversationId
+          // Only a conversation of this socket's own workspace is recorded.
+          if (conversationId !== null) {
+            const owned = await ctx.db
+              .select({ id: schema.conversations.id })
+              .from(schema.conversations)
+              .where(
+                and(
+                  eq(schema.conversations.id, conversationId),
+                  eq(schema.conversations.workspaceId, state.workspaceId),
+                ),
+              )
+              .limit(1)
+            if (owned.length === 0) return
+          }
+          await markViewing(ctx.runtime.redis, {
+            workspaceId: state.workspaceId,
+            userId: state.userId,
+            socketId: ws.id,
+            conversationId,
+          }).catch(() => {
+            // A courtesy: losing it means one notification too many, nothing worse.
+          })
+          return
+        }
+
         if (parsed.data.type === 'typing') {
-          const state = states.get(ws as unknown as object)
+          const state = states.get(ws.id)
           // A viewer cannot reply, so it has nothing to be seen typing.
           if (!state || state.role === 'viewer') return
           // Only a conversation of this socket's own workspace.
@@ -261,11 +301,17 @@ export function createWsRoutes(ctx: ApiContext) {
       },
 
       async close(ws) {
-        const state = states.get(ws as unknown as object)
+        const state = states.get(ws.id)
         if (!state) return
         clearInterval(state.timer)
-        states.delete(ws as unknown as object)
-        await leave(state.workspaceId, ws as unknown as SocketLike)
+        states.delete(ws.id)
+        await markViewing(ctx.runtime.redis, {
+          workspaceId: state.workspaceId,
+          userId: state.userId,
+          socketId: ws.id,
+          conversationId: null,
+        }).catch(() => {})
+        await leave(state.workspaceId, state.socket)
       },
     })
     .onStop(async () => {

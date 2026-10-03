@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { loadEnv } from '@ci/config'
-import { schema } from '@ci/db'
+import { newId, schema } from '@ci/db'
+import { viewersOf } from '@ci/infra'
 import { and, eq } from 'drizzle-orm'
 import { createApp } from '../src/app'
 import { createApiContext } from '../src/context'
@@ -52,6 +53,37 @@ const within = <T>(promise: Promise<T>, ms = 5000) =>
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), ms)),
   ])
 
+async function makeConversation(): Promise<string> {
+  const [channel] = await ctx.db
+    .select({ id: schema.channels.id })
+    .from(schema.channels)
+    .where(eq(schema.channels.workspaceId, fixture.workspaceId))
+    .limit(1)
+  const customerId = newId()
+  await ctx.db
+    .insert(schema.customers)
+    .values({ id: customerId, workspaceId: fixture.workspaceId, displayName: 'W' })
+  const identityId = newId()
+  await ctx.db.insert(schema.channelIdentities).values({
+    id: identityId,
+    workspaceId: fixture.workspaceId,
+    channelId: channel?.id ?? '',
+    customerId,
+    externalId: `ws-${identityId}`,
+  })
+  const conversationId = newId()
+  await ctx.db.insert(schema.conversations).values({
+    id: conversationId,
+    workspaceId: fixture.workspaceId,
+    channelId: channel?.id ?? '',
+    customerId,
+    channelIdentityId: identityId,
+    mode: 'human',
+    status: 'open',
+  })
+  return conversationId
+}
+
 describe('the live socket', () => {
   test('opens for a member of the console origin', async () => {
     const { socket, first } = open(fixture.agent.cookie)
@@ -62,6 +94,60 @@ describe('the live socket', () => {
   test('refuses a page on another origin riding the cookie', async () => {
     const { closed } = open(fixture.agent.cookie, 'https://evil.example')
     expect(await within(closed)).toBe(4403)
+  })
+
+  test('records the conversation on screen, only one of its own, until it closes', async () => {
+    const conversationId = await makeConversation()
+    const watching = () =>
+      viewersOf(ctx.runtime.redis, {
+        workspaceId: fixture.workspaceId,
+        conversationId,
+        userIds: [fixture.agent.userId],
+      })
+    const eventually = async (want: boolean) => {
+      for (let i = 0; i < 50; i += 1) {
+        if ((await watching()).has(fixture.agent.userId) === want) return
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      throw new Error(`viewing never became ${want}`)
+    }
+
+    const { socket, first, closed } = open(fixture.agent.cookie)
+    expect((await within(first)).type).toBe('ready')
+    socket.send(JSON.stringify({ type: 'viewing', conversationId }))
+    await eventually(true)
+
+    // An id from nowhere is not recorded, and does not disturb what was.
+    socket.send(JSON.stringify({ type: 'viewing', conversationId: newId() }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect((await watching()).has(fixture.agent.userId)).toBe(true)
+
+    socket.send(JSON.stringify({ type: 'viewing', conversationId: null }))
+    await eventually(false)
+
+    socket.send(JSON.stringify({ type: 'viewing', conversationId }))
+    await eventually(true)
+    socket.close()
+    await within(closed)
+    await eventually(false)
+  })
+
+  test("a colleague's typing reaches everyone else watching the workspace", async () => {
+    const conversationId = await makeConversation()
+    const typist = open(fixture.agent.cookie)
+    const watcher = open(fixture.admin.cookie)
+    expect((await within(typist.first)).type).toBe('ready')
+    expect((await within(watcher.first)).type).toBe('ready')
+    const seen = new Promise<{ type: string; conversationId?: string }>((resolve) => {
+      watcher.socket.addEventListener('message', (event) => {
+        const parsed = JSON.parse(String(event.data))
+        if (parsed.type === 'typing') resolve(parsed)
+      })
+    })
+    typist.socket.send(JSON.stringify({ type: 'typing', conversationId }))
+    expect((await within(seen)).conversationId).toBe(conversationId)
+    typist.socket.close()
+    watcher.socket.close()
   })
 
   test('closes when the person is removed from the workspace', async () => {
