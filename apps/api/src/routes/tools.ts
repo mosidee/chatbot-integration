@@ -1,5 +1,6 @@
 import { executeHttpTool, type HttpToolDefinition, inputSchemaFor } from '@ci/core'
 import { decryptSecret, encryptSecret, newId, schema } from '@ci/db'
+import { mcpExposedNames } from '@ci/infra'
 import {
   httpToolConfigSchema,
   RESERVED_TOOL_NAMES,
@@ -62,6 +63,11 @@ export function toolRoutes(ctx: ApiContext) {
           if (reserved(body.name)) {
             return status(400, { error: `"${body.name}" is the name of a built-in tool` })
           }
+          if ((await mcpExposedNames(db, workspaceId)).has(body.name)) {
+            return status(409, {
+              error: `an MCP server already offers a tool called "${body.name}"`,
+            })
+          }
 
           const existing = await db
             .select({ id: schema.tools.id })
@@ -104,6 +110,11 @@ export function toolRoutes(ctx: ApiContext) {
         async ({ workspaceId, params, body, status }) => {
           if (body.name && reserved(body.name)) {
             return status(400, { error: `"${body.name}" is the name of a built-in tool` })
+          }
+          if (body.name && (await mcpExposedNames(db, workspaceId)).has(body.name)) {
+            return status(409, {
+              error: `an MCP server already offers a tool called "${body.name}"`,
+            })
           }
 
           const patch: Partial<typeof schema.tools.$inferInsert> = { updatedAt: new Date() }

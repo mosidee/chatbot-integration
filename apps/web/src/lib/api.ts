@@ -9,6 +9,8 @@ import type {
   HttpToolConfig,
   IdentityProof,
   Language,
+  McpAllowedTool,
+  McpServerSummary,
   MergeMatchKey,
   NormalizedMessage,
   SenderType,
@@ -747,6 +749,38 @@ export const api = {
     deleteTool: (id: string) => del<{ ok: true }>(`/v1/settings/tools/${id}`),
     testTool: (id: string, body: { args?: Record<string, unknown>; subject?: string }) =>
       post<ToolTestResult>(`/v1/settings/tools/${id}/test`, body),
+  },
+
+  /** MCP servers (ADR 0011). Admins only. */
+  mcp: {
+    list: () => get<{ servers: McpServerSummary[] }>('/v1/settings/mcp'),
+    create: (body: {
+      name: string
+      url: string
+      auth: 'none' | 'header'
+      headerName?: string
+      credential?: string
+    }) => post<{ id: string }>('/v1/settings/mcp', body),
+    update: (
+      id: string,
+      body: {
+        url?: string
+        enabled?: boolean
+        headerName?: string
+        credential?: string
+        allowed?: McpAllowedTool[]
+      },
+    ) => patch<{ ok: true }>(`/v1/settings/mcp/${id}`, body),
+    remove: (id: string) => del<{ ok: true }>(`/v1/settings/mcp/${id}`),
+    fetchTools: (id: string) =>
+      post<{ ok: true; tools: number } | { ok: false; error: string }>(
+        `/v1/settings/mcp/${id}/fetch-tools`,
+      ),
+    test: (id: string, body: { tool: string; args?: Record<string, unknown>; subject?: string }) =>
+      post<{ ok: boolean; durationMs: number; body?: string; error?: string }>(
+        `/v1/settings/mcp/${id}/test`,
+        body,
+      ),
   },
 
   /** People in this workspace. Admin-only on the server; the console hides it too. */

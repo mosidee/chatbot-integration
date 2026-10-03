@@ -50,7 +50,7 @@ export type HttpToolDeps = {
 }
 
 /** The value the system binds for each source. Never reachable from the model's arguments. */
-function boundValue(source: ToolBindingSource, bound: BoundIdentity): string | null {
+export function boundValue(source: ToolBindingSource, bound: BoundIdentity): string | null {
   switch (source) {
     case 'subject':
       return bound.subject

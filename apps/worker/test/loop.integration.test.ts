@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { signBodyBase64 } from '@ci/channels'
 import { applyEffects, type ConversationState, transition } from '@ci/core'
-import { newId, schema } from '@ci/db'
+import { encryptSecret, newId, schema } from '@ci/db'
 import {
   acceptMergeSuggestion,
   applyReceipt,
@@ -13,6 +13,7 @@ import {
   createEntry,
   createSource,
   eraseCustomer,
+  fetchMcpTools,
   findVerificationCode,
   indexEntry,
   ingestInternal,
@@ -37,6 +38,7 @@ import {
   type MockServer,
   startMockOpenAI,
 } from '../../../packages/core/test/helpers/mock-openai-server'
+import { startMcpServer, type TestMcpServer } from '../../../packages/infra/test/helpers/mcp-server'
 import { handOffAfterFailure, processAiTurn } from '../src/processors/ai-turn'
 import { processIdleResolve } from '../src/processors/idle-resolve'
 import { processInbound } from '../src/processors/inbound'
@@ -3689,5 +3691,135 @@ describe('a customer who writes again before the AI has answered', () => {
     await runTurn(f, queued)
     const replies = (await messagesOf(f, conversation.id)).filter((m) => m.senderType === 'ai')
     expect(replies).toHaveLength(1)
+  })
+})
+
+/**
+ * MCP servers (ADR 0011): a connected server's approved tools reach the model, a read
+ * answers during the turn, a write fires after it, and a failed write fetches a person.
+ */
+describe('MCP servers', () => {
+  const mcpServers: TestMcpServer[] = []
+  afterEach(() => {
+    for (const server of mcpServers.splice(0)) server.stop()
+  })
+
+  async function connect(
+    f: Fixture,
+    allowed: {
+      name: string
+      effect: 'read' | 'write'
+      bindings?: {
+        name: string
+        source: 'subject' | 'customer_id' | 'conversation_id' | 'workspace_id'
+      }[]
+    }[],
+  ) {
+    const server = startMcpServer({ requireHeader: { name: 'x-api-key', value: 'sesame' } })
+    mcpServers.push(server)
+    const snapshot = await fetchMcpTools(
+      { url: server.url, headers: { 'x-api-key': 'sesame' }, timeoutMs: 5000 },
+      f.runtime.toolFetch,
+    )
+    await f.runtime.db.insert(schema.mcpServers).values({
+      id: newId(),
+      workspaceId: f.workspaceId,
+      name: 'shop',
+      url: server.url,
+      auth: 'header',
+      headerName: 'x-api-key',
+      credentialEncrypted: await encryptSecret('sesame', f.runtime.env.APP_SECRET_KEY),
+      snapshot,
+      allowed: allowed.map((entry) => ({ bindings: [], ...entry })),
+    })
+    return server
+  }
+
+  test('a read tool answers during the turn, with the bound value the model never saw', async () => {
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [
+          { name: 'shop_lookup_order', arguments: { order_id: 'SO-7', account: 'someone-else' } },
+        ],
+      },
+      { kind: 'text', text: 'ออร์เดอร์ส่งแล้วค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    const server = await connect(f, [
+      {
+        name: 'lookup_order',
+        effect: 'read',
+        bindings: [{ name: 'account', source: 'customer_id' }],
+      },
+    ])
+
+    await customerSays(f, 'ออร์เดอร์ SO-7 ถึงไหนแล้วคะ')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(server.calls).toHaveLength(1)
+    expect(server.calls[0]?.args).toEqual({ order_id: 'SO-7', account: conversation.customerId })
+    // The model was shown the tool without the bound argument.
+    const offered = (
+      provider.requests[0] as {
+        tools: { function: { name: string; parameters: { properties: Record<string, unknown> } } }[]
+      }
+    ).tools.find((tool) => tool.function.name === 'shop_lookup_order')
+    expect(Object.keys(offered?.function.parameters.properties ?? {})).toEqual(['order_id'])
+    const messages = await messagesOf(f, conversation.id)
+    expect(messages.at(-1)?.text).toBe('ออร์เดอร์ส่งแล้วค่ะ')
+  })
+
+  test('a write fires after the turn, once, with its idempotency key', async () => {
+    const provider = mock([
+      {
+        kind: 'tool_calls',
+        toolCalls: [{ name: 'shop_cancel_order', arguments: { order_id: 'SO-8' } }],
+      },
+      { kind: 'text', text: 'ยกเลิกให้แล้วค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    const server = await connect(f, [{ name: 'cancel-order', effect: 'write' }])
+
+    await customerSays(f, 'ยกเลิก SO-8 ค่ะ')
+    await runQueuedWork(f)
+
+    expect(server.calls.map((call) => call.tool)).toEqual(['cancel-order'])
+    expect(server.calls[0]?.meta).toMatchObject({ idempotencyKey: expect.any(String) })
+    const messages = await messagesOf(f, (await onlyConversation(f)).id)
+    expect(messages.at(-1)?.text).toBe('ยกเลิกให้แล้วค่ะ')
+  })
+
+  test('a tool the server says failed hands the conversation to a person', async () => {
+    const provider = mock([
+      { kind: 'tool_calls', toolCalls: [{ name: 'shop_broken', arguments: {} }] },
+      { kind: 'text', text: 'เรียบร้อยค่ะ' },
+    ])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    await connect(f, [{ name: 'broken', effect: 'read' }])
+
+    await customerSays(f, 'ช่วยเช็กให้หน่อย')
+    await runQueuedWork(f)
+
+    const conversation = await onlyConversation(f)
+    expect(conversation.mode).toBe('waiting_human')
+    expect(conversation.handoffReason).toBe('tool_error')
+  })
+
+  test('a disabled server offers nothing', async () => {
+    const provider = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({ providerBaseUrl: provider.url })
+    await connect(f, [{ name: 'lookup_order', effect: 'read' }])
+    await f.runtime.db
+      .update(schema.mcpServers)
+      .set({ enabled: false })
+      .where(eq(schema.mcpServers.workspaceId, f.workspaceId))
+    await customerSays(f, 'hello')
+    await runQueuedWork(f)
+    const names = (
+      (provider.requests[0] as { tools?: { function: { name: string } }[] }).tools ?? []
+    ).map((tool) => tool.function.name)
+    expect(names.some((name) => name.startsWith('shop_'))).toBe(false)
   })
 })

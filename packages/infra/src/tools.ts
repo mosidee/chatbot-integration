@@ -1,10 +1,14 @@
 import {
   type BoundIdentity,
   createHttpToolSource,
+  createMcpToolSource,
   executeHttpTool,
   type HttpToolDefinition,
+  type McpCaller,
+  type McpToolDefinition,
   type PendingWrite,
   type ToolSource,
+  withBindings,
 } from '@ci/core'
 import { type Database, decryptSecret, schema } from '@ci/db'
 import { and, eq } from 'drizzle-orm'
@@ -43,13 +47,18 @@ export async function loadToolDefinitions(
   return definitions
 }
 
-/** One source today. The MCP client adds a second here and the agent loop is untouched. */
+/** The workspace's HTTP tools and MCP servers, each a source; the agent loop is untouched. */
 export function createWorkspaceToolSources(
   definitions: HttpToolDefinition[],
   runtime: Runtime,
+  mcp?: { tools: McpToolDefinition[]; caller: McpCaller },
 ): ToolSource[] {
-  if (definitions.length === 0) return []
-  return [createHttpToolSource(definitions, { fetch: runtime.toolFetch })]
+  const sources: ToolSource[] = []
+  if (definitions.length > 0) {
+    sources.push(createHttpToolSource(definitions, { fetch: runtime.toolFetch }))
+  }
+  if (mcp && mcp.tools.length > 0) sources.push(createMcpToolSource(mcp.tools, mcp.caller))
+  return sources
 }
 
 export type WriteOutcome = {
@@ -72,10 +81,18 @@ export async function runPendingWrites(
   writes: PendingWrite[],
   bound: BoundIdentity,
   runtime: Runtime,
+  mcp?: McpCaller,
 ): Promise<WriteOutcome> {
   const succeeded: string[] = []
 
   for (const write of writes) {
+    if (write.source === 'mcp') {
+      const failed = await runMcpWrite(write, bound, mcp)
+      if (failed) return { succeeded, failed: { tool: write.tool, message: failed } }
+      succeeded.push(write.tool)
+      continue
+    }
+
     const def = definitions.find((d) => d.id === write.toolId)
     if (!def) {
       return {
@@ -121,4 +138,27 @@ export function describeWriteFailure(outcome: WriteOutcome): string {
       ? ` These were already carried out and may need undoing: ${outcome.succeeded.join(', ')}.`
       : ' Nothing was carried out.'
   return `The AI wrote a reply but "${outcome.failed.tool}" ${outcome.failed.message}, so the reply was not sent.${done}`
+}
+
+/**
+ * One MCP write, with the bindings applied now as an HTTP write's are. Returns why it failed,
+ * or null. A result the server marks as an error is a failure: the reply waiting on it says
+ * something was done.
+ */
+async function runMcpWrite(
+  write: PendingWrite,
+  bound: BoundIdentity,
+  mcp: McpCaller | undefined,
+): Promise<string | null> {
+  if (!mcp || !write.remoteTool) return 'is no longer connected in this workspace'
+  try {
+    const args = withBindings(write.args, write.bindings ?? [], bound)
+    if (!args) return 'needs a verified identity'
+    const result = await mcp.call(write.toolId, write.remoteTool, args, {
+      idempotencyKey: write.idempotencyKey,
+    })
+    return result.isError ? result.text.slice(0, 300) || 'reported an error' : null
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
 }

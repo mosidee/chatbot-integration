@@ -10,6 +10,9 @@ import type {
   HttpToolConfig,
   IdentityProof,
   Language,
+  McpAllowedTool,
+  McpAuth,
+  McpToolSnapshot,
   MergeMatchKey,
   MergeSuggestionStatus,
   MessageDirection,
@@ -829,6 +832,48 @@ export const tools = pgTable(
     uniqueIndex('tools_workspace_name_uq').on(t.workspaceId, t.name),
     index('tools_workspace_idx').on(t.workspaceId),
   ],
+)
+
+/**
+ * An MCP server a workspace connected (ADR 0011).
+ *
+ * Its own table rather than a `tools` row: every reader of `tools` takes the config to be
+ * an HTTP tool's, and a server is not a tool but a set of them. Holds nothing a person would
+ * want kept, so it cascades with the workspace and is on no merge list.
+ */
+export const mcpServers = pgTable(
+  'mcp_servers',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** The prefix of every tool it exposes (`<name>_<tool>`). Unique per workspace. */
+    name: text('name').notNull(),
+    /** Typed by a tenant admin: reached only through restricted egress. */
+    url: text('url').notNull(),
+    enabled: boolean('enabled').default(true).notNull(),
+    auth: text('auth').$type<McpAuth>().default('none').notNull(),
+    /** The header a pasted token goes in when `auth` is `header`. */
+    headerName: text('header_name'),
+    /**
+     * AES-256-GCM. The token for `header`; the OAuth state (client registration, tokens,
+     * PKCE verifier) as JSON for `oauth`. The API says `hasCredential`, never this.
+     */
+    credentialEncrypted: text('credential_encrypted'),
+    /** The tool list as the server gave it when an admin last fetched it. */
+    snapshot: jsonb('snapshot').$type<McpToolSnapshot[]>().default([]).notNull(),
+    /** Which of those the AI may use, and how. Nothing is offered that is not here. */
+    allowed: jsonb('allowed').$type<McpAllowedTool[]>().default([]).notNull(),
+    /** `needs_reconnect` when a sign-in can no longer be refreshed. */
+    status: text('status').$type<'ok' | 'needs_reconnect'>().default('ok').notNull(),
+    lastError: text('last_error'),
+    timeoutMs: integer('timeout_ms').default(8000).notNull(),
+    fetchedAt: ts('fetched_at'),
+    createdAt: ts('created_at').defaultNow().notNull(),
+    updatedAt: ts('updated_at').defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex('mcp_servers_workspace_name_uq').on(t.workspaceId, t.name)],
 )
 
 /**

@@ -341,6 +341,11 @@ It adds `knowledge_entries.indexed_revision` and marks every entry already index
 chunks, or switched off) as current. An enabled entry with no chunks shows "indexing" until
 its next index. It writes data, so back up first; a second run changes nothing.
 
+### Migration 0021 (MCP servers)
+
+It adds `mcp_servers` and writes no data. Deploy as usual; nothing is offered to the AI until
+an admin connects a server and allows its tools (ADR 0011).
+
 ### Settings that arrive switched on
 
 A deploy can add a workspace setting with a default, and existing workspaces take that

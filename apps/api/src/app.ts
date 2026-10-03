@@ -10,6 +10,7 @@ import { dashboardRoutes } from './routes/dashboard'
 import { identityRoutes } from './routes/identity'
 import { invitationRoutes } from './routes/invitations'
 import { knowledgeRoutes } from './routes/knowledge'
+import { mcpRoutes } from './routes/mcp'
 import { mediaRoutes } from './routes/media'
 import { platformRoutes } from './routes/platform'
 import { pushRoutes } from './routes/push'
@@ -114,6 +115,7 @@ export function createApp(ctx: ApiContext) {
           .use(platformRoutes(ctx))
           .use(toolRoutes(ctx))
           .use(tagRoutes(ctx))
+          .use(mcpRoutes(ctx))
           .use(knowledgeRoutes(ctx))
           .use(traceRoutes(ctx))
           .use(uploadRoutes(ctx))

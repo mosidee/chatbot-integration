@@ -104,6 +104,13 @@ export async function clearTools(request: APIRequestContext): Promise<void> {
   for (const tool of body.tools) {
     await request.delete(`${API_URL}/api/v1/settings/tools/${tool.id}`)
   }
+  // MCP servers too, for the same reason: their tools are offered alongside.
+  const servers = (await (await request.get(`${API_URL}/api/v1/settings/mcp`)).json()) as {
+    servers: { id: string }[]
+  }
+  for (const server of servers.servers) {
+    await request.delete(`${API_URL}/api/v1/settings/mcp/${server.id}`)
+  }
 }
 
 /**

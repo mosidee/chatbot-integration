@@ -1,4 +1,4 @@
-import { MAX_TAG_LENGTH, normaliseTags } from '@ci/shared'
+import { MAX_TAG_LENGTH, normaliseTags, type ToolBinding } from '@ci/shared'
 import { tool } from 'ai'
 import { z } from 'zod'
 import type { BoundIdentity, ToolSource } from './tool-source'
@@ -27,6 +27,15 @@ export type PendingWrite = {
    * one, which is how a refund gets issued twice.
    */
   idempotencyKey: string
+  /**
+   * Which kind of tool it is, so the writes can be fired by the right runner. Absent means
+   * an HTTP tool, which is every write recorded before MCP servers existed.
+   */
+  source?: 'http' | 'mcp'
+  /** For an MCP tool: the server's own name for it, which is what the call sends. */
+  remoteTool?: string
+  /** For an MCP tool: the values the system fills, applied when the write fires. */
+  bindings?: ToolBinding[]
 }
 
 export type TurnScratchpad = {

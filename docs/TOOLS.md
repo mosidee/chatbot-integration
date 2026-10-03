@@ -100,3 +100,25 @@ with a placeholder, since there is no conversation to speak of.
 **It reads the wrong customer's data.** It cannot. If a tool is returning the wrong person's
 account, the binding is wrong — check that the account is a supplied value and not an
 argument the model was allowed to fill in.
+
+## Connecting an MCP server
+
+If you already run an MCP server (Streamable HTTP), connect it instead of defining tools one
+by one: Settings → Integrations → MCP servers.
+
+1. **Connect it.** A short name (it prefixes every tool: `shop_lookup_order`), the server's
+   URL, and how it authenticates — a token in a header you name, or none. The token is stored
+   encrypted and never shown again.
+2. **Fetch its tools.** The list is stored as it is now. A server that changes a tool later
+   changes nothing here until you fetch again.
+3. **Tick what the AI may use, and say what each does.** A tool the server marks read-only is
+   a read; one it marks as changing things can only be a write; for any other you choose. A
+   read runs during the conversation and the AI uses its answer; a write runs once the reply
+   is ready, like an HTTP writing tool. Unticked tools are never offered. The card shows
+   roughly how many tokens the ticked tools add to every conversation.
+4. **Bind what must not be guessed.** Any argument can be filled by the system instead of the
+   AI — the verified account, the customer, the conversation — exactly as for HTTP tools.
+5. **Test one** with the button. A writing tool's test changes real data.
+
+The same network rules apply: the server must be reachable over HTTPS on a public address
+unless a platform admin approved a private one.

@@ -37,7 +37,7 @@ export const RESERVED_TOOL_NAMES = [
   'request_identity_verification',
 ] as const
 
-/** `mcp` arrives with the MCP client source; the column exists so it needs no migration. */
+/** MCP servers are not rows here: they live in `mcp_servers` (ADR 0011). */
 export const toolKindSchema = z.enum(['http'])
 export type ToolKind = z.infer<typeof toolKindSchema>
 
