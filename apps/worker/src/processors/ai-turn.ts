@@ -43,7 +43,7 @@ import {
   workspaceIsWorkable,
   workspaceProviderFetch,
 } from '@ci/infra'
-import type { HandoffReason } from '@ci/shared'
+import { type HandoffReason, isSharedChat } from '@ci/shared'
 import { and, eq, gt, sql } from 'drizzle-orm'
 
 /**
@@ -309,6 +309,8 @@ export async function processAiTurn(
     // agent would approve it, and nothing would arrive.
     identityVerificationAvailable:
       job.deliver === 'send' &&
+      // Never to a group: everyone in it could follow the link (see `isSharedChat`).
+      !isSharedChat(context.identity.externalId) &&
       settings.identity.verificationLink.enabled &&
       settings.identity.verificationLink.url !== null &&
       bound.subject === null,

@@ -704,7 +704,9 @@ export function conversationRoutes(ctx: ApiContext) {
               error:
                 sent.reason === 'disabled'
                   ? 'Verification links are switched off for this workspace'
-                  : 'No verification link URL is configured',
+                  : sent.reason === 'shared_chat'
+                    ? 'A verification link cannot be sent to a group chat'
+                    : 'No verification link URL is configured',
             })
           }
 

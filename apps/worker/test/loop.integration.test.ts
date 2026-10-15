@@ -2802,6 +2802,40 @@ describe('the verification link', () => {
     expect(await consumeVerificationCode(f.runtime.db, code)).toBeNull()
   })
 
+  test('a group chat is never sent a link, and the AI is not offered one there', async () => {
+    const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
+    const f = await fixture({
+      providerBaseUrl: server.url,
+      settings: {
+        identity: {
+          widgetToken: { enabled: true },
+          verificationLink: {
+            enabled: true,
+            url: 'https://salon.example.com/verify',
+            secretEncrypted: null,
+            ttlMinutes: 15,
+          },
+        },
+      },
+    })
+
+    // As a LINE group arrives: the chat, not a member, is who we talk to.
+    await customerSays(f, 'สวัสดี', { externalId: 'group:C1234567890abcdef1234567890abcdef' })
+    await runQueuedWork(f)
+    const conversation = await onlyConversation(f)
+
+    const offered = (
+      (server.requests[0] as { tools?: { function: { name: string } }[] }).tools ?? []
+    ).map((tool) => tool.function.name)
+    expect(offered).not.toContain('request_identity_verification')
+
+    const sent = await sendVerificationLink(f.runtime, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+    })
+    expect(sent).toEqual({ ok: false, reason: 'shared_chat' })
+  })
+
   test('a second link invalidates the first, so only the newest can be spent', async () => {
     const server = mock([{ kind: 'text', text: 'สวัสดีค่ะ' }])
     const f = await fixture({

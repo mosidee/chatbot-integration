@@ -83,3 +83,12 @@ export type VerifiedIdentity = {
   attributes: Record<string, string>
   via: IdentityProof
 }
+
+/**
+ * A channel identity that is a shared chat rather than one person: a LINE group or room
+ * (`group:<id>`, `room:<id>`). Anything addressed to it is read by everyone in it, so
+ * nothing that proves or reveals one person may go there.
+ */
+export function isSharedChat(externalId: string): boolean {
+  return externalId.startsWith('group:') || externalId.startsWith('room:')
+}

@@ -434,6 +434,14 @@ without spending money.
 - A widget visitor's channel identity carries a prefix, `anon:` or `host:`, and the
   prefixed form is what the identity is stored under. Sending the raw id instead created
   an identity the session could never find again.
+- **In a LINE group or room the account answers only when mentioned.** A group message
+  carries its sender's `userId` too, and taking that as a one-to-one chat answered every
+  message in every group and pushed answers to members privately. Group and room events are
+  addressed as the chat (`group:<id>`, `room:<id>`), a text message is ours only if a
+  `user` mentionee has `isSelf`, the mention is cut from the text, and everything else said
+  there is neither answered nor stored. `isSharedChat` (`packages/shared/src/identity.ts`)
+  marks those identities: no verification link is ever sent to one, and the AI is not
+  offered the tool there.
 - LINE reply tokens are single-use and expire in about a minute. They are stored on the
   conversation and cleared the moment they are spent; a reply sent later goes as a push,
   which counts against the channel's monthly quota.
