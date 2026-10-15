@@ -105,4 +105,21 @@ describe('LINE', () => {
     expect(result.platformMessageId).toBeNull()
     expect(keys).toEqual([key])
   })
+
+  test('a push to a group goes to the group, by its LINE id', async () => {
+    const targets: unknown[] = []
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const body = init?.body ?? (input instanceof Request ? await input.text() : null)
+      targets.push(JSON.parse(String(body)).to)
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    await lineChannelAdapter.send(
+      'group:C1234567890abcdef1234567890abcdef',
+      { kind: 'text', text: 'สวัสดีค่ะ' },
+      LINE,
+      {},
+    )
+    expect(targets).toEqual(['C1234567890abcdef1234567890abcdef'])
+  })
 })

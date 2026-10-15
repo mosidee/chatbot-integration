@@ -63,6 +63,14 @@ content servers in Tokyo; if a photo takes a minute or more to be answered, the 
 there is poor, and the optional Cloudflare Worker in [DEPLOY.md](./DEPLOY.md) (ADR 0009) fixes
 it. The pilot's took 65 seconds for one photo without it and about one second with it.
 
+### Groups and rooms
+
+If the account is added to a LINE group or room, it stays quiet there unless somebody
+mentions it (type `@` and pick the account). A mention is answered in the group, and the
+group appears in the inbox as a conversation of its own, named after the group; the rest of
+what is said in the group is not answered or stored. Identity verification links are never
+sent to a group, since everyone in it could open them.
+
 ### Costs worth knowing
 
 Replying inside LINE's reply window is free; a push message counts against the account's

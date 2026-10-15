@@ -1,6 +1,6 @@
 import type { BoundIdentity } from '@ci/core'
 import { type Database, newId, schema } from '@ci/db'
-import type { IdentityProof, Language, VerifiedIdentity } from '@ci/shared'
+import { type IdentityProof, isSharedChat, type Language, type VerifiedIdentity } from '@ci/shared'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { loadWorkspaceSettings, storeMessage, type TurnContext } from './repo'
 import type { Runtime } from './runtime'
@@ -229,7 +229,10 @@ const LINK_TEXT: Record<Language, (url: string) => string> = {
 
 export type VerificationLinkResult =
   | { ok: true; messageId: string; code: string }
-  | { ok: false; reason: 'disabled' | 'not_configured' | 'conversation_not_found' }
+  | {
+      ok: false
+      reason: 'disabled' | 'not_configured' | 'conversation_not_found' | 'shared_chat'
+    }
 
 /**
  * Send this customer a one-time link.
@@ -264,6 +267,20 @@ export async function sendVerificationLink(
     .limit(1)
   const conversation = rows[0]
   if (!conversation) return { ok: false, reason: 'conversation_not_found' }
+
+  // A group or room is read by everyone in it: a link there would let any member prove the
+  // identity, and the conversation would then act for whoever clicked first.
+  const [identity] = await db
+    .select({ externalId: schema.channelIdentities.externalId })
+    .from(schema.channelIdentities)
+    .where(
+      and(
+        eq(schema.channelIdentities.id, conversation.channelIdentityId),
+        eq(schema.channelIdentities.workspaceId, input.workspaceId),
+      ),
+    )
+    .limit(1)
+  if (!identity || isSharedChat(identity.externalId)) return { ok: false, reason: 'shared_chat' }
 
   const language = await customerLanguage(
     db,

@@ -46,11 +46,47 @@ function blobClientFor(config: LineConfig): messagingApi.MessagingApiBlobClient 
   })
 }
 
-/** A LINE event only concerns us when it comes from a single user, not a group or room. */
-function userIdOf(source: webhook.Source | undefined): string | null {
+/**
+ * Who an event is from, as we address it back.
+ *
+ * A one-to-one chat is the user. A group or room is the chat itself (`group:<id>`,
+ * `room:<id>`), never the member who wrote: LINE gives a group message its sender's user id
+ * too, and treating it as theirs answered every message in every group the account was in,
+ * and pushed the answer to that person privately once the reply token had expired.
+ */
+function chatIdOf(source: webhook.Source | undefined): string | null {
   if (!source) return null
-  const withUser = source as { userId?: string }
-  return withUser.userId ?? null
+  if (source.type === 'group') return `group:${(source as webhook.GroupSource).groupId}`
+  if (source.type === 'room') return `room:${(source as webhook.RoomSource).roomId}`
+  return (source as { userId?: string }).userId ?? null
+}
+
+/** The id LINE's push API takes for one of ours. */
+function pushTarget(externalId: string): string {
+  return externalId.replace(/^(group|room):/, '')
+}
+
+/**
+ * In a group or room the account speaks only when spoken to: a text message that mentions
+ * it. Everything else said there is other people's conversation, and is neither answered
+ * nor stored. The mention itself is taken out of the text the AI reads; a message that was
+ * nothing but the mention keeps its text, so it is still answered.
+ */
+function addressedText(event: webhook.Event): string | null {
+  if (event.type !== 'message') return null
+  const message = (event as webhook.MessageEvent).message
+  if (message.type !== 'text') return null
+  const text = message as webhook.TextMessageContent
+  const mine = (text.mention?.mentionees ?? [])
+    .filter((m): m is webhook.UserMentionee => m.type === 'user' && m.isSelf === true)
+    .sort((a, b) => b.index - a.index)
+  if (mine.length === 0) return null
+  let stripped = text.text
+  for (const mention of mine) {
+    stripped = stripped.slice(0, mention.index) + stripped.slice(mention.index + mention.length)
+  }
+  stripped = stripped.replace(/\s+/g, ' ').trim()
+  return stripped || text.text
 }
 
 /**
@@ -355,11 +391,17 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
     const events: InboundEvent[] = []
 
     for (const event of payload.events ?? []) {
-      const externalId = userIdOf(event.source)
-      // Group and room conversations have no single customer to attribute this to.
+      const externalId = chatIdOf(event.source)
       if (!externalId) continue
 
-      const message = toNormalized(event)
+      let message: NormalizedMessage | null
+      if (externalId.startsWith('group:') || externalId.startsWith('room:')) {
+        const text = addressedText(event)
+        if (text === null) continue
+        message = { kind: 'text', text }
+      } else {
+        message = toNormalized(event)
+      }
       if (!message) continue
 
       const platformEventId =
@@ -404,7 +446,7 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
 
     try {
       // The retry key makes a resend after a lost response safe: LINE delivers a key once.
-      await client.pushMessage({ to: externalId, messages }, context.retryKey)
+      await client.pushMessage({ to: pushTarget(externalId), messages }, context.retryKey)
     } catch (error) {
       // 409: this key was already accepted, i.e. an earlier attempt did deliver it.
       if (context.retryKey && statusOf(error) === 409) return { platformMessageId: null }
@@ -414,6 +456,20 @@ export const lineChannelAdapter: ChannelAdapter<LineConfig> = {
   },
 
   async fetchProfile(externalId: string, config: LineConfig): Promise<ChannelProfile | null> {
+    // A group is named by its group name; a room has none, and is left unnamed.
+    if (externalId.startsWith('room:')) return null
+    if (externalId.startsWith('group:')) {
+      try {
+        const group = await clientFor(config).getGroupSummary(pushTarget(externalId))
+        return {
+          displayName: group.groupName ?? null,
+          avatarUrl: group.pictureUrl ?? null,
+          raw: { group: true },
+        }
+      } catch {
+        return null
+      }
+    }
     try {
       const profile = await clientFor(config).getProfile(externalId)
       return {

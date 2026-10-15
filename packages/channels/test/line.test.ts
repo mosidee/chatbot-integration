@@ -180,15 +180,87 @@ describe('inbound messages', () => {
     expect(message.data.payload).toBe('action=book&staff=nok')
   })
 
-  test('ignores group messages, which have no single customer', async () => {
-    const groupEvent: webhook.MessageEvent = {
+  describe('groups and rooms', () => {
+    const GROUP_ID = 'C1234567890abcdef1234567890abcdef'
+    const inGroup = (
+      text: string,
+      mentionees?: webhook.Mentionee[],
+      source: webhook.Source = { type: 'group', groupId: GROUP_ID, userId: USER_ID },
+    ): webhook.MessageEvent => ({
       ...textEvent,
-      webhookEventId: '01HZZZGROUP',
-      source: { type: 'group', groupId: 'C1234567890abcdef1234567890abcdef' },
-    }
-    expect(
-      lineChannelAdapter.parseInbound(await request(callback([groupEvent])), CONFIG),
-    ).toHaveLength(0)
+      webhookEventId: `01HZZZ${text.length}${mentionees?.length ?? 0}`,
+      source,
+      message: {
+        type: 'text',
+        id: '500000000099',
+        text,
+        quoteToken: 'q9',
+        ...(mentionees ? { mention: { mentionees } } : {}),
+      },
+    })
+    const parse = async (event: webhook.MessageEvent) =>
+      lineChannelAdapter.parseInbound(await request(callback([event])), CONFIG)
+
+    test('a message that does not mention the account is not ours, though LINE names its sender', async () => {
+      expect(await parse(inGroup('ราคาเท่าไหร่คะ'))).toHaveLength(0)
+    })
+
+    test('mentioning somebody else, or everyone, is not mentioning us', async () => {
+      expect(
+        await parse(
+          inGroup('@Nok ราคาเท่าไหร่', [{ type: 'user', index: 0, length: 4, userId: 'Uother' }]),
+        ),
+      ).toHaveLength(0)
+      expect(
+        await parse(inGroup('@All ราคา', [{ type: 'all', index: 0, length: 4 }])),
+      ).toHaveLength(0)
+    })
+
+    test('a mention is answered in the group, as the group, with the mention taken out', async () => {
+      const events = await parse(
+        inGroup('@ร้านเรา ราคาแพ็กเกจเท่าไหร่คะ', [
+          { type: 'user', index: 0, length: 8, isSelf: true },
+        ]),
+      )
+      expect(events).toHaveLength(1)
+      expect(events[0]?.externalId).toBe(`group:${GROUP_ID}`)
+      expect(events[0]?.message).toEqual({ kind: 'text', text: 'ราคาแพ็กเกจเท่าไหร่คะ' })
+      // Replying with the token answers in the group, free.
+      expect(events[0]?.replyToken).toBe('reply-token-abc')
+    })
+
+    test('a mention and nothing else is still answered', async () => {
+      const events = await parse(
+        inGroup('@ร้านเรา', [{ type: 'user', index: 0, length: 8, isSelf: true }]),
+      )
+      expect(events[0]?.message).toEqual({ kind: 'text', text: '@ร้านเรา' })
+    })
+
+    test('a room works the same way', async () => {
+      const events = await parse(
+        inGroup('hi @shop', [{ type: 'user', index: 3, length: 5, isSelf: true }], {
+          type: 'room',
+          roomId: 'R0000000000000000000000000000000a',
+          userId: USER_ID,
+        }),
+      )
+      expect(events[0]?.externalId).toBe('room:R0000000000000000000000000000000a')
+      expect(events[0]?.message).toEqual({ kind: 'text', text: 'hi' })
+    })
+
+    test('a photo in a group cannot mention anybody, so it is not ours', async () => {
+      const photo: webhook.MessageEvent = {
+        ...textEvent,
+        source: { type: 'group', groupId: GROUP_ID, userId: USER_ID },
+        message: {
+          type: 'image',
+          id: '500000000100',
+          contentProvider: { type: 'line' },
+          quoteToken: 'q10',
+        },
+      }
+      expect(await parse(photo)).toHaveLength(0)
+    })
   })
 
   test('handles the empty verification payload LINE sends when testing a webhook', async () => {
