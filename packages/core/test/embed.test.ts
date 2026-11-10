@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { ProviderProfile, SlotConfig } from '../src/ai/types'
-import { clearEmbeddingCache, embedTexts } from '../src/rag/embed'
+import { clearEmbeddingCache, EMBED_BATCH, embedTexts } from '../src/rag/embed'
 
 /**
  * What actually goes on the wire to an embedding provider.
@@ -110,6 +110,39 @@ describe('embedTexts', () => {
     const failure = embedTexts(slot(), ['hi'], DIMENSIONS)
 
     await expect(failure).rejects.toThrow(/expects 8/)
+  })
+
+  test('a long list goes in batches a provider will take, and comes back in order', async () => {
+    bodies = []
+    // Each vector carries the position of its text, so order is checked, not just count.
+    const stub = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const sent = JSON.parse(String(init?.body ?? '{}')) as { input: string[] }
+      bodies.push(sent as unknown as Record<string, unknown>)
+      if (sent.input.length > EMBED_BATCH) {
+        return Response.json(
+          { error: { message: 'at most 100 requests can be in one batch' } },
+          { status: 400 },
+        )
+      }
+      return Response.json({
+        object: 'list',
+        data: sent.input.map((text, index) => ({
+          object: 'embedding',
+          index,
+          embedding: Array.from({ length: DIMENSIONS }, () => Number(text)),
+        })),
+        model: 'embed-model',
+        usage: { prompt_tokens: 1, total_tokens: 1 },
+      })
+    }
+    ;(stub as unknown as { preconnect: () => void }).preconnect = () => {}
+    globalThis.fetch = stub as unknown as typeof fetch
+
+    const values = Array.from({ length: 250 }, (_, index) => String(index))
+    const result = await embedTexts(slot(), values, DIMENSIONS)
+
+    expect(bodies.map((body) => (body.input as string[]).length)).toEqual([100, 100, 50])
+    expect(result.embeddings.map((vector) => vector[0])).toEqual(values.map(Number))
   })
 
   test('embedding nothing calls no provider at all', async () => {

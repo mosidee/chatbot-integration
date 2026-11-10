@@ -275,6 +275,10 @@ without spending money.
   serve. On the pilot gateway 8 of 39 entries are refused when called, for three unrelated
   reasons. Settings has a per-model test button for this; it calls the model through the
   same path a real turn uses, so the compatibility shim is exercised too.
+- **Embeddings go at most `EMBED_BATCH` (100) texts per request** (`packages/core/src/rag/
+  embed.ts`), one request after another. Gemini's OpenAI-compatible endpoint refuses more with
+  400 "at most 100 requests can be in one batch", and the AI SDK's own split assumes 2,048
+  for any OpenAI-compatible model, so a document of a few hundred chunks failed to index.
 - **`ProviderProfile.revision` is the provider's `updatedAt`.** The model caches rebuild a
   client when it changes; a builder of profiles sets it, or a rotated key lingers.
 
