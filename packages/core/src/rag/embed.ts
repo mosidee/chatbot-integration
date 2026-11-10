@@ -31,6 +31,12 @@ export type EmbedResult = {
   usedFallback: boolean
 }
 
+/**
+ * The most texts sent in one embedding request: the smallest cap among the providers in use
+ * (Gemini, 100). Larger inputs go as several requests, in order.
+ */
+export const EMBED_BATCH = 100
+
 /** Per transport, so a provider built for one client is never handed out for another. */
 let cache = new WeakMap<
   FetchLike,
@@ -108,14 +114,25 @@ async function attempt(
     return [result.embedding]
   }
 
-  const result = await embedMany({
-    model,
-    values,
-    providerOptions,
-    maxRetries,
-    abortSignal: attemptSignal(DEFAULT_ATTEMPT_MS.embed),
-  })
-  return result.embeddings
+  /**
+   * At most `EMBED_BATCH` texts per request, one request after another. Providers cap a batch
+   * and say so only by refusing it — Gemini's OpenAI-compatible endpoint answers 400 "at most
+   * 100 requests can be in one batch" — and the SDK's own split assumes 2,048 for any
+   * OpenAI-compatible model. A document of a few hundred chunks failed to index whole.
+   * Each batch has its own deadline, so a long document is not held to one request's time.
+   */
+  const embeddings: number[][] = []
+  for (let start = 0; start < values.length; start += EMBED_BATCH) {
+    const result = await embedMany({
+      model,
+      values: values.slice(start, start + EMBED_BATCH),
+      providerOptions,
+      maxRetries,
+      abortSignal: attemptSignal(DEFAULT_ATTEMPT_MS.embed),
+    })
+    embeddings.push(...result.embeddings)
+  }
+  return embeddings
 }
 
 /** Embed one or more texts, falling back to the slot's secondary provider on failure. */
