@@ -25,9 +25,17 @@ import type { Runtime } from './runtime'
  *   nobody having come — also does not count: that customer was promised a person.
  * - **Silent for the workspace's chosen number of hours** since that last message.
  *
+ * Or, instead of the last two: **nobody has written at all.** A LINE follow — somebody adding
+ * the account as a friend — opens a conversation holding one channel event and nothing
+ * else. It asks nothing, so the AI rightly says nothing, and with no message from anybody
+ * the rule above never matched: every new follower left an open conversation that a person
+ * had to close by hand. Such a conversation closes once its newest event is as old as the
+ * workspace's hours, and only while it still holds no message from anybody.
+ *
  * Who spoke last is read from the messages themselves rather than `last_message_at`, which
  * says when but not who: a system holding message must not count as our side answering, and
- * the column only began moving for agent replies with migration 0017.
+ * the column only began moving for agent replies with migration 0017. Channel events (a
+ * follow, an unsend, a postback) are not anybody speaking and never decide it.
  *
  * A customer who writes again reopens the conversation, the same as after any resolve.
  */
@@ -38,18 +46,34 @@ export type IdleResolveResult = {
   cutoff: Date
 }
 
+/**
+ * Why a conversation qualifies, which is also what the close re-checks and what the note says.
+ *
+ * - `answered`: our side spoke last and the customer has been quiet since.
+ * - `events_only`: nobody has written at all, only channel events (`event` names the newest).
+ */
+export type IdleCandidate =
+  | { id: string; lastMessageId: string; reason: 'answered' }
+  | { id: string; lastMessageId: string; reason: 'events_only'; event: string }
+
 /** The conversations in one workspace that qualify right now, with their last message. */
 export async function findIdleConversations(
   db: Database,
   input: { workspaceId: string; hours: number; now?: Date },
-): Promise<{ id: string; lastMessageId: string }[]> {
+): Promise<IdleCandidate[]> {
   const now = input.now ?? new Date()
   const cutoff = new Date(now.getTime() - input.hours * 60 * 60 * 1000)
 
-  const rows = await db.execute<{ id: string; last_message_id: string }>(sql`
-    SELECT c.id, last.id AS last_message_id
+  const rows = await db.execute<{
+    id: string
+    spoken_id: string | null
+    event_id: string | null
+    event_name: string | null
+  }>(sql`
+    SELECT c.id, spoken.id AS spoken_id, quiet.id AS event_id, quiet.event_name
     FROM ${schema.conversations} c
-    JOIN LATERAL (
+    -- The newest message somebody wrote, channel events aside.
+    LEFT JOIN LATERAL (
       SELECT m.id, m.sender_type, m.created_at
       FROM ${schema.messages} m
       WHERE m.conversation_id = c.id
@@ -59,18 +83,45 @@ export async function findIdleConversations(
       -- rather than leaving "who spoke last" to whichever row the planner meets first.
       ORDER BY m.created_at DESC, m.id DESC
       LIMIT 1
-    ) last ON true
+    ) spoken ON true
+    -- Only where nobody wrote anything: the newest event, which starts the clock instead.
+    LEFT JOIN LATERAL (
+      SELECT m.id, m.created_at, m.content->>'event' AS event_name
+      FROM ${schema.messages} m
+      WHERE spoken.id IS NULL
+        AND m.conversation_id = c.id
+        AND m.workspace_id = ${input.workspaceId}
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT 1
+    ) quiet ON true
     WHERE c.workspace_id = ${input.workspaceId}
       AND c.status = 'open'
       AND c.mode IN ('ai', 'ai_supervised')
-      AND last.sender_type IN ('ai', 'human')
-      AND last.created_at < ${cutoff.toISOString()}::timestamptz
+      AND (
+        (spoken.sender_type IN ('ai', 'human')
+          AND spoken.created_at < ${cutoff.toISOString()}::timestamptz)
+        OR (spoken.id IS NULL
+          AND quiet.created_at < ${cutoff.toISOString()}::timestamptz)
+      )
   `)
 
   // The message's id rather than its time. Postgres keeps microseconds and a JavaScript
   // Date keeps milliseconds, so a timestamp carried out and back compared as earlier than
   // the message it came from, and "nothing newer than this" was never true.
-  return [...rows].map((row) => ({ id: row.id, lastMessageId: row.last_message_id }))
+  return [...rows].flatMap((row): IdleCandidate[] => {
+    if (row.spoken_id) return [{ id: row.id, lastMessageId: row.spoken_id, reason: 'answered' }]
+    if (row.event_id) {
+      return [
+        {
+          id: row.id,
+          lastMessageId: row.event_id,
+          reason: 'events_only',
+          event: row.event_name ?? 'channel',
+        },
+      ]
+    }
+    return []
+  })
 }
 
 /**
@@ -106,21 +157,30 @@ export async function resolveIdleConversations(
             eq(schema.conversations.workspaceId, input.workspaceId),
             eq(schema.conversations.status, 'open'),
             inArray(schema.conversations.mode, ['ai', 'ai_supervised']),
-            // Nobody has written since the message the search found. A customer reply in
-            // between reopens the question, and a newer reply from our side restarts the
-            // clock; either way this is no longer the conversation that qualified.
-            sql`NOT EXISTS (
-              SELECT 1 FROM ${schema.messages} m
-              WHERE m.conversation_id = ${candidate.id}
-                AND m.workspace_id = ${input.workspaceId}
-                AND m.id <> ${candidate.lastMessageId}
-                AND m.created_at >= (
-                  SELECT created_at FROM ${schema.messages}
-                  WHERE id = ${candidate.lastMessageId}
-                    AND workspace_id = ${input.workspaceId}
-                )
-                AND coalesce(m.content->>'kind', '') <> 'event'
-            )`,
+            candidate.reason === 'answered'
+              ? // Nobody has written since the message the search found. A customer reply in
+                // between reopens the question, and a newer reply from our side restarts the
+                // clock; either way this is no longer the conversation that qualified.
+                sql`NOT EXISTS (
+                  SELECT 1 FROM ${schema.messages} m
+                  WHERE m.conversation_id = ${candidate.id}
+                    AND m.workspace_id = ${input.workspaceId}
+                    AND m.id <> ${candidate.lastMessageId}
+                    AND m.created_at >= (
+                      SELECT created_at FROM ${schema.messages}
+                      WHERE id = ${candidate.lastMessageId}
+                        AND workspace_id = ${input.workspaceId}
+                    )
+                    AND coalesce(m.content->>'kind', '') <> 'event'
+                )`
+              : // Still nobody has written anything. The customer's first words arriving
+                // mid-sweep make it a conversation with somebody waiting in it.
+                sql`NOT EXISTS (
+                  SELECT 1 FROM ${schema.messages} m
+                  WHERE m.conversation_id = ${candidate.id}
+                    AND m.workspace_id = ${input.workspaceId}
+                    AND coalesce(m.content->>'kind', '') <> 'event'
+                )`,
           ),
         )
         .returning({
@@ -146,7 +206,12 @@ export async function resolveIdleConversations(
       // mistaken for one somebody dealt with.
       const note: Effect = {
         type: 'add_internal_note',
-        body: `Resolved automatically: no reply from the customer for ${input.hours} hours after our last message.`,
+        body:
+          candidate.reason === 'answered'
+            ? `Resolved automatically: no reply from the customer for ${input.hours} hours after our last message.`
+            : // Not "nobody was waiting": a postback is a button the customer pressed, and
+              // the AI does not answer those either.
+              `Resolved automatically: nobody wrote in the ${input.hours} hours after the customer's ${candidate.event} event.`,
       }
 
       await applyEffects(
