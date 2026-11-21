@@ -592,7 +592,10 @@ without spending money.
   and the customer has been quiet since. A sweep every 15 minutes, not a timer per
   conversation; the close repeats the rule in its own UPDATE so a customer writing mid-sweep
   keeps an open conversation, and it goes through `set_status` so the summary runs. A
-  handed-back conversation qualifies; waiting or colleague-owned ones never do.
+  handed-back conversation qualifies; waiting or colleague-owned ones never do. **One where
+  nobody has written at all also qualifies,** counted from its newest channel event: a LINE
+  follow opens a conversation holding one event, the AI rightly says nothing, and before this
+  every new friend of the account left an open conversation a person had to close by hand.
 - **A nullable workspace setting needs `'key' in settings`, not `??`, for its read-time
   default.** Absent means a workspace older than the setting; `null` means somebody switched
   it off, which `??` silently undoes (`withSettingsDefaults`, `autoResolveAfterHours`).

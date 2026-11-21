@@ -1568,6 +1568,122 @@ describe('closing a conversation the customer walked away from', () => {
     await runQueuedWork(f)
     expect(await statusOf(f, conversation.id)).toBe('open')
   })
+
+  /**
+   * Somebody adding the LINE account as a friend, through the signed webhook and the inbound
+   * processor, so the conversation holds exactly what a real follow leaves in it: one
+   * channel event, and no message from anybody.
+   */
+  const LINE_SECRET = 'line-channel-secret'
+  const LINE_USER = 'U0123456789abcdef0123456789abcdef'
+
+  async function lineFollows(f: Fixture) {
+    const body = JSON.stringify({
+      destination: 'U99999999999999999999999999999999',
+      events: [
+        {
+          type: 'follow',
+          mode: 'active',
+          timestamp: Date.now(),
+          webhookEventId: `01TEST${crypto.randomUUID()}`,
+          deliveryContext: { isRedelivery: false },
+          source: { type: 'user', userId: LINE_USER },
+          replyToken: 'reply-token-follow',
+          follow: { isUnblocked: false },
+        },
+      ],
+    })
+    const outcome = await ingestWebhook(f.runtime, f.runtime.db, f.lineChannelId as string, {
+      rawBody: body,
+      headers: { 'x-line-signature': await signBodyBase64(body, LINE_SECRET) },
+      query: {},
+    })
+    if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
+
+    await drainQueue(f, f.queues.inbound)
+    await processInbound(
+      f.runtime,
+      createEffectPorts(f.runtime, f.runtime.logger),
+      f.runtime.logger,
+      {
+        workspaceId: f.workspaceId,
+        channelId: f.lineChannelId as string,
+        inboundEventId: outcome.inboundEventId,
+      },
+    )
+
+    const rows = await f.runtime.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.channelId, f.lineChannelId as string))
+    expect(rows).toHaveLength(1)
+    const conversation = rows[0] as (typeof rows)[number]
+    const messages = await messagesOf(f, conversation.id)
+    expect(messages.map((m) => m.content.kind)).toEqual(['event'])
+    return conversation
+  }
+
+  const lineFixture = () =>
+    fixture({
+      providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url,
+      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
+    })
+
+  test('a LINE follow nobody wrote after is resolved once the hours pass, and says why', async () => {
+    // The production case: a new friend, no question, so the AI said nothing — and with no
+    // message from anybody the conversation used to stay open until a person closed it.
+    // One test for before and after the cutoff: each new LINE identity asks LINE's real
+    // profile API for a name, so the suite makes that call as few times as it can.
+    const f = await lineFixture()
+    const conversation = await lineFollows(f)
+    expect(conversation.status).toBe('open')
+
+    const early = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+    })
+    expect(early.resolved).toBe(0)
+    expect(await statusOf(f, conversation.id)).toBe('open')
+
+    const result = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+
+    expect(result.resolved).toBe(1)
+    expect(await statusOf(f, conversation.id)).toBe('resolved')
+    const notes = await f.runtime.db
+      .select({ body: schema.internalNotes.body })
+      .from(schema.internalNotes)
+      .where(eq(schema.internalNotes.conversationId, conversation.id))
+    // Not the "after our last message" line: we never sent one.
+    expect(notes.map((note) => note.body)).toEqual([
+      `Resolved automatically: nobody wrote in the ${HOURS} hours after the customer's follow event.`,
+    ])
+  })
+
+  test('a customer who writes after following is waiting, and is left open', async () => {
+    const f = await lineFixture()
+    const conversation = await lineFollows(f)
+    // Their first words, not yet answered: somebody is owed a reply now.
+    await storeMessage(f.runtime.db, {
+      workspaceId: f.workspaceId,
+      conversationId: conversation.id,
+      direction: 'inbound',
+      senderType: 'customer',
+      message: { kind: 'text', text: 'สนใจระบบจองคิวค่ะ' },
+      redaction: { cardNumbers: true, thaiNationalId: true },
+    })
+
+    const result = await resolveIdleConversations(f.runtime, f.runtime.logger, {
+      workspaceId: f.workspaceId,
+      hours: HOURS,
+      now: later(),
+    })
+    expect(result.resolved).toBe(0)
+    expect(await statusOf(f, conversation.id)).toBe('open')
+  })
 })
 
 describe('LINE reply tokens', () => {
