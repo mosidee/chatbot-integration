@@ -16,7 +16,7 @@ import type {
   SenderType,
   WorkspaceStatus,
 } from '@ci/shared'
-import { messageToText, typedText } from '@ci/shared'
+import { isChannelNotice, messageToText, typedText } from '@ci/shared'
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { isWorkspaceKey } from './media-serving'
 
@@ -355,6 +355,13 @@ export async function resolveConversation(
         ? null
         : new Date(event.timestamp.getTime() + input.messagingWindowHours * 3600_000)
 
+    /**
+     * A follow, a block, an unsend: the platform telling us something about the customer,
+     * not the customer saying anything (`isChannelNotice`). It lands in the thread and moves
+     * nothing else — no reopening, no unread, no "customer spoke last".
+     */
+    const notice = isChannelNotice(event.message)
+
     const existing = openConversation[0]
     if (existing) {
       /**
@@ -370,7 +377,7 @@ export async function resolveConversation(
        * message: the decision about what mode a conversation begins in is made here, and
        * beginning again is the same decision.
        */
-      const reopening = existing.status === 'resolved'
+      const reopening = existing.status === 'resolved' && !notice
 
       /**
        * A conversation beginning again belongs to whoever owns the customer.
@@ -385,10 +392,16 @@ export async function resolveConversation(
       await tx
         .update(schema.conversations)
         .set({
-          lastMessageAt: event.timestamp,
-          lastCustomerMessageAt: event.timestamp,
+          ...(notice
+            ? {}
+            : {
+                lastMessageAt: event.timestamp,
+                lastCustomerMessageAt: event.timestamp,
+                unreadCount: sql`${schema.conversations.unreadCount} + 1`,
+              }),
+          // Unchanged for a notice too: Messenger opens its window for a referral or an
+          // opt-in as well as for a message, and LINE has no window at all.
           messagingWindowExpiresAt: windowExpiresAt,
-          unreadCount: sql`${schema.conversations.unreadCount} + 1`,
           ...(reopening
             ? {
                 status: 'open' as const,
@@ -437,10 +450,14 @@ export async function resolveConversation(
       assigneeUserId: newOwner,
       mode: input.defaultMode,
       status: 'open',
+      // Set even for a notice: the identity's latest conversation is picked by this column,
+      // descending, where a null would sort first.
       lastMessageAt: event.timestamp,
-      lastCustomerMessageAt: event.timestamp,
+      // A new friend has asked nothing, so a follow is not a customer waiting in the inbox.
+      // The idle sweep closes it if nobody writes (`idle-resolve.ts`).
+      lastCustomerMessageAt: notice ? null : event.timestamp,
       messagingWindowExpiresAt: windowExpiresAt,
-      unreadCount: 1,
+      unreadCount: notice ? 0 : 1,
     })
 
     return {

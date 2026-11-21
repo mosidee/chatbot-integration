@@ -170,6 +170,24 @@ export function typedText(message: NormalizedMessage): string | null {
   }
 }
 
+/**
+ * A platform's notice about the customer rather than anything the customer said: they added
+ * or blocked the account (LINE follow, unfollow), unsent a message, arrived from an ad or a
+ * link (referral, optin), or the account joined or left a group.
+ *
+ * A notice is stored in the thread so a colleague can see it happened, and that is all. It
+ * does not reopen a resolved conversation, is not unread, and does not make the customer the
+ * one waiting: a block or an unsend used to reopen a conversation the customer had spoken
+ * last in, and nothing would ever close it again.
+ *
+ * A postback is not a notice. It is a button the customer pressed — Messenger's Get Started,
+ * a quick reply carrying their visible words, a LINE rich menu item — so it still reopens a
+ * conversation and counts as them writing, though nothing answers one yet.
+ */
+export function isChannelNotice(message: NormalizedMessage): boolean {
+  return message.kind === 'event' && message.event !== 'postback'
+}
+
 /** True when the message carries at least one image the vision slot could describe. */
 export function hasImages(message: NormalizedMessage): boolean {
   return message.kind === 'image' && message.attachments.length > 0

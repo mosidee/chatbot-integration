@@ -559,6 +559,15 @@ without spending money.
   conversations, or the second job failed on the unique index. A customer writing to a
   **resolved** conversation reopens it rather than starting another, in the workspace's
   default mode and with the customer's owner.
+- **A channel notice is not the customer writing** (`isChannelNotice` in
+  `packages/shared/src/message.ts`): follow, unfollow, unsend, join, leave, referral, optin.
+  It is stored in the thread and moves nothing else — no reopening, no unread, no
+  `last_message_at`/`last_customer_message_at`; a conversation a follow creates has a null
+  `last_customer_message_at`, so the inbox does not rank a new friend as a wait. A block used
+  to reopen a conversation the customer had spoken last in, and the idle sweep never closed
+  it. A **postback is not a notice**: it is a button the customer pressed (a Messenger quick
+  reply carries their visible words), so it still reopens and counts — though nothing answers
+  one yet.
 - **`customers.assignee_user_id` is the relationship; `conversations.assignee_user_id` is
   the thread.** A new conversation inherits the customer's owner, a colleague can take one
   thread without inheriting the customer, and a merge carries the owner onto the survivor
@@ -577,7 +586,7 @@ without spending money.
   emptied itself as agents worked their queue. `handoff_events` is the history; the column
   stays for the inbox badge. Both exist on purpose.
 - **`conversations.last_message_at` is moved by the customer, the AI and an agent** — not by
-  holding messages, which are not answers. The inbox's waiting order compares
+  holding messages, which are not answers, nor by channel notices, which are not questions. The inbox's waiting order compares
   `last_customer_message_at >= last_message_at`, and the agent send route used to leave it
   alone, so an answered conversation stayed near the top as if nobody had replied (migration
   0017 brought old rows forward). Who spoke last in detail — AI or colleague, not a system
