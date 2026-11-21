@@ -1284,6 +1284,68 @@ describe('the waiting-human fallback timer', () => {
   })
 })
 
+const LINE_TEST_SECRET = 'line-channel-secret'
+const LINE_TEST_USER = 'U0123456789abcdef0123456789abcdef'
+
+/** A LINE fixture whose access token LINE will refuse, so nothing is really sent. */
+const lineFixture = () =>
+  fixture({
+    providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url,
+    lineChannel: { channelSecret: LINE_TEST_SECRET, channelAccessToken: 'bad-token' },
+  })
+
+/**
+ * One LINE webhook event, signed and taken through ingestion and the inbound processor, so
+ * the rows it leaves are the ones a real event leaves. Returns the LINE conversation.
+ *
+ * A new LINE identity asks LINE's real profile API for a name, so each fixture should make
+ * as few first contacts as it can.
+ */
+async function lineEvent(f: Fixture, event: Record<string, unknown>) {
+  const body = JSON.stringify({
+    destination: 'U99999999999999999999999999999999',
+    events: [
+      {
+        mode: 'active',
+        timestamp: Date.now(),
+        webhookEventId: `01TEST${crypto.randomUUID()}`,
+        deliveryContext: { isRedelivery: false },
+        source: { type: 'user', userId: LINE_TEST_USER },
+        ...event,
+      },
+    ],
+  })
+  const outcome = await ingestWebhook(f.runtime, f.runtime.db, f.lineChannelId as string, {
+    rawBody: body,
+    headers: { 'x-line-signature': await signBodyBase64(body, LINE_TEST_SECRET) },
+    query: {},
+  })
+  if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
+
+  await drainQueue(f, f.queues.inbound)
+  await processInbound(
+    f.runtime,
+    createEffectPorts(f.runtime, f.runtime.logger),
+    f.runtime.logger,
+    {
+      workspaceId: f.workspaceId,
+      channelId: f.lineChannelId as string,
+      inboundEventId: outcome.inboundEventId,
+    },
+  )
+
+  const rows = await f.runtime.db
+    .select()
+    .from(schema.conversations)
+    .where(eq(schema.conversations.channelId, f.lineChannelId as string))
+  expect(rows).toHaveLength(1)
+  return rows[0] as (typeof rows)[number]
+}
+
+/** Somebody adding the LINE account as a friend. */
+const lineFollow = (f: Fixture) =>
+  lineEvent(f, { type: 'follow', replyToken: 'reply-token-follow', follow: { isUnblocked: false } })
+
 /**
  * Closing conversations the customer stopped replying to.
  *
@@ -1569,71 +1631,18 @@ describe('closing a conversation the customer walked away from', () => {
     expect(await statusOf(f, conversation.id)).toBe('open')
   })
 
-  /**
-   * Somebody adding the LINE account as a friend, through the signed webhook and the inbound
-   * processor, so the conversation holds exactly what a real follow leaves in it: one
-   * channel event, and no message from anybody.
-   */
-  const LINE_SECRET = 'line-channel-secret'
-  const LINE_USER = 'U0123456789abcdef0123456789abcdef'
-
+  /** A follow leaves exactly one channel event in the conversation, and nothing else. */
   async function lineFollows(f: Fixture) {
-    const body = JSON.stringify({
-      destination: 'U99999999999999999999999999999999',
-      events: [
-        {
-          type: 'follow',
-          mode: 'active',
-          timestamp: Date.now(),
-          webhookEventId: `01TEST${crypto.randomUUID()}`,
-          deliveryContext: { isRedelivery: false },
-          source: { type: 'user', userId: LINE_USER },
-          replyToken: 'reply-token-follow',
-          follow: { isUnblocked: false },
-        },
-      ],
-    })
-    const outcome = await ingestWebhook(f.runtime, f.runtime.db, f.lineChannelId as string, {
-      rawBody: body,
-      headers: { 'x-line-signature': await signBodyBase64(body, LINE_SECRET) },
-      query: {},
-    })
-    if (!outcome.ok) throw new Error(`ingest failed: ${outcome.reason}`)
-
-    await drainQueue(f, f.queues.inbound)
-    await processInbound(
-      f.runtime,
-      createEffectPorts(f.runtime, f.runtime.logger),
-      f.runtime.logger,
-      {
-        workspaceId: f.workspaceId,
-        channelId: f.lineChannelId as string,
-        inboundEventId: outcome.inboundEventId,
-      },
-    )
-
-    const rows = await f.runtime.db
-      .select()
-      .from(schema.conversations)
-      .where(eq(schema.conversations.channelId, f.lineChannelId as string))
-    expect(rows).toHaveLength(1)
-    const conversation = rows[0] as (typeof rows)[number]
+    const conversation = await lineFollow(f)
     const messages = await messagesOf(f, conversation.id)
     expect(messages.map((m) => m.content.kind)).toEqual(['event'])
     return conversation
   }
 
-  const lineFixture = () =>
-    fixture({
-      providerBaseUrl: mock([{ kind: 'text', text: 'ok' }]).url,
-      lineChannel: { channelSecret: LINE_SECRET, channelAccessToken: 'bad-token' },
-    })
-
   test('a LINE follow nobody wrote after is resolved once the hours pass, and says why', async () => {
     // The production case: a new friend, no question, so the AI said nothing — and with no
     // message from anybody the conversation used to stay open until a person closed it.
-    // One test for before and after the cutoff: each new LINE identity asks LINE's real
-    // profile API for a name, so the suite makes that call as few times as it can.
+    // One test for before and after the cutoff, to make one first contact with LINE.
     const f = await lineFixture()
     const conversation = await lineFollows(f)
     expect(conversation.status).toBe('open')
@@ -1683,6 +1692,81 @@ describe('closing a conversation the customer walked away from', () => {
     })
     expect(result.resolved).toBe(0)
     expect(await statusOf(f, conversation.id)).toBe('open')
+  })
+})
+
+/**
+ * A platform's notice about the customer — a follow, a block, an unsend — is not the customer
+ * writing (`isChannelNotice`). It is stored in the thread and changes nothing else. A button
+ * the customer pressed (a postback) still counts as them writing.
+ */
+describe('channel notices are not the customer writing', () => {
+  const columnsOf = async (f: Fixture, id: string) => {
+    const rows = await f.runtime.db
+      .select({
+        status: schema.conversations.status,
+        unreadCount: schema.conversations.unreadCount,
+        lastMessageAt: schema.conversations.lastMessageAt,
+        lastCustomerMessageAt: schema.conversations.lastCustomerMessageAt,
+      })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, id))
+    return rows[0]
+  }
+
+  test('a block leaves a resolved conversation resolved; a button press reopens it', async () => {
+    const f = await lineFixture()
+    // The customer speaks last, and a colleague resolves it anyway: the case that used to
+    // stick, because a reopened conversation the customer spoke last in is "waiting" to the
+    // idle sweep for good.
+    const conversation = await lineEvent(f, {
+      type: 'message',
+      replyToken: 'reply-token-text',
+      message: { type: 'text', id: String(Date.now()), text: 'ขอบคุณค่ะ', quoteToken: 'q' },
+    })
+    await humanAction(f, conversation.id, {
+      type: 'set_status',
+      at: new Date(),
+      status: 'resolved',
+    })
+    const before = await columnsOf(f, conversation.id)
+    expect(before?.status).toBe('resolved')
+
+    await lineEvent(f, { type: 'unfollow' })
+
+    const after = await columnsOf(f, conversation.id)
+    expect(after?.status).toBe('resolved')
+    expect(after?.unreadCount).toBe(before?.unreadCount as number)
+    expect(after?.lastMessageAt?.getTime()).toBe(before?.lastMessageAt?.getTime() as number)
+    expect(after?.lastCustomerMessageAt?.getTime()).toBe(
+      before?.lastCustomerMessageAt?.getTime() as number,
+    )
+    // Still in the thread, where a colleague reading it sees the customer blocked us.
+    const messages = await messagesOf(f, conversation.id)
+    expect(messages.at(-1)?.content).toMatchObject({ kind: 'event', event: 'unfollow' })
+
+    // A postback is a button the customer pressed, and it opens the conversation again.
+    await lineEvent(f, {
+      type: 'postback',
+      replyToken: 'reply-token-postback',
+      postback: { data: 'action=pricing' },
+    })
+    const reopened = await columnsOf(f, conversation.id)
+    expect(reopened?.status).toBe('open')
+    expect(reopened?.unreadCount).toBe((before?.unreadCount as number) + 1)
+  })
+
+  test('a follow opens a conversation nobody is waiting in', async () => {
+    const f = await lineFixture()
+    const conversation = await lineFollow(f)
+
+    const columns = await columnsOf(f, conversation.id)
+    expect(columns?.status).toBe('open')
+    // Not "the customer spoke last", so the inbox does not rank a new friend as a wait.
+    expect(columns?.lastCustomerMessageAt).toBeNull()
+    expect(columns?.unreadCount).toBe(0)
+    // Still set: the identity's latest conversation is found by it.
+    expect(columns?.lastMessageAt).not.toBeNull()
   })
 })
 
